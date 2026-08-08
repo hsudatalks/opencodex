@@ -45,4 +45,19 @@ describe("Codex account concurrent turn admission", () => {
     turn.release();
     peer.release();
   });
+
+  test("runs only the final account settlement callback when the turn ends", () => {
+    const turn = tryAdmitTurn()!;
+    const selection = turn.beginCodexAccountSelection();
+    const settled: string[] = [];
+
+    expect(selection.claimAccount("pool-a", 2, () => settled.push("a"))).toBeTrue();
+    expect(selection.claimAccount("pool-b", 2, () => settled.push("b"))).toBeTrue();
+    expect(settled).toEqual([]);
+
+    selection.release();
+    expect(settled).toEqual([]);
+    turn.release();
+    expect(settled).toEqual(["b"]);
+  });
 });

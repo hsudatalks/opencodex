@@ -47,6 +47,12 @@ const codexAccountTurns = new Map<string, Set<ActiveTurnLease>>();
 let nativeMainSelections = 0;
 let legacyDrainLease: AdmissionLease | null = null;
 let recyclingForExit = false;
+
+export function activeCodexAccountTurnCounts(): Readonly<Record<string, number>> {
+  return Object.fromEntries(
+    [...codexAccountTurns.entries()].map(([accountId, turns]) => [accountId, turns.size]),
+  );
+}
 let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
@@ -166,12 +172,22 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
   let transferred = false;
   let nativeMainClaimed = false;
   let claimedCodexAccountId: string | undefined;
-  const releaseCodexAccountClaim = () => {
+  let settleCodexAccountClaim: (() => void) | undefined;
+  const releaseCodexAccountClaim = (settled = false) => {
     if (!claimedCodexAccountId) return;
     const owners = codexAccountTurns.get(claimedCodexAccountId);
     owners?.delete(lease);
     if (owners?.size === 0) codexAccountTurns.delete(claimedCodexAccountId);
     claimedCodexAccountId = undefined;
+    const settle = settleCodexAccountClaim;
+    settleCodexAccountClaim = undefined;
+    if (settled && settle) {
+      try {
+        settle();
+      } catch {
+        // Affinity maintenance must never prevent the turn lease from draining.
+      }
+    }
   };
   const lease: ActiveTurnLease = {
     bindAbortController(ac) {
@@ -196,15 +212,19 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
           if (claimedCodexAccountId === accountId) return true;
           return (codexAccountTurns.get(accountId)?.size ?? 0) < limit;
         },
-        claimAccount(accountId, limit) {
+        claimAccount(accountId, limit, onTurnSettled) {
           if (!active) return false;
-          if (claimedCodexAccountId === accountId) return true;
+          if (claimedCodexAccountId === accountId) {
+            settleCodexAccountClaim = onTurnSettled;
+            return true;
+          }
           if ((codexAccountTurns.get(accountId)?.size ?? 0) >= limit) return false;
           releaseCodexAccountClaim();
           const owners = codexAccountTurns.get(accountId) ?? new Set<ActiveTurnLease>();
           owners.add(lease);
           codexAccountTurns.set(accountId, owners);
           claimedCodexAccountId = accountId;
+          settleCodexAccountClaim = onTurnSettled;
           return true;
         },
         claimMainProfile() {
@@ -235,7 +255,7 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
       }
       controllers.clear();
       nativeMainTurns.delete(lease);
-      releaseCodexAccountClaim();
+      releaseCodexAccountClaim(true);
       gateLease.release();
     },
   };

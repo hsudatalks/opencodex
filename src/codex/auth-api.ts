@@ -28,11 +28,13 @@ import {
   clearCodexAccountCooldown,
   clearThreadAccountMapForAccount,
   getEffectiveActiveCodexAccountId,
+  getCodexQuotaRoutingSnapshot,
   isEffectiveCodexAccountPinned,
   reconcileCodexActiveAfterExclusion,
   resetCodexRoutingForManualSelection,
   settleCodexQuotaRecoveryProbe,
 } from "./routing";
+import { activeCodexAccountTurnCounts } from "../server/lifecycle";
 import {
   DEFAULT_ACCOUNT_PRIORITY,
   MAX_ACCOUNT_PRIORITY,
@@ -1517,6 +1519,8 @@ export async function handleCodexAuthAPI(
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
       accountMaxConcurrentTurns: normalizeAccountMaxConcurrentTurns(runtimeConfig.accountMaxConcurrentTurns),
+      activeTurnsByAccount: activeCodexAccountTurnCounts(),
+      quotaRouting: getCodexQuotaRoutingSnapshot(runtimeConfig, Date.now(), "shared"),
     });
   }
 

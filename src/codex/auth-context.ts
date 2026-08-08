@@ -21,6 +21,7 @@ import {
   tryAcquireCodexQuotaProbeLease,
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
+  releaseLaggingCodexThreadAffinityAfterTurn,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
@@ -266,7 +267,7 @@ export interface ResolveCodexAuthContextOptions {
 export interface CodexAccountSelectionAdmission {
   readonly mainProfileDraining: boolean;
   canClaimAccount(accountId: string, limit: number): boolean;
-  claimAccount(accountId: string, limit: number): boolean;
+  claimAccount(accountId: string, limit: number, onTurnSettled?: () => void): boolean;
   claimMainProfile(): boolean;
   release(): void;
 }
@@ -306,12 +307,12 @@ export async function resolveCodexAuthContext(
   };
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
+  const threadId = headers.get("x-codex-parent-thread-id");
   try {
     // A pre-drain selector reserves the native identity while reconciliation and
     // routing inspect it. Selectors arriving after the fence skip reconciliation
     // and may still route to non-main pool accounts without touching switch state.
     if (!nativeMainReadsForbidden) reconcileMainCodexAccountRuntimeState();
-    const threadId = headers.get("x-codex-parent-thread-id");
     const resolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
       : options.excludeAccountId
@@ -368,7 +369,19 @@ export async function resolveCodexAuthContext(
     }
     if (
       selectionAdmission
-      && !selectionAdmission.claimAccount(accountId, maxConcurrentTurns)
+      && !selectionAdmission.claimAccount(
+        accountId,
+        maxConcurrentTurns,
+        fixedAccountId === undefined && threadId
+          ? () => releaseLaggingCodexThreadAffinityAfterTurn(
+              threadId,
+              accountId,
+              config,
+              Date.now(),
+              quotaScope,
+            )
+          : undefined,
+      )
     ) {
       throw new CodexAccountCapacityError(accountId, maxConcurrentTurns);
     }
