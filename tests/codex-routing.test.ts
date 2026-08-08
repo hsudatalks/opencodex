@@ -233,6 +233,58 @@ describe("codex routing", () => {
     expect(pickLowestUsageCodexAccount(makeConfig(), undefined, now)).toBe("a");
   });
 
+  test("quota strategy schedules each new task by capacity deadline below the migration threshold", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig({ activeCodexAccountId: "a", autoSwitchThreshold: 80 });
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 30,
+      weeklyResetAt: now / 1000 + 12 * 60 * 60,
+    });
+
+    expect(previewCodexAccountForRequest("deadline-new-task", config, now)).toBe("b");
+    expect(resolveCodexAccountForThread("deadline-new-task", config, now)).toBe("b");
+  });
+
+  test("quota scheduling keeps an existing below-threshold thread on its bound account", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig({ activeCodexAccountId: "a", autoSwitchThreshold: 80 });
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 30,
+      weeklyResetAt: now / 1000 + 12 * 60 * 60,
+    });
+
+    expect(resolveCodexAccountForThread("affinity-before-deadline-change", config, now)).toBe("b");
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 20,
+      weeklyResetAt: now / 1000 + 6 * 60 * 60,
+    });
+    expect(resolveCodexAccountForThread("affinity-before-deadline-change", config, now + 1_000)).toBe("b");
+    expect(resolveCodexAccountForThread("deadline-next-task", config, now + 1_000)).toBe("a");
+  });
+
+  test("zero migration threshold still deadline-schedules new quota tasks", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig({ activeCodexAccountId: "a", autoSwitchThreshold: 0 });
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 30,
+      weeklyResetAt: now / 1000 + 12 * 60 * 60,
+    });
+
+    expect(resolveCodexAccountForThread("threshold-zero-new-task", config, now)).toBe("b");
+  });
+
   test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
     expect(isCodexQuotaExhausted(null, "plus")).toBe(false);
     expect(isCodexQuotaExhausted({}, "plus")).toBe(false);
@@ -502,7 +554,7 @@ describe("codex routing", () => {
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
-    expect(resolveCodexAccountForThread("shared-quota-existing", config, now)).toBe("a");
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now, "shared")).toBe("a");
 
     recordCodexUpstreamOutcome(config, "a", 429, {
       now,
@@ -511,7 +563,7 @@ describe("codex routing", () => {
     });
 
     expect(config.activeCodexAccountId).toBe("b");
-    expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1)).toBe("b");
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1, "shared")).toBe("b");
   });
 
   test("independent native quota scopes keep separate thread affinities", () => {
@@ -1106,6 +1158,7 @@ describe("codex routing", () => {
     expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(true);
 
     config.activeCodexAccountId = "b";
+    config.activeCodexAccountPinned = "b";
     resetCodexRoutingForManualSelection("b");
     expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(false);
     expect(isCodexAccountInCooldown("b", now + 4)).toBe(true);
@@ -1802,12 +1855,12 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread("thread-1", config)).toBe("a");
   });
 
-  test("no stored order leaves the pick sequence untouched", () => {
+  test("no stored order lets quota scheduling pick the better account", () => {
     const ordered = makeConfig({ activeCodexAccountId: "b" });
     updateAccountQuota("a", 5);
     updateAccountQuota("b", 50);
 
-    expect(resolveCodexAccountForThread(null, ordered)).toBe("b");
+    expect(resolveCodexAccountForThread(null, ordered)).toBe("a");
     expect(pickLowestUsageCodexAccount(ordered)).toBe("a");
   });
 });

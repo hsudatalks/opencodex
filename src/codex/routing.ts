@@ -1395,6 +1395,39 @@ function applyQuotaAutoSwitch(
   return active;
 }
 
+/**
+ * Quota strategy assignment for a new/unbound task.
+ *
+ * A known active quota is not sticky here: every new assignment is scheduled
+ * against the eligible pool's remaining-capacity deadline. The usage threshold
+ * remains an affinity migration policy for already-bound threads. Unknown active
+ * quota is the sole hold case so startup cannot override an operator selection
+ * before quota priming has produced comparable evidence.
+ */
+function pickQuotaAccountForUnbound(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string {
+  const activeUsage = computeCodexUsageScore(
+    getAccountQuota(active),
+    getPoolAccountPlan(config, active),
+  );
+  if (isUnknownUsage(activeUsage)) return active;
+  if (pinnedCodexAccountId(config) === active && hasCodexQuotaHeadroom(config, active)) return active;
+  const best = pickLowestUsageCodexAccount(config, undefined, now, quotaScope, selectionOptions);
+  if (!best || best === active) return active;
+  return compareQuotaCandidates(
+    getAccountQuota(best),
+    getPoolAccountPlan(config, best),
+    getAccountQuota(active),
+    getPoolAccountPlan(config, active),
+    now,
+  ) < 0 ? best : active;
+}
+
 function shouldFailover(config: OcxConfig, accountId: string, now: number): boolean {
   const threshold = config.upstreamFailoverThreshold ?? 3;
   if (threshold <= 0) return false;
@@ -1513,14 +1546,7 @@ export function previewCodexAccountForRequest(
     else return null;
   }
   active = pickPriorityPreemption(config, active, now, quotaScope, selectionOptions) ?? active;
-
-  const threshold = config.autoSwitchThreshold ?? 80;
-  if (threshold > 0) {
-    const usage = computeCodexUsageScore(getAccountQuota(active), getPoolAccountPlan(config, active));
-    if (!isUnknownUsage(usage) && usage >= threshold) {
-      active = pickLowerUsageAccount(config, active, usage, now, quotaScope, selectionOptions);
-    }
-  }
+  active = pickQuotaAccountForUnbound(config, active, now, quotaScope, selectionOptions);
   if (shouldFailover(config, active, now)) {
     const best = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
     if (best) active = best;
@@ -1624,8 +1650,9 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "none" };
     }
   }
-  // Before applyQuotaAutoSwitch: its sync disk write would otherwise persist a
-  // move inside the drained tier that preemption immediately overrides.
+  // Selection order is a hard boundary shared by every strategy. Apply it before
+  // quota scheduling so an operator's higher tier cannot be bypassed by a cooler
+  // lower-tier account.
   const preempted = pickPriorityPreemption(config, active, now, quotaScope, selectionOptions);
   if (preempted) {
     // Runtime-only, like every other automatic pick: config.activeCodexAccountId
@@ -1635,7 +1662,15 @@ export function resolveCodexAccountForThreadDetailed(
     if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, preempted);
     active = preempted;
   }
-  active = applyQuotaAutoSwitch(config, active, now, quotaScope, selectionOptions);
+  const quotaSelected = pickQuotaAccountForUnbound(config, active, now, quotaScope, selectionOptions);
+  if (quotaSelected !== active && !isIndependentCodexQuotaScope(quotaScope)) {
+    // Priority preemption leaves the operator's persisted selection untouched.
+    // Same-tier quota scheduling retains the historical active cursor behavior
+    // so the dashboard reports the account currently serving new work.
+    if (preempted) rememberActiveCodexAccount(config, quotaSelected);
+    else setActiveCodexAccount(config, quotaSelected);
+  }
+  active = quotaSelected;
   active = applyFailureFailover(config, active, now, quotaScope, selectionOptions);
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)

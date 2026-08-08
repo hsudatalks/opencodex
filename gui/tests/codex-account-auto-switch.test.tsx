@@ -119,7 +119,7 @@ describe("Codex account auto-switch threshold", () => {
     expect(html).toContain('max="100"');
     expect(html).toContain('aria-label="Usage threshold, percent"');
     expect(html).toContain("95% usage or above");
-    expect(html).toContain("including an already-bound task");
+    expect(html).toContain("an already-bound task may also move");
     expect(html).toContain('aria-pressed="true"');
   });
 
@@ -143,7 +143,8 @@ describe("Codex account auto-switch threshold", () => {
     const roundRobin = renderSetting(80, "80", false, false, null, "round-robin");
     const fillFirst = renderSetting(80, "80", false, false, null, "fill-first");
 
-    expect(quota).toContain("including an already-bound task");
+    expect(quota).toContain("Quota always deadline-schedules new/unbound tasks");
+    expect(quota).toContain("an already-bound task may also move");
     expect(roundRobin).toContain("does not use this threshold");
     expect(fillFirst).toContain("drain point for new/unbound tasks");
     for (const html of [quota, roundRobin, fillFirst]) {
@@ -165,7 +166,7 @@ describe("Codex account auto-switch threshold", () => {
       </LanguageProvider>,
     );
 
-    expect(renderStrategy("quota")).toContain("can also rebind an existing task");
+    expect(renderStrategy("quota")).toContain("Quota deadline-schedules every new/unbound task");
     expect(renderStrategy("round-robin")).toContain("usage threshold does not change normal rotation");
     const fillFirst = renderStrategy("fill-first");
     expect(fillFirst).toContain("healthy bound tasks keep affinity");
