@@ -6,6 +6,7 @@ import {
   applyCodexAuthContextToProvider,
   assertCodexAuthContextNotCooled,
   CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
+  CodexAccountCapacityError,
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
@@ -59,6 +60,7 @@ import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import {
   acquireNativeMainProfileDrain,
   codexAccountSelectionForTurn,
+  resetLifecycleDrainStateForTests,
   tryAdmitTurn,
 } from "../src/server/lifecycle";
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  resetLifecycleDrainStateForTests();
 });
 
 afterEach(() => {
@@ -95,6 +98,7 @@ afterEach(() => {
   __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  resetLifecycleDrainStateForTests();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -186,6 +190,36 @@ const forwardProvider: OcxProviderConfig = {
 };
 
 describe("Codex auth context", () => {
+  test("holds account capacity for the active turn and releases it on settlement", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: Date.now() + 3_600_000,
+      chatgptAccountId: "pool_acc",
+    });
+    const cfg = { ...config(), accountMaxConcurrentTurns: 1 };
+    const first = tryAdmitTurn()!;
+    const second = tryAdmitTurn()!;
+    const options = (turn: NonNullable<ReturnType<typeof tryAdmitTurn>>) => ({
+      accountId: "pool-a",
+      beginCodexAccountSelection: codexAccountSelectionForTurn(turn),
+    });
+
+    try {
+      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(first)))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(second)))
+        .rejects.toBeInstanceOf(CodexAccountCapacityError);
+
+      first.release();
+      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(second)))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    } finally {
+      first.release();
+      second.release();
+    }
+  });
+
   test("main-profile drain routes a non-main pool account without native reads or quota priming", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",

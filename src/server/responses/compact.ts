@@ -42,7 +42,9 @@ import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSide
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
+  CodexAccountCapacityError,
   CodexAccountCooldownError,
+  codexAccountCapacityResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -191,6 +193,7 @@ async function resolveAlternateCompactContext(args: {
       // real rejection instead of replacing it with a synthetic drain response.
       return null;
     }
+    if (err instanceof CodexAccountCapacityError) return null;
     // No eligible alternate (all cooled, affinity expired, reauth needed) — the caller
     // returns the first account's rejection unchanged, which is today's behavior.
     return null;
@@ -379,6 +382,7 @@ export async function handleResponsesCompact(
         return cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace);
       }
       if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
+      if (err instanceof CodexAccountCapacityError) return codexAccountCapacityResponse(err);
       if (err instanceof CodexThreadAffinityExpiredError) {
         return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       }

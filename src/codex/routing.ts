@@ -968,6 +968,7 @@ function getEligiblePoolAccounts(
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
+    .filter(account => selectionOptions?.canClaimAccount?.(account.id) ?? true)
     .map(account => account.id);
   // The main Codex account is not stored in config.codexAccounts; include it as a
   // first-class rotation candidate when its read-only token is usable (Option A).
@@ -978,6 +979,7 @@ function getEligiblePoolAccounts(
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
+    && (selectionOptions?.canClaimAccount?.(MAIN_CODEX_ACCOUNT_ID) ?? true)
   ) {
     ids.unshift(MAIN_CODEX_ACCOUNT_ID);
   }
@@ -1498,7 +1500,10 @@ export function previewCodexAccountForRequest(
   if (!active) {
     return pickLowestUsageCodexAccount(config, undefined, now, quotaScope, selectionOptions);
   }
-  if (!isCodexAccountSelectable(config, active, now, quotaScope, selectionOptions)) {
+  if (
+    !isCodexAccountSelectable(config, active, now, quotaScope, selectionOptions)
+    || !(selectionOptions?.canClaimAccount?.(active) ?? true)
+  ) {
     const fallback = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
     if (fallback) active = fallback;
     else if (
@@ -1602,7 +1607,10 @@ export function resolveCodexAccountForThreadDetailed(
     if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, selected);
     active = selected;
   }
-  if (!isCodexAccountSelectable(config, active, now, quotaScope, selectionOptions)) {
+  if (
+    !isCodexAccountSelectable(config, active, now, quotaScope, selectionOptions)
+    || !(selectionOptions?.canClaimAccount?.(active) ?? true)
+  ) {
     const fallback = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
     if (fallback) {
       if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, fallback);

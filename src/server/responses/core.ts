@@ -64,7 +64,9 @@ import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, sho
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
+  CodexAccountCapacityError,
   CodexAccountCooldownError,
+  codexAccountCapacityResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -420,6 +422,7 @@ async function retryCodexPoolOnAlternateAccount(
       && !(error instanceof CodexAuthContextError)
       && !(error instanceof CodexAccountCooldownError)
       && !(error instanceof CodexMainProfileDrainingError)
+      && !(error instanceof CodexAccountCapacityError)
     ) throw error;
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
@@ -859,6 +862,9 @@ async function resolveResponsesCodexAuth(
     }
     if (err instanceof CodexMainProfileDrainingError) {
       return { ok: false, response: codexMainProfileDrainingResponse() };
+    }
+    if (err instanceof CodexAccountCapacityError) {
+      return { ok: false, response: codexAccountCapacityResponse(err) };
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
       return {

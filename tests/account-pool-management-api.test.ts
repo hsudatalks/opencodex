@@ -41,6 +41,7 @@ describe("Codex account pool strategy management API", () => {
     expect(await resp!.json()).toMatchObject({
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
+      accountMaxConcurrentTurns: 10,
     });
   });
 
@@ -48,6 +49,7 @@ describe("Codex account pool strategy management API", () => {
     const config = makeCodexConfig({
       accountPoolStrategy: "round-robin",
       accountPoolStickyLimit: 3,
+      accountMaxConcurrentTurns: 10,
     });
     const req = new Request("http://localhost/api/codex-auth/active", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
@@ -81,12 +83,24 @@ describe("Codex account pool strategy management API", () => {
     }
   });
 
+  test("PUT /api/codex-auth/pool-strategy rejects invalid maxConcurrentTurns", async () => {
+    for (const bad of [0, 101, 1.5, "10", null, Number.NaN]) {
+      const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxConcurrentTurns: bad }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+      expect(resp!.status).toBe(400);
+    }
+  });
+
   test("PUT /api/codex-auth/pool-strategy accepts valid values and mutates runtime", async () => {
     const config = makeCodexConfig();
     const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strategy: "fill-first", stickyLimit: 7 }),
+      body: JSON.stringify({ strategy: "fill-first", stickyLimit: 7, maxConcurrentTurns: 12 }),
     });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     expect(resp!.status).toBe(200);
@@ -94,9 +108,11 @@ describe("Codex account pool strategy management API", () => {
       ok: true,
       accountPoolStrategy: "fill-first",
       accountPoolStickyLimit: 7,
+      accountMaxConcurrentTurns: 12,
     });
     expect(config.accountPoolStrategy).toBe("fill-first");
     expect(config.accountPoolStickyLimit).toBe(7);
+    expect(config.accountMaxConcurrentTurns).toBe(12);
   });
 
   test("PATCH /api/codex-auth/pool-strategy accepts round-robin", async () => {

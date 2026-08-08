@@ -37,8 +37,10 @@ import {
   DEFAULT_ACCOUNT_PRIORITY,
   MAX_ACCOUNT_PRIORITY,
   MIN_ACCOUNT_PRIORITY,
+  normalizeAccountMaxConcurrentTurns,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
+  parseAccountMaxConcurrentTurns,
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
   parseAccountPriority,
@@ -1514,6 +1516,7 @@ export async function handleCodexAuthAPI(
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+      accountMaxConcurrentTurns: normalizeAccountMaxConcurrentTurns(runtimeConfig.accountMaxConcurrentTurns),
     });
   }
 
@@ -1538,13 +1541,14 @@ export async function handleCodexAuthAPI(
     if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
     }
-    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown };
-    if (body.strategy === undefined && body.stickyLimit === undefined) {
-      return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
+    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown; maxConcurrentTurns?: unknown };
+    if (body.strategy === undefined && body.stickyLimit === undefined && body.maxConcurrentTurns === undefined) {
+      return jsonResponse({ error: "strategy, stickyLimit, or maxConcurrentTurns required" }, 400);
     }
     const runtimeConfig = getRuntimeConfig(config);
     let nextStrategy: NonNullable<ReturnType<typeof parseAccountPoolStrategy>> | undefined;
     let nextSticky: NonNullable<ReturnType<typeof parseAccountPoolStickyLimit>> | undefined;
+    let nextMaxConcurrentTurns: NonNullable<ReturnType<typeof parseAccountMaxConcurrentTurns>> | undefined;
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
@@ -1559,13 +1563,22 @@ export async function handleCodexAuthAPI(
       }
       nextSticky = parsed;
     }
+    if (body.maxConcurrentTurns !== undefined) {
+      const parsed = parseAccountMaxConcurrentTurns(body.maxConcurrentTurns);
+      if (parsed === null) {
+        return jsonResponse({ error: "maxConcurrentTurns must be an integer 1-100" }, 400);
+      }
+      nextMaxConcurrentTurns = parsed;
+    }
     if (nextStrategy !== undefined) runtimeConfig.accountPoolStrategy = nextStrategy;
     if (nextSticky !== undefined) runtimeConfig.accountPoolStickyLimit = nextSticky;
+    if (nextMaxConcurrentTurns !== undefined) runtimeConfig.accountMaxConcurrentTurns = nextMaxConcurrentTurns;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({
       ok: true,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+      accountMaxConcurrentTurns: normalizeAccountMaxConcurrentTurns(runtimeConfig.accountMaxConcurrentTurns),
     });
   }
 

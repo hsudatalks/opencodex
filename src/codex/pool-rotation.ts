@@ -16,6 +16,9 @@ let lastReconciledGeneration = 0;
 const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
 const MAX_STICKY_LIMIT = 100;
+export const DEFAULT_ACCOUNT_MAX_CONCURRENT_TURNS = 10;
+const MIN_ACCOUNT_MAX_CONCURRENT_TURNS = 1;
+const MAX_ACCOUNT_MAX_CONCURRENT_TURNS = 100;
 const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
 const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
 
@@ -46,6 +49,23 @@ export function normalizeAccountPoolStrategy(raw: unknown): OcxAccountPoolRotati
 
 export function normalizeAccountPoolStickyLimit(raw: unknown): number {
   return parseAccountPoolStickyLimit(raw) ?? DEFAULT_STICKY_LIMIT;
+}
+
+/** Strict parse for management APIs - returns null instead of defaulting. */
+export function parseAccountMaxConcurrentTurns(raw: unknown): number | null {
+  if (
+    typeof raw === "number"
+    && Number.isInteger(raw)
+    && raw >= MIN_ACCOUNT_MAX_CONCURRENT_TURNS
+    && raw <= MAX_ACCOUNT_MAX_CONCURRENT_TURNS
+  ) {
+    return raw;
+  }
+  return null;
+}
+
+export function normalizeAccountMaxConcurrentTurns(raw: unknown): number {
+  return parseAccountMaxConcurrentTurns(raw) ?? DEFAULT_ACCOUNT_MAX_CONCURRENT_TURNS;
 }
 
 /** Strict parse for management APIs — returns null instead of defaulting. */

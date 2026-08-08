@@ -354,6 +354,20 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("b");
   });
 
+  test("capacity only redirects unbound threads and preserves existing affinity", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+
+    expect(resolveCodexAccountForThread("affined", config)).toBe("a");
+
+    const capacity = { canClaimAccount: (accountId: string) => accountId !== "a" };
+    expect(resolveCodexAccountForThreadDetailed("new-thread", config, Date.now(), undefined, capacity))
+      .toEqual({ status: "selected", accountId: "b" });
+    expect(resolveCodexAccountForThreadDetailed("affined", config, Date.now(), undefined, capacity))
+      .toEqual({ status: "selected", accountId: "a" });
+  });
+
   test("all paused accounts fail closed instead of falling back to a configured account", () => {
     const config = makeConfig({ pausedCodexAccountIds: ["a", "b"] });
 

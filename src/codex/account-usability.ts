@@ -10,6 +10,8 @@ export interface CodexAccountUsabilityOptions {
   nativeMainSelectionOnly?: boolean;
   /** Test seam for proving whether routing attempted a physical native-token read. */
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
+  /** Turn-scoped capacity check used only when assigning an unbound request. */
+  canClaimAccount?: (accountId: string) => boolean;
 }
 
 export function isCodexAccountUsable(

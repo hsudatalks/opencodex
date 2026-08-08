@@ -30,6 +30,7 @@ import { getAccountQuota } from "./quota";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
+import { normalizeAccountMaxConcurrentTurns } from "./pool-rotation";
 
 export type CodexAuthContext =
   | { kind: "main"; accountId: null }
@@ -120,6 +121,29 @@ export class CodexMainProfileDrainingError extends Error {
     super(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
     this.name = "CodexMainProfileDrainingError";
   }
+}
+
+export class CodexAccountCapacityError extends Error {
+  accountId: string;
+  limit: number;
+
+  constructor(accountId: string, limit: number) {
+    super("Selected Codex account has reached its concurrent turn limit");
+    this.name = "CodexAccountCapacityError";
+    this.accountId = accountId;
+    this.limit = limit;
+  }
+}
+
+export function codexAccountCapacityResponse(err: CodexAccountCapacityError): Response {
+  const response = formatErrorResponse(
+    429,
+    "rate_limit_error",
+    `Selected Codex account is serving ${err.limit} concurrent turns; retry shortly`,
+  );
+  const headers = new Headers(response.headers);
+  headers.set("Retry-After", "1");
+  return new Response(response.body, { status: response.status, headers });
 }
 
 export function codexMainProfileDrainingResponse(): Response {
@@ -241,6 +265,8 @@ export interface ResolveCodexAuthContextOptions {
 
 export interface CodexAccountSelectionAdmission {
   readonly mainProfileDraining: boolean;
+  canClaimAccount(accountId: string, limit: number): boolean;
+  claimAccount(accountId: string, limit: number): boolean;
   claimMainProfile(): boolean;
   release(): void;
 }
@@ -266,6 +292,7 @@ export async function resolveCodexAuthContext(
   // can still preserve service by selecting a healthy configured pool account.
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
   const selectionAdmission = options.beginCodexAccountSelection?.();
+  const maxConcurrentTurns = normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns);
   const nativeMainReadsForbidden = nativeMainTrafficBlocked || selectionAdmission?.mainProfileDraining === true;
   const selectionOptions = {
     // Temporary switch drain keeps the candidate until the atomic claim rejects
@@ -273,6 +300,9 @@ export async function resolveCodexAuthContext(
     nativeMainSelectionOnly: !nativeMainTrafficBlocked
       && selectionAdmission?.mainProfileDraining === true,
     isMainAccountTokenLive: options.isMainAccountTokenLive,
+    canClaimAccount: selectionAdmission
+      ? (candidateId: string) => selectionAdmission.canClaimAccount(candidateId, maxConcurrentTurns)
+      : undefined,
   };
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
@@ -335,6 +365,12 @@ export async function resolveCodexAuthContext(
       if (!isCodexAccountUsable(config, accountId, selectionOptions)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
+    }
+    if (
+      selectionAdmission
+      && !selectionAdmission.claimAccount(accountId, maxConcurrentTurns)
+    ) {
+      throw new CodexAccountCapacityError(accountId, maxConcurrentTurns);
     }
   } finally {
     selectionAdmission?.release();
