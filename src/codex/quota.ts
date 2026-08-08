@@ -9,6 +9,8 @@ export type StoredAccountQuota = {
   weeklyResetAt?: number;
   monthlyResetAt?: number;
   resetCredits?: number;
+  /** Nearest unexpired manual reset credit deadline, as epoch seconds. */
+  resetCreditExpiresAt?: number;
   /**
    * True when `monthlyPercent` came from an explicitly-monthly PRIMARY window —
    * i.e. it is the account's governing quota reading, not a supplementary
@@ -160,6 +162,10 @@ function hasKnownQuotaValue(quota: Omit<StoredAccountQuota, "updatedAt">): boole
     .some(value => typeof value === "number" && Number.isFinite(value));
 }
 
+function hasResetCreditMetadata(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.resetCredits !== undefined || quota.resetCreditExpiresAt !== undefined;
+}
+
 function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): boolean {
   const seconds = window?.limit_window_seconds;
   return typeof seconds === "number"
@@ -199,7 +205,7 @@ export function setAccountQuotaFromParsed(
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const existing = accountQuota.get(accountId);
   const next: StoredAccountQuota = { updatedAt: Date.now() };
-  const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
+  const creditsOnly = hasResetCreditMetadata(quota) && !snapshotHasUsage(quota);
 
   if (creditsOnly) {
     if (existing?.weeklyPercent !== undefined) next.weeklyPercent = existing.weeklyPercent;
@@ -207,7 +213,15 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
-    next.resetCredits = quota.resetCredits;
+    if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
+    else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
+    if (quota.resetCreditExpiresAt !== undefined && quota.resetCreditExpiresAt > 0) {
+      next.resetCreditExpiresAt = quota.resetCreditExpiresAt;
+    } else if (quota.resetCreditExpiresAt === undefined
+      && quota.resetCredits !== 0
+      && existing?.resetCreditExpiresAt !== undefined) {
+      next.resetCreditExpiresAt = existing.resetCreditExpiresAt;
+    }
     accountQuota.set(accountId, next);
     schedulePersistAccountQuotas();
     return;
@@ -239,6 +253,13 @@ export function setAccountQuotaFromParsed(
 
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
+  if (quota.resetCreditExpiresAt !== undefined && quota.resetCreditExpiresAt > 0) {
+    next.resetCreditExpiresAt = quota.resetCreditExpiresAt;
+  } else if (quota.resetCreditExpiresAt === undefined
+    && quota.resetCredits !== 0
+    && existing?.resetCreditExpiresAt !== undefined) {
+    next.resetCreditExpiresAt = existing.resetCreditExpiresAt;
+  }
 
   accountQuota.set(accountId, next);
   schedulePersistAccountQuotas();
@@ -331,6 +352,7 @@ export function updateAccountQuota(
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
+    ...(existing?.resetCreditExpiresAt !== undefined ? { resetCreditExpiresAt: existing.resetCreditExpiresAt } : {}),
     updatedAt: Date.now(),
   };
 
@@ -348,7 +370,10 @@ export function updateAccountQuota(
     // treated as governing evidence.
     delete quota.monthlyIsPrimaryWindow;
   }
-  if (resetCredits !== undefined) quota.resetCredits = resetCredits;
+  if (resetCredits !== undefined) {
+    quota.resetCredits = resetCredits;
+    if (resetCredits === 0) delete quota.resetCreditExpiresAt;
+  }
 
   accountQuota.set(accountId, quota);
   schedulePersistAccountQuotas();

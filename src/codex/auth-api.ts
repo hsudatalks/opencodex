@@ -308,6 +308,49 @@ function safeResetCreditsDto(input: unknown): { credits: { granted_at: string; e
   };
 }
 
+function nearestResetCreditExpiry(dto: ReturnType<typeof safeResetCreditsDto>, now = Date.now()): number | undefined {
+  const expiries = dto.credits
+    .map(credit => Date.parse(credit.expires_at))
+    .filter(expiresAt => Number.isFinite(expiresAt) && expiresAt > now);
+  return expiries.length > 0 ? Math.floor(Math.min(...expiries) / 1000) : undefined;
+}
+
+async function refreshResetCreditDeadline(
+  accessToken: string,
+  chatgptAccountId: string,
+  reportedCount: number | undefined,
+  existing: StoredAccountQuota | null,
+): Promise<{ resetCredits?: number; resetCreditExpiresAt?: number }> {
+  if (reportedCount === undefined) return {};
+  if (reportedCount <= 0) return { resetCredits: 0 };
+  const existingExpiry = existing?.resetCreditExpiresAt;
+  const existingExpiryMs = (existingExpiry ?? 0) * 1000;
+  if (existing?.resetCredits === reportedCount && existingExpiryMs > Date.now()) {
+    return { resetCredits: reportedCount, resetCreditExpiresAt: existingExpiry };
+  }
+  try {
+    const resp = await fetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "ChatGPT-Account-Id": chatgptAccountId,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) {
+      await resp.body?.cancel().catch(() => {});
+      return { resetCredits: reportedCount };
+    }
+    const dto = safeResetCreditsDto(await resp.json());
+    const resetCreditExpiresAt = nearestResetCreditExpiry(dto);
+    return {
+      resetCredits: dto.available_count ?? reportedCount,
+      resetCreditExpiresAt: resetCreditExpiresAt ?? 0,
+    };
+  } catch {
+    return { resetCredits: reportedCount };
+  }
+}
+
 function safeResetCreditConsumeDto(input: unknown): { code: string } {
   const obj = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   return { code: typeof obj.code === "string" ? obj.code : "unknown" };
@@ -565,6 +608,14 @@ async function fetchMainAccountInfoWhileOwned(
     if (retried) return retried;
     const plan = nonEmptyPlan(data.plan_type) ?? nonEmptyPlan(cached?.plan) ?? nonEmptyPlan(getMainAccountPlan());
     const quota = parseUsageQuota({ ...data, ...(plan ? { plan_type: plan } : {}) });
+    if (quota?.resetCredits !== undefined) {
+      Object.assign(quota, await refreshResetCreditDeadline(
+        tokens.access_token,
+        tokens.account_id,
+        quota.resetCredits,
+        getAccountQuota(MAIN_CODEX_ACCOUNT_ID),
+      ));
+    }
     const freshResetCredits = quota?.resetCredits;
     const result = {
       email: data.email ?? null,
@@ -747,6 +798,14 @@ async function fetchFreshPoolAccountQuota(
     const data = (await resp.json()) as WhamUsageResponse;
     const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
     const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
+    if (quota?.resetCredits !== undefined) {
+      Object.assign(quota, await refreshResetCreditDeadline(
+        accessToken,
+        chatgptAccountId,
+        quota.resetCredits,
+        existing,
+      ));
+    }
     const freshResetCredits = quota?.resetCredits;
     if (!quota) {
       return {
@@ -1548,7 +1607,15 @@ export async function handleCodexAuthAPI(
           await resp.body?.cancel().catch(() => {});
           return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
         }
-        return jsonResponse(safeResetCreditsDto(await resp.json()));
+        const dto = safeResetCreditsDto(await resp.json());
+        const resetCreditExpiresAt = nearestResetCreditExpiry(dto);
+        if (dto.available_count !== undefined || resetCreditExpiresAt !== undefined) {
+          setAccountQuotaFromParsed(accountId, {
+            ...(dto.available_count !== undefined ? { resetCredits: dto.available_count } : {}),
+            resetCreditExpiresAt: resetCreditExpiresAt ?? 0,
+          });
+        }
+        return jsonResponse(dto);
       });
       return result.ok ? result.value : result.response;
     } catch (e) {

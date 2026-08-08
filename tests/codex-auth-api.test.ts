@@ -1904,6 +1904,33 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("reset-credit lookup caches the nearest future expiry for routing", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "pool-deadline", email: "deadline@example.test" });
+    const nearest = new Date(Date.now() + 60 * 60_000).toISOString();
+    const later = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      credits: [
+        { granted_at: new Date().toISOString(), expires_at: later },
+        { granted_at: new Date().toISOString(), expires_at: nearest },
+      ],
+      rate_limit_reset_credits: { available_count: 2 },
+    }), { status: 200 })) as typeof fetch;
+
+    try {
+      const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=pool-deadline");
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(200);
+      expect(getAccountQuota("pool-deadline")).toMatchObject({
+        resetCredits: 2,
+        resetCreditExpiresAt: Math.floor(Date.parse(nearest) / 1000),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("reset-credit consume rejects invalid account ids before credential lookup", async () => {
     const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
       method: "POST",

@@ -145,8 +145,9 @@ returns:
 ### `ocx account current <provider> [--json]`
 
 Shows the active account or key. A Codex pool with no manual pin reports the priority-aware
-automatic selection: the highest-priority eligible tier is chosen, and the lowest-usage account
-within that tier is selected under quota routing; another family with no active credential reports
+automatic selection: the highest-priority eligible tier is chosen, and quota routing ranks accounts
+within that tier by remaining governing capacity and its reset deadline, with lowest usage as the
+fallback; another family with no active credential reports
 that state and still exits 0. `--json` returns:
 
 ```text
