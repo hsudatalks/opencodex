@@ -107,6 +107,30 @@ describe("rate-limit reset credits", () => {
     });
   });
 
+  it("clears a stale reset-credit deadline when refresh finds no future expiry", () => {
+    const accountId = "deadline-clear-test";
+    clearAccountQuota(accountId);
+    setAccountQuotaFromParsed(accountId, {
+      weeklyPercent: 20,
+      weeklyResetAt: 1_800_000_000,
+      resetCredits: 2,
+      resetCreditExpiresAt: 1_790_000_000,
+    });
+
+    setAccountQuotaFromParsed(accountId, {
+      resetCredits: 2,
+      resetCreditExpiresAt: 0,
+    });
+
+    expect(getAccountQuota(accountId)).toMatchObject({
+      weeklyPercent: 20,
+      weeklyResetAt: 1_800_000_000,
+      resetCredits: 2,
+    });
+    expect(getAccountQuota(accountId)?.resetCreditExpiresAt).toBeUndefined();
+    clearAccountQuota(accountId);
+  });
+
   describe("parseUsageQuota window duration classification (issue #315)", () => {
     it("keeps a 7d primary window weekly", () => {
       const quota = parseUsageQuota({
@@ -299,6 +323,32 @@ describe("rate-limit reset credits", () => {
       updateAccountQuota("test-3", 50, undefined, undefined, undefined, 1);
       const q = getAccountQuota("test-3");
       expect(q!.resetCredits).toBe(1);
+    });
+
+    it("stores the nearest reset credit expiry without replacing usage", () => {
+      clearAccountQuota();
+      updateAccountQuota("test-expiry", 42, 1_800_000_000);
+      setAccountQuotaFromParsed("test-expiry", {
+        resetCredits: 2,
+        resetCreditExpiresAt: 1_799_900_000,
+      });
+      expect(getAccountQuota("test-expiry")).toMatchObject({
+        weeklyPercent: 42,
+        weeklyResetAt: 1_800_000_000,
+        resetCredits: 2,
+        resetCreditExpiresAt: 1_799_900_000,
+      });
+    });
+
+    it("clears a stale reset credit expiry when no credits remain", () => {
+      clearAccountQuota();
+      setAccountQuotaFromParsed("test-expiry-clear", {
+        weeklyPercent: 20,
+        resetCredits: 1,
+        resetCreditExpiresAt: 1_800_000_000,
+      });
+      setAccountQuotaFromParsed("test-expiry-clear", { resetCredits: 0 });
+      expect(getAccountQuota("test-expiry-clear")?.resetCreditExpiresAt).toBeUndefined();
     });
   });
 

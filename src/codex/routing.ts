@@ -17,7 +17,7 @@ import {
   seedPoolRotationAccount,
   selectPriorityTier,
 } from "./pool-rotation";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, type StoredAccountQuota } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
@@ -325,6 +325,59 @@ export function computeCodexUsageScore(quota: {
   const values = [quota.weeklyPercent, quota.monthlyPercent]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return values.length > 0 ? Math.max(...values) : CODEX_UNKNOWN_USAGE_SCORE;
+}
+
+const CODEX_CAPACITY_DEADLINE_FLOOR_MS = 6 * 60 * 60_000;
+
+function epochMs(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return value < 1_000_000_000_000 ? value * 1000 : value;
+}
+
+/** Remaining governing capacity per hour before it expires or can be reset. */
+export function computeCodexCapacityPressure(
+  quota: StoredAccountQuota | null,
+  plan?: string | null,
+  now = Date.now(),
+): number | null {
+  if (!quota) return null;
+  const monthlyPlan = ["go", "free"].includes(plan?.trim().toLowerCase() ?? "");
+  const usage = monthlyPlan ? quota.monthlyPercent : quota.weeklyPercent;
+  const scheduledReset = epochMs(monthlyPlan ? quota.monthlyResetAt : quota.weeklyResetAt);
+  if (typeof usage !== "number" || !Number.isFinite(usage)) return null;
+
+  const manualDeadline = quota.resetCredits && quota.resetCredits > 0
+    ? epochMs(quota.resetCreditExpiresAt)
+    : undefined;
+  const deadlines = [scheduledReset, manualDeadline]
+    .filter((deadline): deadline is number => deadline !== undefined && deadline > now);
+  if (deadlines.length === 0) return null;
+
+  const deadline = Math.min(...deadlines);
+  const hours = Math.max(deadline - now, CODEX_CAPACITY_DEADLINE_FLOOR_MS) / 3_600_000;
+  return Math.max(0, 100 - usage) / hours;
+}
+
+function compareQuotaCandidates(
+  leftQuota: StoredAccountQuota | null,
+  leftPlan: string | null | undefined,
+  rightQuota: StoredAccountQuota | null,
+  rightPlan: string | null | undefined,
+  now: number,
+): number {
+  const leftUsage = computeCodexUsageScore(leftQuota, leftPlan);
+  const rightUsage = computeCodexUsageScore(rightQuota, rightPlan);
+  const leftKnown = leftUsage < CODEX_UNKNOWN_USAGE_SCORE;
+  const rightKnown = rightUsage < CODEX_UNKNOWN_USAGE_SCORE;
+  if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
+  if (!leftKnown) return 0;
+
+  const leftPressure = computeCodexCapacityPressure(leftQuota, leftPlan, now);
+  const rightPressure = computeCodexCapacityPressure(rightQuota, rightPlan, now);
+  if (leftPressure !== null && rightPressure !== null && leftPressure !== rightPressure) {
+    return rightPressure - leftPressure;
+  }
+  return leftUsage - rightUsage;
 }
 
 export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): CodexUpstreamOutcomeClass {
@@ -1105,26 +1158,34 @@ function pickLowerUsageAccount(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string {
   let best = active;
-  let bestUsage = activeUsage;
   for (const id of getEligiblePoolAccounts(config, active, now, quotaScope, selectionOptions)) {
     const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
-    if (usage < bestUsage) {
+    if (usage >= activeUsage) continue;
+    if (compareQuotaCandidates(
+      getAccountQuota(id),
+      getPoolAccountPlan(config, id),
+      getAccountQuota(best),
+      getPoolAccountPlan(config, best),
+      now,
+    ) < 0) {
       best = id;
-      bestUsage = usage;
     }
   }
   return best;
 }
 
-/** Coolest account in an already-selected candidate list; first index wins ties. */
-function pickLowestUsageAmong(config: OcxConfig, ids: readonly string[]): string | null {
+/** Best capacity deadline among eligible accounts; first index wins ties. */
+function pickLowestUsageAmong(config: OcxConfig, ids: readonly string[], now = Date.now()): string | null {
   let best: string | null = null;
-  let bestUsage = Number.POSITIVE_INFINITY;
   for (const id of ids) {
-    const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
-    if (usage < bestUsage) {
+    if (best === null || compareQuotaCandidates(
+      getAccountQuota(id),
+      getPoolAccountPlan(config, id),
+      getAccountQuota(best),
+      getPoolAccountPlan(config, best),
+      now,
+    ) < 0) {
       best = id;
-      bestUsage = usage;
     }
   }
   return best;
@@ -1137,7 +1198,11 @@ export function pickLowestUsageCodexAccount(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
-  return pickLowestUsageAmong(config, getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions));
+  return pickLowestUsageAmong(
+    config,
+    getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions),
+    now,
+  );
 }
 
 /**
@@ -1282,7 +1347,7 @@ function pickPriorityPreemption(
   if (priorityOf(eligible[0]!) <= priorityOf(active)) return null;
   // Members without headroom are in the tier only because a sibling has some;
   // picking one would hand the request straight back to a drained account.
-  return pickLowestUsageAmong(config, eligible.filter(id => hasCodexQuotaHeadroom(config, id)));
+  return pickLowestUsageAmong(config, eligible.filter(id => hasCodexQuotaHeadroom(config, id)), now);
 }
 
 /**

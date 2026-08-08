@@ -45,8 +45,9 @@ opencodex is a lightweight local proxy that translates Codex's Responses API int
 provider speaks — streaming, tool calls, reasoning tokens, images, in both directions. Use Claude,
 Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex, Claude Code, Claude
 Desktop, and Grok Build. It can also manage a **ChatGPT account pool** for Codex auth: add accounts,
-refresh their quotas in the dashboard, and let new sessions auto-route to the lowest-usage healthy
-account while existing threads stay pinned to the account that started them.
+refresh their quotas in the dashboard, and let new sessions auto-route to the healthy account whose
+remaining weekly or monthly capacity is most urgent to use before reset while existing threads stay
+pinned to the account that started them.
 
 ## Quick start
 
@@ -61,8 +62,9 @@ Open **http://localhost:10100** and configure everything in the web dashboard �
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
 It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
-refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
-the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions use quota
+usage together with the governing reset deadline and nearest manual-reset expiry; round-robin and
+fill-first use their own policies. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or
 mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
 account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a

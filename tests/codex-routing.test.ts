@@ -14,6 +14,7 @@ import {
   clearCodexUpstreamHealthForAccount,
   clearThreadAccountMap,
   clearThreadAccountMapForAccount,
+  computeCodexCapacityPressure,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
   getEffectiveActiveCodexAccountId,
@@ -40,6 +41,7 @@ import {
   handleCodexAuthAPI,
   isAccountNeedsReauth,
   parseUsageQuota,
+  setAccountQuotaFromParsed,
   updateAccountQuota,
 } from "../src/codex/auth-api";
 import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
@@ -186,6 +188,49 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({})).toBe(CODEX_UNKNOWN_USAGE_SCORE);
     expect(computeCodexUsageScore({ weeklyPercent: 100 })).toBe(100);
     expect(CODEX_UNKNOWN_USAGE_SCORE).toBeGreaterThan(100);
+  });
+
+  test("capacity pressure favors quota that will expire sooner", () => {
+    const now = 1_800_000_000_000;
+    const oneDay = 24 * 60 * 60;
+    expect(computeCodexCapacityPressure({
+      weeklyPercent: 50,
+      weeklyResetAt: now / 1000 + oneDay,
+      updatedAt: now,
+    }, "plus", now)).toBeCloseTo(50 / 24);
+    expect(computeCodexCapacityPressure({
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 7 * oneDay,
+      updatedAt: now,
+    }, "plus", now)).toBeCloseTo(90 / (7 * 24));
+  });
+
+  test("quota selection uses weekly reset deadline before raw usage", () => {
+    const now = 1_800_000_000_000;
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 50,
+      weeklyResetAt: now / 1000 + 24 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+    });
+    expect(pickLowestUsageCodexAccount(makeConfig(), undefined, now)).toBe("a");
+  });
+
+  test("nearest manual reset expiry becomes the effective capacity deadline", () => {
+    const now = 1_800_000_000_000;
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 40,
+      weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      resetCredits: 1,
+      resetCreditExpiresAt: now / 1000 + 12 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 2 * 24 * 60 * 60,
+    });
+    expect(pickLowestUsageCodexAccount(makeConfig(), undefined, now)).toBe("a");
   });
 
   test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
