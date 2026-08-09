@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS opencodex_usage.requests (
   request_id text NOT NULL,
   provider_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
   model_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
+  canonical_provider_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
+  usage_model_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
   surface_code smallint NOT NULL,
   api_key_id bigint REFERENCES opencodex_usage.dimensions(id),
   admission_code smallint NOT NULL,
@@ -59,6 +61,8 @@ CREATE TABLE IF NOT EXISTS opencodex_usage.attempts (
   ordinal smallint NOT NULL,
   provider_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
   model_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
+  canonical_provider_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
+  usage_model_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
   adapter_id bigint NOT NULL REFERENCES opencodex_usage.dimensions(id),
   http_status smallint NOT NULL,
   duration_ms bigint NOT NULL,
@@ -201,6 +205,11 @@ BEGIN
     'requests_' || suffix
   );
   EXECUTE format(
+    'CREATE INDEX IF NOT EXISTS %I ON opencodex_usage.%I (canonical_provider_id, usage_model_id, occurred_at DESC)',
+    'requests_' || suffix || '_canonical_model_time_idx',
+    'requests_' || suffix
+  );
+  EXECUTE format(
     'CREATE INDEX IF NOT EXISTS %I ON opencodex_usage.%I (conversation_id, occurred_at DESC) WHERE conversation_id IS NOT NULL',
     'requests_' || suffix || '_conversation_time_idx',
     'requests_' || suffix
@@ -214,4 +223,3 @@ COMMENT ON TABLE opencodex_usage.route_decisions IS
   'Cold, bounded route evidence. trace is the only intentionally retained JSONB payload.';
 COMMENT ON TABLE opencodex_usage.ingestion_cursors IS
   'Transactional JSONL WAL offsets. Advancing a cursor and inserting its batch are one commit.';
-

@@ -1,6 +1,8 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { hostname } from "node:os";
 import { SQL } from "bun";
+import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
+import { baseProviderLabel } from "../providers/label";
 import {
   normalizeUsageEntryForTest,
   usageLogPath,
@@ -228,6 +230,8 @@ function collectDimensions(entries: PersistedUsageEntry[]): DimensionInput[] {
   for (const entry of entries) {
     addDimension(values, USAGE_DIMENSION_KIND.provider, entry.provider);
     addDimension(values, USAGE_DIMENSION_KIND.model, entry.model);
+    addDimension(values, USAGE_DIMENSION_KIND.provider, baseProviderLabel(entry.provider));
+    addDimension(values, USAGE_DIMENSION_KIND.model, requestUsageModel(entry));
     addDimension(values, USAGE_DIMENSION_KIND.model, entry.requestedModel);
     addDimension(values, USAGE_DIMENSION_KIND.model, entry.resolvedModel);
     addDimension(values, USAGE_DIMENSION_KIND.apiKey, entry.apiKeyId);
@@ -262,6 +266,8 @@ function collectDimensions(entries: PersistedUsageEntry[]): DimensionInput[] {
 function collectAttemptDimensions(target: Map<string, DimensionInput>, attempt: PersistedUsageAttempt): void {
   addDimension(target, USAGE_DIMENSION_KIND.provider, attempt.provider);
   addDimension(target, USAGE_DIMENSION_KIND.model, attempt.model);
+  addDimension(target, USAGE_DIMENSION_KIND.provider, baseProviderLabel(attempt.provider));
+  addDimension(target, USAGE_DIMENSION_KIND.model, attributionUsageModel(attempt.provider, attempt.model));
   addDimension(target, USAGE_DIMENSION_KIND.adapter, attempt.adapter);
   addDimension(target, USAGE_DIMENSION_KIND.errorCode, attempt.errorCode);
   addDimension(target, USAGE_DIMENSION_KIND.effort, attempt.requestedEffort);
@@ -295,12 +301,33 @@ function occurredAt(entry: PersistedUsageEntry): string {
   return date.toISOString();
 }
 
+function attributionUsageModel(provider: string, model: string): string {
+  return baseProviderLabel(provider) === "google-antigravity"
+    ? canonicalAntigravityUsageModel(model)
+    : model;
+}
+
+function requestUsageModel(entry: PersistedUsageEntry): string {
+  if (baseProviderLabel(entry.provider) !== "google-antigravity") return entry.model;
+  const fromModel = canonicalAntigravityUsageModel(entry.model);
+  const fromResolved = entry.resolvedModel
+    ? canonicalAntigravityUsageModel(entry.resolvedModel)
+    : undefined;
+  return fromModel !== entry.model
+    ? fromModel
+    : fromResolved && fromResolved !== entry.resolvedModel
+      ? fromResolved
+      : fromModel;
+}
+
 function requestRows(entries: PersistedUsageEntry[], dimensions: Map<string, number>): Array<Record<string, unknown>> {
   return entries.map(entry => ({
     occurred_at: occurredAt(entry),
     request_id: entry.requestId,
     provider_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, entry.provider),
     model_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.model, entry.model),
+    canonical_provider_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, baseProviderLabel(entry.provider)),
+    usage_model_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.model, requestUsageModel(entry)),
     surface_code: entry.surface ? SURFACE_CODES[entry.surface] : 0,
     api_key_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.apiKey, entry.apiKeyId),
     admission_code: entry.admissionKind ? ADMISSION_CODES[entry.admissionKind] : 0,
@@ -344,6 +371,8 @@ function attemptRows(entries: PersistedUsageEntry[], dimensions: Map<string, num
     ordinal: attempt.ordinal,
     provider_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, attempt.provider),
     model_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.model, attempt.model),
+    canonical_provider_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, baseProviderLabel(attempt.provider)),
+    usage_model_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.model, attributionUsageModel(attempt.provider, attempt.model)),
     adapter_id: dimensionId(dimensions, USAGE_DIMENSION_KIND.adapter, attempt.adapter),
     http_status: attempt.status,
     duration_ms: attempt.durationMs,
@@ -414,6 +443,7 @@ async function loadDimensions(tx: SQL, entries: PersistedUsageEntry[]): Promise<
     INSERT INTO opencodex_usage.dimensions (kind, value)
     SELECT DISTINCT kind, value
     FROM jsonb_to_recordset($1::jsonb) AS input(kind smallint, value text)
+    ORDER BY kind, value
     ON CONFLICT (kind, value) DO NOTHING
   `, [payload]);
   const rows = await tx.unsafe<DimensionRow[]>(`
@@ -443,6 +473,7 @@ const REQUEST_INSERT_SQL = `
   WITH input AS (
     SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
       occurred_at timestamptz, request_id text, provider_id bigint, model_id bigint,
+      canonical_provider_id bigint, usage_model_id bigint,
       surface_code smallint, api_key_id bigint, admission_code smallint, protocol_code smallint,
       conversation_id text, resolved_model_id bigint, requested_model_id bigint,
       requested_effort_id bigint, effective_effort_id bigint, reasoning_wire_field_id bigint,
@@ -458,7 +489,8 @@ const REQUEST_INSERT_SQL = `
     )
   ), inserted AS (
     INSERT INTO opencodex_usage.requests (
-      occurred_at, request_id, provider_id, model_id, surface_code, api_key_id,
+      occurred_at, request_id, provider_id, model_id, canonical_provider_id, usage_model_id,
+      surface_code, api_key_id,
       admission_code, protocol_code, conversation_id, resolved_model_id, requested_model_id,
       requested_effort_id, effective_effort_id, reasoning_wire_field_id, reasoning_wire_value_id,
       reasoning_wire_number, reasoning_wire_boolean, requested_service_tier_id, requested_speed_label_id,
@@ -469,7 +501,8 @@ const REQUEST_INSERT_SQL = `
       error_code_id, terminal_status_id, close_reason_code
     )
     SELECT
-      occurred_at, request_id, provider_id, model_id, surface_code, api_key_id,
+      occurred_at, request_id, provider_id, model_id, canonical_provider_id, usage_model_id,
+      surface_code, api_key_id,
       admission_code, protocol_code, conversation_id, resolved_model_id, requested_model_id,
       requested_effort_id, effective_effort_id, reasoning_wire_field_id, reasoning_wire_value_id,
       reasoning_wire_number, reasoning_wire_boolean, requested_service_tier_id, requested_speed_label_id,
@@ -497,6 +530,7 @@ const REQUEST_INSERT_SQL = `
     sum(COALESCE(total_tokens, 0))
   FROM inserted
   GROUP BY 1, 2, 3, 4, 5
+  ORDER BY 1, 2, 3, 4, 5
   ON CONFLICT (hour, surface_code, provider_id, model_id, account_id) DO UPDATE SET
     request_count = opencodex_usage.usage_hourly_rollups.request_count + EXCLUDED.request_count,
     success_count = opencodex_usage.usage_hourly_rollups.success_count + EXCLUDED.success_count,
@@ -513,7 +547,8 @@ const REQUEST_INSERT_SQL = `
 
 const ATTEMPT_INSERT_SQL = `
   INSERT INTO opencodex_usage.attempts (
-    occurred_at, request_id, ordinal, provider_id, model_id, adapter_id, http_status,
+    occurred_at, request_id, ordinal, provider_id, model_id, canonical_provider_id,
+    usage_model_id, adapter_id, http_status,
     duration_ms, first_output_ms, send_count, usage_status_code, input_token_estimate,
     input_tokens, output_tokens, context_total_tokens, cached_input_tokens,
     cache_read_input_tokens, cache_creation_input_tokens, reasoning_output_tokens,
@@ -522,7 +557,8 @@ const ATTEMPT_INSERT_SQL = `
   )
   SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
     occurred_at timestamptz, request_id text, ordinal smallint, provider_id bigint,
-    model_id bigint, adapter_id bigint, http_status smallint, duration_ms bigint,
+    model_id bigint, canonical_provider_id bigint, usage_model_id bigint,
+    adapter_id bigint, http_status smallint, duration_ms bigint,
     first_output_ms bigint, send_count integer, usage_status_code smallint,
     input_token_estimate bigint, input_tokens bigint, output_tokens bigint,
     context_total_tokens bigint, cached_input_tokens bigint, cache_read_input_tokens bigint,
