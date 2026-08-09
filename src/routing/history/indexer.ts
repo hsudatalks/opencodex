@@ -617,6 +617,7 @@ export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexM
   fullRebuild(handle, "manual rebuild requested");
   handle.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   handle.exec("VACUUM");
+  handle.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   return metaFor(handle);
 }
 

@@ -420,6 +420,8 @@ describe("request-history index (RI-02)", () => {
     const canonicalIds = rows.map(row => row.requestId).sort();
     const rebuilt = await rebuildRequestHistoryIndex();
     expect(rebuilt.indexedRows).toBe(25);
+    const walPath = join(getConfigDir(), `${HISTORY_DB_FILENAME}-wal`);
+    expect(!existsSync(walPath) || statSync(walPath).size === 0).toBe(true);
     const page = await queryRequestHistory({}, undefined, 100);
     expect(page.rows.map(row => row.requestId).sort()).toEqual(canonicalIds);
   });
