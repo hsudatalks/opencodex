@@ -98,7 +98,7 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-Управляйте admission API-key'ами OpenCodex и проверяйте внешние endpoint'ы и модели.
+Управляйте admission API-key'ами Univers Gateway и проверяйте внешние endpoint'ы и модели.
 `ocx api-key <list|create|remove> ...` — alias `ocx access key`.
 
 ```bash
@@ -216,5 +216,5 @@ ocx system settings --stream-mode eager-relay
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
-Проверяйте и безопасно меняйте валидированную конфигурацию OpenCodex. `show` и `get`
+Проверяйте и безопасно меняйте валидированную конфигурацию Univers Gateway. `show` и `get`
 маскируют секреты. Импорт выполняет валидацию перед записью и требует `--yes`.

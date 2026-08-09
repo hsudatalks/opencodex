@@ -16,21 +16,21 @@ ugw start        # proxy + dashboard on localhost:10100
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/claude-code-models.gif" alt="Claude Code running a routed model through opencodex — the status bar shows gpt-5.6-luna-medium as the active model" width="410"><br>
+      <img src="assets/claude-code-models.gif" alt="Claude Code running a routed model through Univers Gateway — the status bar shows gpt-5.6-luna-medium as the active model" width="410"><br>
       <sub><b>Claude Code, running any model.</b><br>The picker is stock Claude Code. The brain behind it isn't.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/demo.gif" alt="opencodex demo — running a task in the Codex app on a routed non-OpenAI model" width="410"><br>
+      <img src="assets/demo.gif" alt="Univers Gateway demo — running a task in the Codex app on a routed non-OpenAI model" width="410"><br>
       <sub><b>Codex, running any model.</b><br>Pick a provider and go — same workflow, different brain.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="assets/claude-desktop-subagent.gif" alt="Claude Desktop answering as Claude Opus 4.8, then dispatching a GPT-5.6 Sol subagent through opencodex" width="410"><br>
+      <img src="assets/claude-desktop-subagent.gif" alt="Claude Desktop answering as Claude Opus 4.8, then dispatching a GPT-5.6 Sol subagent through Univers Gateway" width="410"><br>
       <sub><b>Claude Desktop, running any model.</b><br>Opus answers, then hands the task to a GPT-5.6 Sol subagent.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/grok-build-subagent.gif" alt="Grok Build running GPT-5.6 Sol through opencodex and calling a Kimi K3 subagent" width="410"><br>
+      <img src="assets/grok-build-subagent.gif" alt="Grok Build running GPT-5.6 Sol through Univers Gateway and calling a Kimi K3 subagent" width="410"><br>
       <sub><b>Grok Build, running any model.</b><br>Sol drives the session and calls a Kimi K3 subagent.</sub>
     </td>
   </tr>
@@ -157,7 +157,7 @@ ugw provider <...>             # manage providers (list/add/edit/test/remove)
 ugw account <...>              # manage ChatGPT accounts & API-key pools
 ugw combo <...>                # manage failover / round-robin combos
 ugw v2 <...>                   # multi-agent v1/v2 surface controls
-ugw update [--tag preview]     # update opencodex
+ugw update [--tag preview]     # update Univers Gateway
 ```
 
 Unpinned starts may pick another free port if the preferred one is busy; an explicit `--port`
@@ -199,7 +199,7 @@ npm uninstall -g univers-gateway
 
 ## Remote access
 
-By default opencodex binds to `127.0.0.1` and needs no extra authentication. Binding beyond
+By default Univers Gateway binds to `127.0.0.1` and needs no extra authentication. Binding beyond
 loopback (`"hostname": "0.0.0.0"`) **requires** a bearer token — the proxy refuses to start
 without `OPENCODEX_API_AUTH_TOKEN`, and every client request must carry it as
 `x-opencodex-api-key`. Details: [configuration reference](https://opencodex.me/reference/configuration/).
@@ -226,7 +226,7 @@ Source development requires the `bun` CLI on your `PATH`. This is separate from 
 package's bundled Bun runtime, which is used only by installed `ugw` commands.
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone https://github.com/hsudatalks/opencodex.git
 cd opencodex
 bun install
 bun run typecheck
@@ -237,9 +237,9 @@ See **[Contributing](./CONTRIBUTING.md)**.
 
 ## Disclaimer
 
-opencodex is an independent, community-maintained project and is **not affiliated with or endorsed by OpenAI, Anthropic, or any other provider**.
+Univers Gateway is an independent, community-maintained project and is **not affiliated with or endorsed by OpenAI, Anthropic, or any other provider**.
 
-Some providers — notably Anthropic (Claude) — may suspend or restrict accounts that route API traffic through third-party proxies. **Use at your own risk (UAYOR).** Before connecting a provider, review its Terms of Service to confirm that proxy-based access is permitted. The opencodex maintainers are not responsible for any account actions taken by upstream providers.
+Some providers — notably Anthropic (Claude) — may suspend or restrict accounts that route API traffic through third-party proxies. **Use at your own risk (UAYOR).** Before connecting a provider, review its Terms of Service to confirm that proxy-based access is permitted. The Univers Gateway maintainers are not responsible for any account actions taken by upstream providers.
 
 ## License
 

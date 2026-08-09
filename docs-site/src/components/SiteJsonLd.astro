@@ -40,7 +40,7 @@ const graph: GraphNode[] = [
 		url: homeUrl,
 		// `name` matches the visible site name (header wordmark + <title> prefix),
 		// which is what Google requires before it will adopt it over the domain.
-		name: 'opencodex',
+		name: 'Univers Gateway',
 		alternateName: 'ocx',
 		description: descriptions[inLanguage],
 		inLanguage,
@@ -53,7 +53,7 @@ if (!locale) {
 	graph.push({
 		'@type': 'SoftwareApplication',
 		'@id': `${SITE_URL}/#software`,
-		name: 'opencodex',
+		name: 'Univers Gateway',
 		alternateName: 'ocx',
 		description:
 			'Local LLM proxy that lets OpenAI Codex (CLI, App, SDK) and Claude Code run on any model — Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, Ollama, OpenRouter, and more — with streaming, tool calls, reasoning tokens, and images working in both directions.',
@@ -70,8 +70,8 @@ if (!locale) {
 		operatingSystem: 'macOS, Linux, Windows',
 		offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
 		softwareHelp: { '@type': 'CreativeWork', url: `${SITE_URL}/` },
-		downloadUrl: 'https://www.npmjs.com/package/@bitkyc08/opencodex',
-		url: 'https://github.com/lidge-jun/opencodex',
+		downloadUrl: 'https://www.npmjs.com/package/univers-gateway',
+		url: 'https://github.com/hsudatalks/opencodex',
 	});
 }
 

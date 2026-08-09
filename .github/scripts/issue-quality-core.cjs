@@ -1,7 +1,7 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
-// Pure issue-quality validation for OpenCodex.
+// Pure issue-quality validation for Univers Gateway.
 // CommonJS, zero runtime dependencies. No GitHub API calls.
 // ---------------------------------------------------------------------------
 
@@ -504,7 +504,7 @@ function hasSubstantialStructuredContent(body, minSectionLen = 40, minRichSectio
 const FEATURE_NEW_HEADINGS = [
   "What are you trying to accomplish?",
   "What prevents this today?",
-  "What should OpenCodex do?",
+  "What should Univers Gateway do?",
 ];
 const FEATURE_LEGACY_HEADINGS = ["Problem to solve", "Proposed solution"];
 const FEATURE_GOAL_HEADINGS = [
@@ -519,7 +519,7 @@ const FEATURE_BLOCKER_HEADINGS = [
   "Current workaround",
 ];
 const FEATURE_BEHAVIOUR_HEADINGS = [
-  "What should OpenCodex do?",
+  "What should Univers Gateway do?",
   "Expected behaviour",
   "Expected behavior",
   "Proposed solution",
@@ -641,7 +641,7 @@ const AREA_HEURISTIC_BODY_HEADINGS = [
   "Reproduction",
   "What are you trying to accomplish?",
   "What prevents this today?",
-  "What should OpenCodex do?",
+  "What should Univers Gateway do?",
   "Example usage or interface",
   "Current behaviour",
   "Expected behaviour",
@@ -1361,7 +1361,7 @@ function validateIssue(issue) {
     // Version "Unknown" / "모름" / "idk" is never actionable, on any form.
     if (!softPass && version !== null && isUnusableVersion(version)) {
       reasons.push("Version is missing or unknown.");
-      guidance.push("Report the installed `@bitkyc08/opencodex` version (for example `2.7.42`) or a commit SHA from `ocx --version`.");
+      guidance.push("Report the installed `univers-gateway` version (for example `2.7.42`) or a commit SHA from `ugw --version`.");
     } else if (
       !softPass &&
       isNewBugForm &&
@@ -1371,7 +1371,7 @@ function validateIssue(issue) {
       // Legacy N/A / No response soft-pass stays only for bodies without
       // Client or integration.
       reasons.push("Version is missing.");
-      guidance.push("Add your OpenCodex version so we can reproduce the environment.");
+      guidance.push("Add your Univers Gateway version so we can reproduce the environment.");
     }
 
     if (!softPass && isNewBugForm && os !== null && isUnusableVersion(os)) {
@@ -1402,7 +1402,7 @@ function validateIssue(issue) {
       !isRawPlaceholder(os)
     ) {
       reasons.push("Version and Operating system are both missing.");
-      guidance.push("Add your OpenCodex version and OS so we can reproduce the environment.");
+      guidance.push("Add your Univers Gateway version and OS so we can reproduce the environment.");
     }
 
     if (!softPass) {
@@ -1436,10 +1436,10 @@ function validateIssue(issue) {
     if (isEmpty(expected)) emptyCore.push("expected behaviour");
     // Metadata fields: provider, version, endpoint are required on the form.
     const provider = extractSection(body, "Provider or upstream service");
-    const version = extractSection(body, "OpenCodex version");
+    const version = extractSection(body, "Univers Gateway version");
     const endpoint = extractSection(body, "Endpoint or capability");
     if (provider !== null && isEmpty(provider)) emptyCore.push("provider or upstream service");
-    if (version !== null && isRawPlaceholder(version) === false && isEmpty(version)) emptyCore.push("OpenCodex version");
+    if (version !== null && isRawPlaceholder(version) === false && isEmpty(version)) emptyCore.push("Univers Gateway version");
     if (endpoint !== null && isEmpty(endpoint)) emptyCore.push("endpoint or capability");
     if (emptyCore.length > 0) {
       // Same soft-pass as bug/feature: label- or maintainer-scoped provider

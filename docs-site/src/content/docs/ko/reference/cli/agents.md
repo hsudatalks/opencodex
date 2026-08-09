@@ -90,7 +90,7 @@ scope를 지정하지 않으면 `ocx debug`는 사용량을 출력하고, 프록
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex admission API key를 관리하고 외부 endpoint와 model을 검사합니다. `ocx api-key
+Univers Gateway admission API key를 관리하고 외부 endpoint와 model을 검사합니다. `ocx api-key
 <list|create|remove> ...`는 `ocx access key`의 별칭입니다.
 
 ```bash
@@ -179,4 +179,4 @@ ocx system settings --stream-mode eager-relay
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
-검증된 OpenCodex configuration을 검사하고 안전하게 수정합니다. `show`와 `get`은 비밀 값을 가립니다. import는 쓰기 전에 검증하며 `--yes`가 필요합니다.
+검증된 Univers Gateway configuration을 검사하고 안전하게 수정합니다. `show`와 `get`은 비밀 값을 가립니다. import는 쓰기 전에 검증하며 `--yes`가 필요합니다.

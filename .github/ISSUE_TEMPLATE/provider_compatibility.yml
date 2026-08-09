@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form when a provider endpoint, request format, response format, or client integration does not work correctly through the OpenCodex proxy.
+        Use this form when a provider endpoint, request format, response format, or client integration does not work correctly through the Univers Gateway proxy.
 
   - type: dropdown
     id: client
@@ -37,8 +37,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenCodex version
-      description: Installed `@bitkyc08/opencodex` version or commit SHA.
+      label: Univers Gateway version
+      description: Installed `univers-gateway` version or commit SHA.
       placeholder: "2.7.31"
     validations:
       required: true

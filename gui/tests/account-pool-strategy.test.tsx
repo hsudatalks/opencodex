@@ -243,7 +243,7 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markup).toContain("How OpenCodex assigns an account to a new/unbound task.");
+    expect(markup).toContain("How Univers Gateway assigns an account to a new/unbound task.");
     expect(markup).toContain("New/unbound task means a request with no current account binding");
     expect((markup.match(/class="desc"/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
@@ -267,7 +267,7 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markup).toContain("How OpenCodex assigns an account to a new/unbound task.");
+    expect(markup).toContain("How Univers Gateway assigns an account to a new/unbound task.");
     expect(markup).toContain("Round-robin rotates only tasks without a live binding");
     expect(markup).toContain('id="anthropic-pool-strategy"');
     // Round-robin adds its own row, and the sticky help text is a desc rather than a card-sub.

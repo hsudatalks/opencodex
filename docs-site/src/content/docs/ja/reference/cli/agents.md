@@ -86,7 +86,7 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex アドミッション API キーを管理し、外部エンドポイントとモデルを検査します。 `ocx api-key <list|create|remove> ...` は `ocx access key` の別名です。
+Univers Gateway アドミッション API キーを管理し、外部エンドポイントとモデルを検査します。 `ocx api-key <list|create|remove> ...` は `ocx access key` の別名です。
 
 ```bash
 ocx access key create deployment
@@ -173,4 +173,4 @@ ocx system settings --stream-mode eager-relay
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
-検証された OpenCodex 設定を検査し、安全に変更します。 `show` および `get` はシークレットをマスクします。インポートは書き込む前に検証され、`--yes` が必要です。
+検証された Univers Gateway 設定を検査し、安全に変更します。 `show` および `get` はシークレットをマスクします。インポートは書き込む前に検証され、`--yes` が必要です。

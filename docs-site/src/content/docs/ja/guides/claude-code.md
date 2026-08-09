@@ -78,7 +78,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 引き続き動作します。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、その会話で
-`/model <id>` を使用してください。OpenCodex はピッカーの状態を直接参照できず、各リクエストに
+`/model <id>` を使用してください。Univers Gateway はピッカーの状態を直接参照できず、各リクエストに
 含まれるモデル ID をルーティングします。結果は **Logs → requestedModel** で確認できます。
 
 **エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
@@ -132,7 +132,7 @@ Claude ページで圧縮値を調整できます。**警告:** モデルの実�
 `ANTHROPIC_SMALL_FAST_MODEL` です。実際の Haiku 値は `tierModels.haiku ?? smallFastModel` で、
 両 Haiku 変数に入ります。
 
-`tierModels.haiku` と `smallFastModel` の両方がない場合、OpenCodex は 2 つのヘルパーモデル変数を未設定のままにします。その後 Claude Code がネイティブのヘルパーモデル（現在は Sonnet）を選択し、ネイティブプロバイダーで料金が発生する可能性があります。
+`tierModels.haiku` と `smallFastModel` の両方がない場合、Univers Gateway は 2 つのヘルパーモデル変数を未設定のままにします。その後 Claude Code がネイティブのヘルパーモデル（現在は Sonnet）を選択し、ネイティブプロバイダーで料金が発生する可能性があります。
 
 ## ロスターエージェント(injectAgents)
 

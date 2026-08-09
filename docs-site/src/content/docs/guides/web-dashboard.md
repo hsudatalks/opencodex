@@ -39,7 +39,7 @@ the browser or password manager's decision.
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
-| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
+| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by Univers Gateway delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
@@ -74,19 +74,19 @@ The **Models** switches show final Codex visibility: a routed model is on only w
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
-`injectionEffort`. **OpenCodex multi-agent guidance** independently controls the delegation
+`injectionEffort`. **Univers Gateway multi-agent guidance** independently controls the delegation
 instructions that use those values. On eligible v2 turns, that guidance tells the parent
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
 the stored effort.
 
 The default-off **Use as native Codex subagent defaults** switch applies the same selection to Codex's
-native `[agents]` defaults on the next sync/restart when OpenCodex manages the active Codex routing.
+native `[agents]` defaults on the next sync/restart when Univers Gateway manages the active Codex routing.
 External user-managed provider configs remain untouched. Those defaults affect newly created Codex tasks
 and do not themselves cause delegation. Existing user-owned `[agents]` defaults are preserved rather
 than overwritten, so they may continue to override the requested defaults.
 
 :::caution
-Neither control is a proxy-side cross-model spawn router. OpenCodex guidance asks Codex to pass
+Neither control is a proxy-side cross-model spawn router. Univers Gateway guidance asks Codex to pass
 overrides to `spawn_agent`; native `[agents]` defaults apply only when Codex creates a new task after
 they have been synchronized. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.

@@ -146,7 +146,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 ### `ocx account use <provider> <account-or-key-id|main> [--json]`
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
-Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
+Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 Univers Gateway 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
 遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
 遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
 并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
@@ -237,7 +237,7 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account main <subcommand>`
 
-管理命名的原生 Codex 主登录配置文件，而不更改 OpenCodex 账号池路由。
+管理命名的原生 Codex 主登录配置文件，而不更改 Univers Gateway 账号池路由。
 
 ```text
 ocx account main doctor [--json]
@@ -253,13 +253,13 @@ ocx account main recover [--rollback --yes] [--json]
 
 版本 1 支持基于文件的 Codex 身份验证，使用 AES-256-GCM 加密保存的配置文件，并将加密密钥保存在操作系统凭据存储中。`add` 会先在受限暂存环境中启动官方 Codex 登录，再导入生成的凭据。切换配置文件前请关闭 Codex。切换成功后会保留本地任务和历史记录，但继续使用前必须重启 Codex。使用 `doctor` 检查配置文件状态，使用 `recover` 完成或回滚中断的切换。`switch` 可接受配置文件 ID 或标签。
 
-v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程退出的情况。它不声明能够在操作系统或内核崩溃、突然断电后持久保存：`atomicWriteFileAsync()` 不会对文件或父目录执行 `fsync`。
+v1 恢复矩阵覆盖的是事务文件通过重命名发布后 Univers Gateway 进程退出的情况。它不声明能够在操作系统或内核崩溃、突然断电后持久保存：`atomicWriteFileAsync()` 不会对文件或父目录执行 `fsync`。
 
-加密保管库、切换日志、恢复标记和日志隔离文件位于规范的 `<real CODEX_HOME>/.opencodex-native-main-profiles` 目录中。因此，共用该 Codex 主目录的所有 OpenCodex 实例都会看到同一个所有者和同一份恢复状态。明文登录暂存数据仍分别隔离在各自的 `<OPENCODEX_HOME>/native-main-profile-staging` 目录下。
+加密保管库、切换日志、恢复标记和日志隔离文件位于规范的 `<real CODEX_HOME>/.opencodex-native-main-profiles` 目录中。因此，共用该 Codex 主目录的所有 Univers Gateway 实例都会看到同一个所有者和同一份恢复状态。明文登录暂存数据仍分别隔离在各自的 `<OPENCODEX_HOME>/native-main-profile-staging` 目录下。
 
-在允许 native-main 流量或日志恢复之前，生命周期所有者会取得凭据的独占占用权，并且只删除名称与 `auth.json.ocx.<pid>.<sequence>.tmp` 完全匹配的崩溃残留文件。每个候选文件在整个过程中都必须位于未发生变化的规范 `CODEX_HOME` 下，并保持为硬链接计数为 1 的普通文件；系统会先将其截断，再刷新其内容，最后取消链接（unlink）。若发生链接或重解析点替换、文件标识发生变化或存在其他歧义，native-main 流量将继续保持关闭；名称仅近似匹配的文件绝不会被自动删除。这项防护针对正常协作的 OpenCodex 发生崩溃的情况，并不能抵御已经以同一操作系统用户身份运行的恶意进程。该用户以及承载 `CODEX_HOME` 的文件系统仍属于信任范围；截断文件也不保证从写时复制存储、快照或 SSD 残留数据中实现物理擦除。
+在允许 native-main 流量或日志恢复之前，生命周期所有者会取得凭据的独占占用权，并且只删除名称与 `auth.json.ocx.<pid>.<sequence>.tmp` 完全匹配的崩溃残留文件。每个候选文件在整个过程中都必须位于未发生变化的规范 `CODEX_HOME` 下，并保持为硬链接计数为 1 的普通文件；系统会先将其截断，再刷新其内容，最后取消链接（unlink）。若发生链接或重解析点替换、文件标识发生变化或存在其他歧义，native-main 流量将继续保持关闭；名称仅近似匹配的文件绝不会被自动删除。这项防护针对正常协作的 Univers Gateway 发生崩溃的情况，并不能抵御已经以同一操作系统用户身份运行的恶意进程。该用户以及承载 `CODEX_HOME` 的文件系统仍属于信任范围；截断文件也不保证从写时复制存储、快照或 SSD 残留数据中实现物理擦除。
 
-预览版使用 `<OPENCODEX_HOME>/native-main-profiles`。该布局绝不会被静默导入。如果 `doctor` 报告旧版配置文件状态，请停止所有共用同一 `CODEX_HOME` 的 OpenCodex 代理。然后，请先备份，并在保留仅所有者可访问权限的情况下，将相应的 `*.vault.json`、`*.journal.json`、恢复标记以及任何被引用的日志隔离文件一起移动到规范目录中；或者删除旧的预览版文件集，再次运行 `ocx account main register`。只要仍有任何共用该 `CODEX_HOME` 的代理正在运行，就不要在多个旧根目录之间选择其一，也不要同时使用两种布局。在 Windows 上，按以前不区分大小写的主目录标识索引的预览状态必须重置，而不能直接移动，因为其加密 AAD 和操作系统密钥环标识被有意设计为不再复用。
+预览版使用 `<OPENCODEX_HOME>/native-main-profiles`。该布局绝不会被静默导入。如果 `doctor` 报告旧版配置文件状态，请停止所有共用同一 `CODEX_HOME` 的 Univers Gateway 代理。然后，请先备份，并在保留仅所有者可访问权限的情况下，将相应的 `*.vault.json`、`*.journal.json`、恢复标记以及任何被引用的日志隔离文件一起移动到规范目录中；或者删除旧的预览版文件集，再次运行 `ocx account main register`。只要仍有任何共用该 `CODEX_HOME` 的代理正在运行，就不要在多个旧根目录之间选择其一，也不要同时使用两种布局。在 Windows 上，按以前不区分大小写的主目录标识索引的预览状态必须重置，而不能直接移动，因为其加密 AAD 和操作系统密钥环标识被有意设计为不再复用。
 
 ## 模型
 

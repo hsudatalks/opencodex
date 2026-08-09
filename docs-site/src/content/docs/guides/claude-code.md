@@ -188,7 +188,7 @@ canonical ids. The synthetic 2026 date is an internal slot, not a release date. 
 and `claude-ocx-<provider>--<model>` ids from older configs still resolve.
 
 If Claude Desktop's footer picker does not change the model for an already-running 3P
-conversation, use `/model <id>` in that conversation. OpenCodex cannot observe picker state; it
+conversation, use `/model <id>` in that conversation. Univers Gateway cannot observe picker state; it
 routes the model id carried by each request. Confirm the result under **Logs → requestedModel**.
 
 Models with an authoritative 1M context window get an extra `…[1m]` picker row: selecting it makes
@@ -252,7 +252,7 @@ fall back to 350k.
 `ANTHROPIC_SMALL_FAST_MODEL`. The effective Haiku is `tierModels.haiku ?? smallFastModel`, fed
 to both Haiku variables.
 
-When both `tierModels.haiku` and `smallFastModel` are absent, OpenCodex leaves both helper variables unset; Claude Code then chooses its native helper model (currently Sonnet), which may incur native-provider charges.
+When both `tierModels.haiku` and `smallFastModel` are absent, Univers Gateway leaves both helper variables unset; Claude Code then chooses its native helper model (currently Sonnet), which may incur native-provider charges.
 
 ## Roster agents (injectAgents)
 

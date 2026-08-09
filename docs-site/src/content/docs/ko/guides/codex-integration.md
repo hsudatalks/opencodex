@@ -75,7 +75,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "Univers Gateway Proxy"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -83,7 +83,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-OpenCodex가 라우팅을 소유할 때는 두 모드 모두 `$CODEX_HOME/opencodex.config.toml`을 참고용/폴백 설정으로 작성합니다. loopback에서는 자동 주입이 사라졌을 때 수동으로 합칠 수 있는 root key가 들어가고, non-loopback에서는 전용 provider 형식이 들어갑니다. 외부 provider 모드는 이 프로필을 건드리지 않습니다.
+Univers Gateway가 라우팅을 소유할 때는 두 모드 모두 `$CODEX_HOME/opencodex.config.toml`을 참고용/폴백 설정으로 작성합니다. loopback에서는 자동 주입이 사라졌을 때 수동으로 합칠 수 있는 root key가 들어가고, non-loopback에서는 전용 provider 형식이 들어갑니다. 외부 provider 모드는 이 프로필을 건드리지 않습니다.
 
 :::caution
 `openai_base_url`, `model_provider`, `model_catalog_json` 같은 root key는 첫 번째 `[table]` 헤더보다 **반드시** 앞에 있어야 합니다. 인젝터는 그 위치를 보장하고, 자신이 남긴 오래되었거나 중복된 복사본은 지웁니다. 사용자가 소유한 root `openai_base_url`은 덮어쓰지 않습니다. 그런 값이 있으면 sync는 카탈로그만 갱신하고 라우팅은 주입하지 않았다고 알립니다.
@@ -153,9 +153,9 @@ ocx sync-cache
 
 ### 외부 provider manager
 
-`config.toml`이 이미 `openai`나 `opencodex`가 아닌 provider를 선택하고 있으면, OpenCodex는 그 파일을 그대로 두고 profile write, catalog/cache refresh, 즉시 및 background Codex history migration을 건너뜁니다. custom provider를 관리하는 도구는 기존 session에 그 provider id를 붙이는 경우가 많고, 활성 id를 바꾸면 그 온전한 session이 Codex의 history view에서 사라질 수 있습니다. 이 보호는 legacy root profile이 선택한 외부 provider에도 동일하게 적용됩니다.
+`config.toml`이 이미 `openai`나 `opencodex`가 아닌 provider를 선택하고 있으면, Univers Gateway는 그 파일을 그대로 두고 profile write, catalog/cache refresh, 즉시 및 background Codex history migration을 건너뜁니다. custom provider를 관리하는 도구는 기존 session에 그 provider id를 붙이는 경우가 많고, 활성 id를 바꾸면 그 온전한 session이 Codex의 history view에서 사라질 수 있습니다. 이 보호는 legacy root profile이 선택한 외부 provider에도 동일하게 적용됩니다.
 
-Codex provider configuration의 소유자는 한 도구만 맡게 하세요. 기존 provider manager 뒤에서 OpenCodex를 쓰려면, 그 provider를 `http://127.0.0.1:10100/v1`로 향하게 하고 Responses passthrough를 쓰세요(`wire_api = "responses"` in Codex TOML). Chat Completions translation은 쓰지 않습니다. proxy API auth가 켜져 있으면, 위의 non-loopback provider 형식과 맞추어 `OPENCODEX_API_AUTH_TOKEN`에서 `x-opencodex-api-key`도 함께 전달하세요. OpenCodex가 routing을 직접 주입하게 하려면 먼저 Codex를 built-in `openai` provider로 되돌리고, 사용자가 소유한 root `openai_base_url`을 지운 다음, `ocx start`를 다시 실행하세요.
+Codex provider configuration의 소유자는 한 도구만 맡게 하세요. 기존 provider manager 뒤에서 Univers Gateway를 쓰려면, 그 provider를 `http://127.0.0.1:10100/v1`로 향하게 하고 Responses passthrough를 쓰세요(`wire_api = "responses"` in Codex TOML). Chat Completions translation은 쓰지 않습니다. proxy API auth가 켜져 있으면, 위의 non-loopback provider 형식과 맞추어 `OPENCODEX_API_AUTH_TOKEN`에서 `x-opencodex-api-key`도 함께 전달하세요. Univers Gateway가 routing을 직접 주입하게 하려면 먼저 Codex를 built-in `openai` provider로 되돌리고, 사용자가 소유한 root `openai_base_url`을 지운 다음, `ocx start`를 다시 실행하세요.
 
 ### 카탈로그 문제 해결
 

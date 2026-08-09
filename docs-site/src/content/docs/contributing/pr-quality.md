@@ -1,6 +1,6 @@
 ---
 title: Pull request quality contract
-description: Review readiness, contributor responsibility, trust lanes, and closure policy for OpenCodex pull requests.
+description: Review readiness, contributor responsibility, trust lanes, and closure policy for Univers Gateway pull requests.
 ---
 
 ## You do not need permission to fix something

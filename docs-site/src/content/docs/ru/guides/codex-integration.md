@@ -123,7 +123,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "Univers Gateway Proxy"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -131,7 +131,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-Когда маршрутизацией владеет OpenCodex, оба режима пишут `$CODEX_HOME/opencodex.config.toml` как
+Когда маршрутизацией владеет Univers Gateway, оба режима пишут `$CODEX_HOME/opencodex.config.toml` как
 reference/fallback-конфиг. На loopback в нём лежат root key, которые можно вручную влить обратно,
 если автоматическое внедрение убрали; на не-loopback — форма с выделенным провайдером. Режим
 external-provider этот профиль не трогает.
@@ -248,7 +248,7 @@ upstream snapshot и никогда не перекрываются пользо
 
 ### Внешние provider manager'ы
 
-Если `config.toml` уже выбирает провайдера, отличного от `openai` или `opencodex`, OpenCodex
+Если `config.toml` уже выбирает провайдера, отличного от `openai` или `opencodex`, Univers Gateway
 оставляет файл без изменений и пропускает запись profile, обновление catalog/cache и как
 немедленную, так и фоновую миграцию истории Codex. Инструменты, управляющие custom-провайдером,
 часто помечают существующие сессии своим provider id; замена активного id может привести к тому,
@@ -256,11 +256,11 @@ upstream snapshot и никогда не перекрываются пользо
 провайдера, выбранного через legacy root profile.
 
 Держите владельцем конфигурации провайдера Codex только один инструмент. Если вы хотите
-использовать OpenCodex позади уже существующего provider manager'а, направьте этот провайдер на
+использовать Univers Gateway позади уже существующего provider manager'а, направьте этот провайдер на
 `http://127.0.0.1:10100/v1` с passthrough Responses (`wire_api = "responses"` в TOML Codex), а
 не через перевод в Chat Completions. Когда включена proxy API auth, передавайте и
 `x-opencodex-api-key` из `OPENCODEX_API_AUTH_TOKEN`, то есть ровно так, как в форме
-не-loopback-провайдера выше. Чтобы снова дать OpenCodex самому внедрить routing, сначала верните
+не-loopback-провайдера выше. Чтобы снова дать Univers Gateway самому внедрить routing, сначала верните
 Codex на встроенный провайдер `openai` и удалите любой user-owned root `openai_base_url`, после
 чего снова выполните `ocx start`.
 

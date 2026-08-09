@@ -92,7 +92,7 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-管理 OpenCodex 准入 API 密钥，并检查外部端点和模型。`ocx api-key
+管理 Univers Gateway 准入 API 密钥，并检查外部端点和模型。`ocx api-key
 <list|create|remove> ...` 是 `ocx access key` 的别名。
 
 ```bash
@@ -180,4 +180,4 @@ ocx system settings --stream-mode eager-relay
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
-检查并安全修改已验证的 OpenCodex 配置。`show` 和 `get` 会隐藏密钥。导入会先验证再写入，并且需要 `--yes`。
+检查并安全修改已验证的 Univers Gateway 配置。`show` 和 `get` 会隐藏密钥。导入会先验证再写入，并且需要 `--yes`。

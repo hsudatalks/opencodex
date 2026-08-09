@@ -85,7 +85,7 @@ user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈�
 保持可解码——以任一形式保存在 `settings.json` 中的模型都能继续工作。
 
 如果 Claude Desktop 底部的选择器没有切换已运行 3P 对话的模型，请在该对话中使用
-`/model <id>`。OpenCodex 无法读取选择器状态，只会路由每个请求实际携带的模型 ID；可在
+`/model <id>`。Univers Gateway 无法读取选择器状态，只会路由每个请求实际携带的模型 ID；可在
 **Logs → requestedModel** 中确认结果。
 
 **别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
@@ -137,7 +137,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 `ANTHROPIC_SMALL_FAST_MODEL`。有效 Haiku 值为 `tierModels.haiku ?? smallFastModel`，并会
 提供给两个 Haiku 变量。
 
-当 `tierModels.haiku` 和 `smallFastModel` 均未设置时，OpenCodex 会让两个辅助模型变量保持未设置；随后 Claude Code 会选择其原生辅助模型（目前为 Sonnet），并可能产生原生提供方费用。
+当 `tierModels.haiku` 和 `smallFastModel` 均未设置时，Univers Gateway 会让两个辅助模型变量保持未设置；随后 Claude Code 会选择其原生辅助模型（目前为 Sonnet），并可能产生原生提供方费用。
 
 ## 名册代理（injectAgents）
 

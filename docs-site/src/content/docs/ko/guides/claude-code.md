@@ -113,7 +113,7 @@ Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 
 계속 작동해요.
 
 Claude Desktop의 하단 선택기로 이미 실행 중인 3P 대화의 모델이 바뀌지 않는다면, 그 대화에서
-`/model <id>`를 사용하세요. OpenCodex는 선택기 상태를 따로 볼 수 없고 각 요청에 실린 모델 ID를
+`/model <id>`를 사용하세요. Univers Gateway는 선택기 상태를 따로 볼 수 없고 각 요청에 실린 모델 ID를
 라우팅해요. 적용 결과는 **Logs → requestedModel**에서 확인할 수 있어요.
 
 **별칭 문법 규칙:** provider에는 `/`나 `--`를 넣을 수 없고 `native`와 같아도 안 돼요. `/`와 `~`가
@@ -169,7 +169,7 @@ Claude 페이지에서 압축 값을 조절할 수 있어요. **경고:** 모델
 `ANTHROPIC_SMALL_FAST_MODEL`이에요. 실제 Haiku 값은 `tierModels.haiku ?? smallFastModel`이며,
 두 Haiku 변수에 모두 들어가요.
 
-`tierModels.haiku`와 `smallFastModel`이 모두 없으면 OpenCodex는 두 보조 모델 변수를 설정하지 않아요. 그러면 Claude Code가 네이티브 보조 모델(현재 Sonnet)을 선택하며, 네이티브 프로바이더 요금이 발생할 수 있어요.
+`tierModels.haiku`와 `smallFastModel`이 모두 없으면 Univers Gateway는 두 보조 모델 변수를 설정하지 않아요. 그러면 Claude Code가 네이티브 보조 모델(현재 Sonnet)을 선택하며, 네이티브 프로바이더 요금이 발생할 수 있어요.
 
 ## 로스터 에이전트(injectAgents)
 

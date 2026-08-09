@@ -83,7 +83,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "Univers Gateway Proxy"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -91,7 +91,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-OpenCodex がルーティングを所有している場合、どちらのモードも参照/フォールバック設定として `$CODEX_HOME/opencodex.config.toml` を書き込みます。ループバックでは、自動挿入が削除された場合に手動でマージできるルート キーが含まれています。非ループバックでは、専用のプロバイダー フォームが含まれます。外部プロバイダー モードでは、このプロファイルは変更されません。
+Univers Gateway がルーティングを所有している場合、どちらのモードも参照/フォールバック設定として `$CODEX_HOME/opencodex.config.toml` を書き込みます。ループバックでは、自動挿入が削除された場合に手動でマージできるルート キーが含まれています。非ループバックでは、専用のプロバイダー フォームが含まれます。外部プロバイダー モードでは、このプロファイルは変更されません。
 
 :::caution
 `openai_base_url`、`model_provider`、`model_catalog_json` などのルート キーは、最初の `[table]` ヘッダーの前に**なければなりません**。インジェクターはその配置を保証し、それ自身の古い/重複したコピーを削除し、ユーザー所有のルート `openai_base_url` を決して上書きしません。存在する場合、sync はカタログを更新しますが、ルーティングが挿入されなかったことを報告します。
@@ -163,9 +163,9 @@ ocx sync-cache
 
 ### 外部プロバイダーマネージャー
 
-`config.toml` がすでに `openai` または `opencodex` 以外のプロバイダーを選択している場合、OpenCodex はファイルを変更しないままにし、プロファイルの書き込み、カタログ/キャッシュの更新、および即時およびバックグラウンドの両方の Codex 履歴の移行をスキップします。カスタム プロバイダーを管理するツールは、多くの場合、既存のセッションにそのプロバイダー ID をタグ付けします。アクティブな ID を置き換えると、それらの無傷のセッションが Codex の履歴ビューから消える可能性があります。同じ保護が、レガシー ルート プロファイルによって選択された外部プロバイダーにも適用されます。
+`config.toml` がすでに `openai` または `opencodex` 以外のプロバイダーを選択している場合、Univers Gateway はファイルを変更しないままにし、プロファイルの書き込み、カタログ/キャッシュの更新、および即時およびバックグラウンドの両方の Codex 履歴の移行をスキップします。カスタム プロバイダーを管理するツールは、多くの場合、既存のセッションにそのプロバイダー ID をタグ付けします。アクティブな ID を置き換えると、それらの無傷のセッションが Codex の履歴ビューから消える可能性があります。同じ保護が、レガシー ルート プロファイルによって選択された外部プロバイダーにも適用されます。
 
-1 つのツールを Codex プロバイダー設定の所有者として保持します。既存のプロバイダー マネージャーの背後で OpenCodex を使用するには、チャット完了変換ではなく、応答パススルー (Codex TOML では `wire_api = "responses"`) を使用して、そのプロバイダーを `http://127.0.0.1:10100/v1` に指定します。プロキシ API 認証が有効な場合は、上記の非ループバック プロバイダー フォームと一致して、`OPENCODEX_API_AUTH_TOKEN` から `x-opencodex-api-key` も渡します。 OpenCodex にルーティングを直接挿入させるには、まず Codex を組み込みの `openai` プロバイダーに戻し、ユーザー所有のルート `openai_base_url` を削除してから、`ocx start` を再実行します。
+1 つのツールを Codex プロバイダー設定の所有者として保持します。既存のプロバイダー マネージャーの背後で Univers Gateway を使用するには、チャット完了変換ではなく、応答パススルー (Codex TOML では `wire_api = "responses"`) を使用して、そのプロバイダーを `http://127.0.0.1:10100/v1` に指定します。プロキシ API 認証が有効な場合は、上記の非ループバック プロバイダー フォームと一致して、`OPENCODEX_API_AUTH_TOKEN` から `x-opencodex-api-key` も渡します。 Univers Gateway にルーティングを直接挿入させるには、まず Codex を組み込みの `openai` プロバイダーに戻し、ユーザー所有のルート `openai_base_url` を削除してから、`ocx start` を再実行します。
 
 ### カタログのトラブルシューティング
 

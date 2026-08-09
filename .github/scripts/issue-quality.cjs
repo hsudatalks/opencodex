@@ -63,8 +63,8 @@ function normalizeEquivalentBugEvidence(issue) {
 
   if (core.extractSection(normalized, "Version") === null) {
     // Do not accept a generic dependency "Version" from Environment: the gate
-    // specifically needs the OpenCodex install version.
-    const version = extractEnvironmentField(environment, ["OpenCodex", "OpenCodex version"]);
+    // specifically needs the Univers Gateway install version.
+    const version = extractEnvironmentField(environment, ["Univers Gateway", "Univers Gateway version"]);
     if (version) normalized = appendSection(normalized, "Version", version);
   }
 

@@ -50,11 +50,11 @@ Image Bridge オプションは、`~/.opencodex/config.json` の `images` の下
 
 Image Bridge は、**非 OpenAI** モデルが選択されているときに、`/v1/responses` ツール配列にホストされた `image_generation` ツールを含む **レスポンス** ターンでのみアクティブになります。これは、`/v1/images/generations` (または `/images/edits`) に直接 POST する Codex の組み込み `image_gen` ツールをインターセプトしません**。そのパスについては [Codexの統合](/guides/codex-integration/#built-in-image-generation-image_gen) で別途説明します。
 
-1. 応答リクエストで `tools` に `image_generation` がリストされると、OpenCodex がそれを検出します
+1. 応答リクエストで `tools` に `image_generation` がリストされると、Univers Gateway がそれを検出します
 リクエストの前処理中。
 2. ホストされたツールは、ルーティングされたモデルが呼び出すことができる **合成関数ツール** に置き換えられます。
 通常 — モデルは、実行できない不透明なホストされたツールではなく、呼び出し可能なツールを認識します。
-3. モデルがそのツールを呼び出すと、OpenCodex が呼び出しを傍受し、プロンプトを xAI のサーバーに送信します。
+3. モデルがそのツールを呼び出すと、Univers Gateway が呼び出しを傍受し、プロンプトを xAI のサーバーに送信します。
 画像生成API。
 4. 生成されたイメージは `~/.opencodex/artifacts/` に保存され、**ローカル ファイル パス**が返されます。
 ツールの結果としてモデルに適用されます。

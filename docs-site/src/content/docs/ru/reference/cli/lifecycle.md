@@ -236,7 +236,7 @@ ocx service uninstall
 ```
 
 На Windows `ocx service status` отдельно показывает регистрацию в Task Scheduler и
-identity-проверенную достижимость прокси OpenCodex. Он не печатает локализованную таблицу
+identity-проверенную достижимость прокси Univers Gateway. Он не печатает локализованную таблицу
 `schtasks`, чтобы сводка оставалась читаемой на любых code page Windows.
 
 На Windows создание записи в Task Scheduler требует elevation. Когда распознан локализованный
@@ -314,5 +314,5 @@ ocx update --tag preview
 ```
 
 Новые версии становятся доступны, когда
-[Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
+[Release workflow](https://github.com/hsudatalks/opencodex/actions/workflows/release.yml)
 публикует их в npm.

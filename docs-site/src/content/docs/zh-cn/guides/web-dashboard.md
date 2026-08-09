@@ -31,7 +31,7 @@ bun run dev:gui
 | 区域 | 作用 |
 | --- | --- |
 | **Dashboard 摘要** | 显示 multi-agent 模式、在线状态、版本、运行时间、provider 数量、30 天 token 总量、活动 provider 和可用的原生/路由模型。 |
-| **Sub-agent delegation** | 选择供 OpenCodex 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
+| **Sub-agent delegation** | 选择供 Univers Gateway 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
 | **Sidecar** | 选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
 | **Maintenance** | 重新同步 Codex 模型目录，查看项目级配置绕过警告，检查 latest/preview 版本，并可在更新后重启代理。 |
 | **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
@@ -61,15 +61,15 @@ bun run dev:gui
 ## 委派选择器与生成路由的区别
 
 Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以及可选的
-`injectionEffort`。所选值会用于由 OpenCodex 编写的委派指引，而该指引由
+`injectionEffort`。所选值会用于由 Univers Gateway 编写的委派指引，而该指引由
 `multiAgentGuidanceEnabled` 单独控制。清除模型时也会清除已保存的强度，并关闭原生默认值同步。
 
-启用 **用作原生 Codex 子代理默认值** 后，当 OpenCodex 管理当前 Codex 路由时，下一次同步或重启会
+启用 **用作原生 Codex 子代理默认值** 后，当 Univers Gateway 管理当前 Codex 路由时，下一次同步或重启会
 把所选模型和强度应用为原生 `[agents]` 默认值；外部用户管理的 provider 配置不会被修改。这些默认值只影响新建的 Codex 任务，该选项本身不会触发委派。已有的用户自有
 `[agents]` 默认值会保留而不会被覆盖，因此请求的默认值可能与 Codex 实际使用的默认值不同。
 
 :::caution
-两个开关相互独立：关闭 OpenCodex 委派指引不会关闭原生默认值同步；启用原生默认值同步也不会
+两个开关相互独立：关闭 Univers Gateway 委派指引不会关闭原生默认值同步；启用原生默认值同步也不会
 启用委派指引或触发委派。两者都不是代理侧的逐次跨模型路由器。v1/base/v2 的
 权威说明见 [子代理界面](/zh-cn/guides/sub-agent-surface/)。
 :::

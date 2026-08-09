@@ -117,7 +117,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "Univers Gateway Proxy"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -125,7 +125,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
+When Univers Gateway owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
 injection was removed; on non-loopback it contains the dedicated provider form. External-provider
 mode leaves this profile untouched.
@@ -237,17 +237,17 @@ name.
 
 ### External provider managers
 
-If `config.toml` already selects a provider other than `openai` or `opencodex`, OpenCodex leaves the
+If `config.toml` already selects a provider other than `openai` or `opencodex`, Univers Gateway leaves the
 file unchanged and skips profile writes, catalog/cache refresh, and both immediate and background
 Codex history migration. Tools that manage a custom provider often tag existing sessions with that
 provider id; replacing the active id can make those intact sessions disappear from Codex's history
 view. The same protection applies to an external provider selected by a legacy root profile.
 
-Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
+Keep one tool as the owner of Codex provider configuration. To use Univers Gateway behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough
 (`wire_api = "responses"` in Codex TOML), not Chat Completions translation. When proxy API auth is
 enabled, also pass `x-opencodex-api-key` from `OPENCODEX_API_AUTH_TOKEN`, matching the non-loopback
-provider form above. To let OpenCodex inject routing directly, first switch Codex back to its
+provider form above. To let Univers Gateway inject routing directly, first switch Codex back to its
 built-in `openai` provider and remove any user-owned root `openai_base_url`, then rerun `ocx start`.
 
 ### Catalog troubleshooting

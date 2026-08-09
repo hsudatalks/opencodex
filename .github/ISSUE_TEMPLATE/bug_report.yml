@@ -19,7 +19,7 @@ body:
         - Codex SDK
         - Claude Code
         - Direct HTTP/API client
-        - OpenCodex dashboard
+        - Univers Gateway dashboard
         - Other
     validations:
       required: true
@@ -28,7 +28,7 @@ body:
     id: area
     attributes:
       label: Area
-      description: Which part of OpenCodex is affected?
+      description: Which part of Univers Gateway is affected?
       options:
         - CLI
         - Proxy and routing
@@ -72,7 +72,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Installed `@bitkyc08/opencodex` version or commit SHA.
+      description: Installed `univers-gateway` version or commit SHA.
       placeholder: "2.7.31"
     validations:
       required: true

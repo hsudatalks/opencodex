@@ -218,7 +218,7 @@ ocx service status
 ocx service uninstall
 ```
 
-Windows에서는 `ocx service status`가 Task Scheduler 등록 상태를 ID가 검증된 OpenCodex 프록시
+Windows에서는 `ocx service status`가 Task Scheduler 등록 상태를 ID가 검증된 Univers Gateway 프록시
 도달 가능성과 별도로 보고합니다. 로컬라이즈된 `schtasks` 표는 출력하지 않으므로, 요약은 Windows
 코드 페이지에서도 읽기 쉽습니다.
 
@@ -291,5 +291,5 @@ ocx update
 ocx update --tag preview
 ```
 
-새 버전은 [Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)가
+새 버전은 [Release workflow](https://github.com/hsudatalks/opencodex/actions/workflows/release.yml)가
 npm에 게시하면 사용할 수 있게 됩니다.

@@ -271,7 +271,7 @@ stderr while exiting 0, so a load that did not take used to leave launchd runnin
 clears the stale job.
 
 On Windows, `ocx service status` reports Task Scheduler registration separately from
-identity-verified OpenCodex proxy reachability. It does not print the localized `schtasks` table,
+identity-verified Univers Gateway proxy reachability. It does not print the localized `schtasks` table,
 so the summary remains readable across Windows code pages.
 
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
@@ -287,7 +287,7 @@ dashboard UAC prompt or rerun `ocx service install` in an elevated PowerShell wi
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
 
-Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
+Launcher installation alone does not prove that Codex requests will use Univers Gateway. After a healthy
 install, the command checks the current Codex routing and reports a warning instead of a green result
 when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables
 exist only in the current process while `config.proxy` is unset or unresolved, because Codex
@@ -351,5 +351,5 @@ ocx update
 ocx update --tag preview
 ```
 
-New versions become available when the [Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
+New versions become available when the [Release workflow](https://github.com/hsudatalks/opencodex/actions/workflows/release.yml)
 publishes them to npm.

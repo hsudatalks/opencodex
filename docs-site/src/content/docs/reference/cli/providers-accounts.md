@@ -163,7 +163,7 @@ unbound, while in-flight requests keep their captured account. This controls Poo
 Direct mode keeps using the caller-owned/native main credential. Usage-based proactive switching,
 401/403 reauthentication, 429/retry-after cooldowns, exclusion, and pre-output 429/402 failure
 recovery may later select another eligible Pool account. Those recovery paths remain active when
-usage-based switching is off. OpenCodex replays the conversation after an account change, but the
+usage-based switching is off. Univers Gateway replays the conversation after an account change, but the
 provider-side prompt cache may be cold. Unknown providers or ids exit 1.
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
 On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
@@ -265,7 +265,7 @@ Inspect Codex reset credits for an account. Consuming a credit is destructive an
 
 ### `ocx account main <subcommand>`
 
-Manage named native Codex main-login profiles without changing OpenCodex account-pool routing:
+Manage named native Codex main-login profiles without changing Univers Gateway account-pool routing:
 
 ```text
 ocx account main doctor [--json]
@@ -287,12 +287,12 @@ successful switch preserves local tasks and history, then requires Codex to be r
 `doctor` to inspect profile state and `recover` to finish or roll back an interrupted transition.
 `switch` accepts either the profile ID or its label.
 
-The v1 recovery matrix covers an OpenCodex process exiting after a transaction file has been
+The v1 recovery matrix covers an Univers Gateway process exiting after a transaction file has been
 published by rename. It does not claim durability across an OS or kernel crash or sudden power
 loss: `atomicWriteFileAsync()` does not `fsync` either the file or its parent directory.
 
 The encrypted vault, switch journal, recovery marker, and journal quarantine live in the canonical
-`<real CODEX_HOME>/.opencodex-native-main-profiles` directory, so every OpenCodex instance sharing
+`<real CODEX_HOME>/.opencodex-native-main-profiles` directory, so every Univers Gateway instance sharing
 that Codex home observes one owner and one recovery state. Plaintext login staging remains isolated
 under each `<OPENCODEX_HOME>/native-main-profile-staging` directory.
 
@@ -301,12 +301,12 @@ credential claim and removes only exact `auth.json.ocx.<pid>.<sequence>.tmp` cra
 candidate must remain a single-linked regular file under the unchanged canonical `CODEX_HOME`; it is
 truncated, flushed, and then unlinked. Link/reparse substitutions, identity changes, and other
 ambiguity keep native-main traffic closed, while near-miss names are never removed automatically.
-This protects against cooperative OpenCodex crashes, not a malicious process already running as the
+This protects against cooperative Univers Gateway crashes, not a malicious process already running as the
 same OS user. That user and the filesystem containing `CODEX_HOME` remain trusted, and truncation
 does not promise physical erasure from copy-on-write storage, snapshots, or SSD remanence.
 
 Preview builds used `<OPENCODEX_HOME>/native-main-profiles`. That layout is never imported silently.
-If `doctor` reports legacy profile state, stop every OpenCodex proxy sharing the same `CODEX_HOME`.
+If `doctor` reports legacy profile state, stop every Univers Gateway proxy sharing the same `CODEX_HOME`.
 Then either back up and move the matching `*.vault.json`, `*.journal.json`, recovery marker, and any
 referenced journal-quarantine file together into the canonical directory while preserving owner-only
 permissions, or remove the old preview set and run `ocx account main register` again. Do not choose

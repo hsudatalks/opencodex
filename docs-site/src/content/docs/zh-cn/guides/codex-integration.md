@@ -111,7 +111,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "Univers Gateway Proxy"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -119,7 +119,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-当 OpenCodex 负责路由时，两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。
+当 Univers Gateway 负责路由时，两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。
 在 loopback 情况下，它包含可在自动注入被移除后手动合并的 root keys；在非 loopback 情况下，
 它包含专用 provider 形式。外部 provider 模式会保持这个 profile 不变。
 
@@ -219,15 +219,15 @@ display name 是 **仅用于显示且在重新生成时保持稳定的**。每�
 
 ### 外部 provider 管理器
 
-如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，OpenCodex 会保持文件不变，
+如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，Univers Gateway 会保持文件不变，
 并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史迁移。管理自定义 provider 的工具
 通常会把现有会话标记为那个 provider id；如果替换活动 id，Codex 历史视图里那些完整会话可能会消失。
 同样的保护也适用于由旧版 root profile 选择的外部 provider。
 
-只保留一个工具作为 Codex provider 配置的 owner。若要在现有 provider 管理器之后使用 OpenCodex，
+只保留一个工具作为 Codex provider 配置的 owner。若要在现有 provider 管理器之后使用 Univers Gateway，
 请把那个 provider 指向 `http://127.0.0.1:10100/v1`，并使用 Responses passthrough（Codex TOML 中的
 `wire_api = "responses"`），而不是 Chat Completions translation。当启用 proxy API auth 时，也要像上面的非 loopback
-provider 形式一样，从 `OPENCODEX_API_AUTH_TOKEN` 传入 `x-opencodex-api-key`。如果要让 OpenCodex 直接注入路由，
+provider 形式一样，从 `OPENCODEX_API_AUTH_TOKEN` 传入 `x-opencodex-api-key`。如果要让 Univers Gateway 直接注入路由，
 请先把 Codex 切回其内置的 `openai` provider，并移除任何用户拥有的 root `openai_base_url`，然后重新运行 `ocx start`。
 
 ### 目录排障

@@ -16,7 +16,7 @@ Claude Code
 Cursor Claude-family models deterministically fail through the Claude Code path after the stream starts, while non-Claude Cursor models complete normally using the same provider and installation.
 
 ### Environment
-- OpenCodex: 2.10.2
+- Univers Gateway: 2.10.2
 - OS: Linux (Ubuntu x64)
 - Claude Code: 1.0.88
 
@@ -49,7 +49,7 @@ Claude Code
 The Cursor request fails after streaming starts through the Claude Code integration.
 
 ### Environment
-- **OpenCodex**: 2.10.2
+- **Univers Gateway**: 2.10.2
 - **OS**: Linux (Ubuntu x64)
 
 ### Debug evidence
@@ -73,7 +73,7 @@ Claude Code
 ${repeated}
 
 ### Environment
-- OpenCodex: 2.10.2
+- Univers Gateway: 2.10.2
 - OS: Linux
 
 ### Steps to Reproduce
@@ -97,7 +97,7 @@ Claude Code
 The selected Cursor model does not complete a request through the Claude Code integration.
 
 ### Environment
-- OpenCodex: 2.10.2
+- Univers Gateway: 2.10.2
 - OS: Linux
 
 ### What fails / what passes
@@ -109,7 +109,7 @@ It does not work.
   assert.match(result.reasons.join("\n"), /Reproduction/i);
 });
 
-test("still rejects an unknown OpenCodex version from Environment", () => {
+test("still rejects an unknown Univers Gateway version from Environment", () => {
   const result = validateIssue({
     title: "[Bug]: Cursor request fails",
     labels: ["bug"],
@@ -121,7 +121,7 @@ Claude Code
 A Cursor request fails after the proxy starts streaming a response through Claude Code.
 
 ### Environment
-- OpenCodex: unknown
+- Univers Gateway: unknown
 - OS: Linux
 
 ### Debug evidence
@@ -145,7 +145,7 @@ Claude Code
 A Cursor request fails after the proxy starts streaming a response through Claude Code.
 
 ### Environment
-- OpenCodex: 2.10.2
+- Univers Gateway: 2.10.2
 
 ### Debug evidence
 Run \`ocx debug provider cursor\`; it returns \`resource_exhausted\` after stream start.

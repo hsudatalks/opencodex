@@ -102,7 +102,7 @@ debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-Manage OpenCodex admission API keys and inspect external endpoints and models. `ocx api-key
+Manage Univers Gateway admission API keys and inspect external endpoints and models. `ocx api-key
 <list|create|remove> ...` is an alias of `ocx access key`.
 
 ```bash
@@ -216,5 +216,5 @@ ocx system settings --stream-mode eager-relay
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
-Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
+Inspect and safely modify validated Univers Gateway configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.

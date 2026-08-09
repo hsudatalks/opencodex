@@ -130,7 +130,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 ### `ocx account use <provider> <account-or-key-id|main> [--json]`
 
 既存の Codex アカウント、OAuth アカウント、または API key を選びます。`openai` で `main` は Codex App ログインを
-選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も OpenCodex は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
+選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も Univers Gateway は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
 不明なプロバイダーや id は終了コード 1 です。`--json` は次を返します。
 **401/403** では、そのアカウントへのプロセスローカルな affinity を解除し、再認証を要求します。
 **429** では `Retry-After` を尊重してアカウントの cooldown を開始し、affinity を解除したうえで、
@@ -208,7 +208,7 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account main <subcommand>`
 
-OpenCodex のアカウントプールルーティングを変更せずに、名前付きのネイティブ Codex メインログインプロファイルを管理します。
+Univers Gateway のアカウントプールルーティングを変更せずに、名前付きのネイティブ Codex メインログインプロファイルを管理します。
 
 ```text
 ocx account main doctor [--json]
@@ -225,13 +225,13 @@ ocx account main recover [--rollback --yes] [--json]
 
 バージョン 1 はファイルベースの Codex 認証をサポートし、保存したプロファイルを AES-256-GCM で暗号化し、暗号鍵を OS の資格情報ストアに保持します。`add` は、生成された資格情報を取り込む前に公式 Codex ログインをステージングします。プロファイルを切り替える前に Codex を終了してください。切り替えに成功するとローカルのタスクと履歴は保持されますが、続行する前に Codex の再起動が必要です。`doctor` でプロファイル状態を確認し、`recover` で中断した切り替えを完了またはロールバックできます。`switch` にはプロファイル ID またはラベルを指定できます。
 
-v1 の復旧マトリクスが対象とするのは、トランザクションファイルの rename による公開後に OpenCodex プロセスが終了した場合です。OS またはカーネルのクラッシュや突然の電源断に対する永続性は保証しません。`atomicWriteFileAsync()` はファイルまたは親ディレクトリに `fsync` を実行しません。
+v1 の復旧マトリクスが対象とするのは、トランザクションファイルの rename による公開後に Univers Gateway プロセスが終了した場合です。OS またはカーネルのクラッシュや突然の電源断に対する永続性は保証しません。`atomicWriteFileAsync()` はファイルまたは親ディレクトリに `fsync` を実行しません。
 
-暗号化された vault、切り替えジャーナル、復旧マーカー、および journal-quarantine ファイルは、正規の `<real CODEX_HOME>/.opencodex-native-main-profiles` ディレクトリに保存されます。そのため、その Codex ホームを共有するすべての OpenCodex インスタンスは、同じ 1 つの所有者と同じ 1 つの復旧状態を参照します。平文のログインステージングは、各 `<OPENCODEX_HOME>/native-main-profile-staging` ディレクトリ配下にそれぞれ分離されたままです。
+暗号化された vault、切り替えジャーナル、復旧マーカー、および journal-quarantine ファイルは、正規の `<real CODEX_HOME>/.opencodex-native-main-profiles` ディレクトリに保存されます。そのため、その Codex ホームを共有するすべての Univers Gateway インスタンスは、同じ 1 つの所有者と同じ 1 つの復旧状態を参照します。平文のログインステージングは、各 `<OPENCODEX_HOME>/native-main-profile-staging` ディレクトリ配下にそれぞれ分離されたままです。
 
-native-main トラフィックまたはジャーナル復旧を受け入れる前に、ライフタイム所有者が資格情報に対する排他的な権利を取得し、名前が正確に `auth.json.ocx.<pid>.<sequence>.tmp` と一致するクラッシュ残留ファイルだけを削除します。各候補は、変更されていない正規の `CODEX_HOME` 配下にあり、ハードリンク数が 1 の通常ファイルであり続けなければなりません。その内容を切り詰め、フラッシュしてからリンクを解除します。リンクまたは再解析ポイントへのすり替え、ファイル識別情報の変化、その他の曖昧さがある場合は native-main トラフィックを引き続き拒否し、名前が似ているだけのファイルは自動的には決して削除しません。これは、協調動作する OpenCodex のクラッシュから保護するためのものであり、同じ OS ユーザーとしてすでに実行中の悪意あるプロセスから保護するものではありません。そのユーザーと `CODEX_HOME` を格納するファイルシステムは引き続き信頼対象であり、切り詰めによってコピーオンライト方式のストレージ、スナップショット、または SSD の残留データから物理的に消去されることは保証されません。
+native-main トラフィックまたはジャーナル復旧を受け入れる前に、ライフタイム所有者が資格情報に対する排他的な権利を取得し、名前が正確に `auth.json.ocx.<pid>.<sequence>.tmp` と一致するクラッシュ残留ファイルだけを削除します。各候補は、変更されていない正規の `CODEX_HOME` 配下にあり、ハードリンク数が 1 の通常ファイルであり続けなければなりません。その内容を切り詰め、フラッシュしてからリンクを解除します。リンクまたは再解析ポイントへのすり替え、ファイル識別情報の変化、その他の曖昧さがある場合は native-main トラフィックを引き続き拒否し、名前が似ているだけのファイルは自動的には決して削除しません。これは、協調動作する Univers Gateway のクラッシュから保護するためのものであり、同じ OS ユーザーとしてすでに実行中の悪意あるプロセスから保護するものではありません。そのユーザーと `CODEX_HOME` を格納するファイルシステムは引き続き信頼対象であり、切り詰めによってコピーオンライト方式のストレージ、スナップショット、または SSD の残留データから物理的に消去されることは保証されません。
 
-プレビュー版では `<OPENCODEX_HOME>/native-main-profiles` を使用していました。このレイアウトが暗黙にインポートされることはありません。`doctor` が旧形式のプロファイル状態を報告した場合は、同じ `CODEX_HOME` を共有するすべての OpenCodex プロキシを停止してください。そのうえで、該当する `*.vault.json`、`*.journal.json`、復旧マーカー、および参照されている journal-quarantine ファイルをバックアップし、所有者だけがアクセスできる権限を維持したまま、すべて一緒に正規ディレクトリへ移動してください。別の方法として、古いプレビュー版の一式を削除し、`ocx account main register` を再度実行することもできます。同じ `CODEX_HOME` を共有するプロキシが 1 つでも稼働している間は、複数の旧ルートから 1 つを選ぶことも、両方のレイアウトを併用することも避けてください。Windows では、以前の大文字小文字を区別しないホーム識別子に紐付いたプレビュー状態は、移動せずリセットする必要があります。暗号化された AAD と OS キーリングの識別子は、意図的に再利用されないためです。
+プレビュー版では `<OPENCODEX_HOME>/native-main-profiles` を使用していました。このレイアウトが暗黙にインポートされることはありません。`doctor` が旧形式のプロファイル状態を報告した場合は、同じ `CODEX_HOME` を共有するすべての Univers Gateway プロキシを停止してください。そのうえで、該当する `*.vault.json`、`*.journal.json`、復旧マーカー、および参照されている journal-quarantine ファイルをバックアップし、所有者だけがアクセスできる権限を維持したまま、すべて一緒に正規ディレクトリへ移動してください。別の方法として、古いプレビュー版の一式を削除し、`ocx account main register` を再度実行することもできます。同じ `CODEX_HOME` を共有するプロキシが 1 つでも稼働している間は、複数の旧ルートから 1 つを選ぶことも、両方のレイアウトを併用することも避けてください。Windows では、以前の大文字小文字を区別しないホーム識別子に紐付いたプレビュー状態は、移動せずリセットする必要があります。暗号化された AAD と OS キーリングの識別子は、意図的に再利用されないためです。
 
 ## モデル
 

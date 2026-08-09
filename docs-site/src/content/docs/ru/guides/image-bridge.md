@@ -72,11 +72,11 @@ Image Bridge активируется только на **Responses**-ходах
 напрямую в `/v1/images/generations` (или `/images/edits`) — этот путь описан отдельно в
 [Интеграции с Codex](/guides/codex-integration/#built-in-image-generation-image_gen).
 
-1. Когда Responses-запрос перечисляет `image_generation` в `tools`, OpenCodex замечает это на
+1. Когда Responses-запрос перечисляет `image_generation` в `tools`, Univers Gateway замечает это на
    этапе предобработки.
 2. Hosted tool заменяется на **синтетический function tool**, который маршрутизируемая модель
    может вызвать обычным образом — вместо непрозрачного hosted tool модель видит вызываемый tool.
-3. Когда модель вызывает этот tool, OpenCodex перехватывает вызов и отправляет prompt в API
+3. Когда модель вызывает этот tool, Univers Gateway перехватывает вызов и отправляет prompt в API
    генерации изображений xAI.
 4. Сгенерированные изображения сохраняются в `~/.opencodex/artifacts/`, а **локальный путь к
    файлу** возвращается модели как результат tool.

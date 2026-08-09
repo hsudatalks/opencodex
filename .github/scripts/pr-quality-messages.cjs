@@ -196,7 +196,7 @@ function buildFailureSections(failures, { pr, allowedBases, defaultBase }) {
       "",
       `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${allowedBases.map(inlineCode).join(" or ")}.`,
       "",
-      `@${pr.user.login} Please retarget this PR to ${inlineCode(defaultBase)}. All contributions go to ${inlineCode(defaultBase)}; \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`
+      `@${pr.user.login} Please retarget this PR to ${inlineCode(defaultBase)}. All contributions go to ${inlineCode(defaultBase)}; \`main\` receives only release promotions. See our [Contributing guide](https://opencodex.me/contributing/) for details. Thanks! 🙏`
     );
   }
 
