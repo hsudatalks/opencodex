@@ -16,6 +16,8 @@ scheduler, and Postgres usage pipeline.
 | `b5d44a53` | `98724540` | Keep Google CCA session identity stable for a client thread. |
 | `c75e68ec` | `e0c67306` | Preserve routed and account-qualified models in the Codex Desktop picker, including explicit native aliases. This directly supports Univers Gateway's model-routing contract. |
 | `3c40df20` | `53cf8199` | Require the Windows CI shard command to be executable and unconditional, preventing a false-green workflow. |
+| `408c825e` | `82969f7c` | Bound Google tool-schema expansion by node count and active reference path. This prevents pathological schemas from amplifying CPU and memory while retaining valid shared definitions. |
+| `831a120e` through `4d737e53` | `27209498` through `524d6a04` | Reject non-finite local OAuth expiry metadata at import/adoption boundaries while preserving lazy refresh: expired access credentials with a valid refresh path remain logged in unless explicitly marked for reauthentication. |
 
 ## Deferred
 
