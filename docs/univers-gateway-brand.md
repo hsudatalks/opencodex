@@ -26,3 +26,8 @@ New public copy should say Univers Gateway. Internal compatibility identifiers s
 ## Upstream integration
 
 Upstream OpenCodex changes are reviewed individually. A change is adopted when it improves correctness, interoperability, account lifecycle, model discovery, or operational reliability without weakening Univers Gateway's central account pool, routing continuity, concurrency scheduling, or Postgres usage architecture.
+
+The current review ledger is recorded in
+[`upstream-integration-2026-08-10.md`](./upstream-integration-2026-08-10.md). The
+package migration and rollback contract is recorded in
+[`univers-gateway-migration.md`](./univers-gateway-migration.md).
