@@ -717,6 +717,8 @@ export const ko: Record<TKey, string> = {
   "usage.loading": "사용량 데이터를 불러오는 중…",
   "usage.empty": "아직 기록된 사용량이 없습니다. 프록시로 요청을 보내면 여기에 표시됩니다.",
   "usage.loadError": "사용량 데이터를 불러오지 못했습니다.",
+  "usage.refresh": "사용량 새로고침",
+  "usage.refreshing": "사용량 새로고침 중…",
   "usage.range.all": "전체",
   "usage.range.available": "사용 가능한 기록",
   "usage.historyTruncated": "이전 사용 기록을 불러오지 않아 합계는 사용 가능한 기록만 포함합니다.",

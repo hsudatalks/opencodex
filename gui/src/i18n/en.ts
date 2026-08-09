@@ -726,6 +726,8 @@ export const en = {
   "usage.loading": "Loading usage data…",
   "usage.empty": "No usage recorded yet. Send a request through the proxy to see activity here.",
   "usage.loadError": "Could not load usage data.",
+  "usage.refresh": "Refresh usage",
+  "usage.refreshing": "Refreshing usage…",
   "usage.range.all": "All",
   "usage.range.available": "Available history",
   "usage.historyTruncated": "Totals cover available history only because older usage was not loaded.",

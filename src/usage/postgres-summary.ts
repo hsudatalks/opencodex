@@ -557,6 +557,7 @@ export async function cachedUsageSummaryFromPostgres(
   range: UsageRange,
   now: number,
   surface: UsageSurface,
+  forceRefresh = false,
 ): Promise<UsageSummary> {
   let cache = summaryCaches.get(sql);
   if (!cache) {
@@ -567,7 +568,7 @@ export async function cachedUsageSummaryFromPostgres(
   const entry = cache.get(key) ?? {};
   cache.set(key, entry);
   const age = entry.loadedAt === undefined ? Number.POSITIVE_INFINITY : now - entry.loadedAt;
-  if (entry.value && age <= SUMMARY_CACHE_TTL_MS) return entry.value;
+  if (!forceRefresh && entry.value && age <= SUMMARY_CACHE_TTL_MS) return entry.value;
 
   if (!entry.inflight) {
     entry.inflight = summarizeUsageFromPostgres(sql, range, now, surface)
@@ -580,7 +581,7 @@ export async function cachedUsageSummaryFromPostgres(
         entry.inflight = undefined;
       });
   }
-  if (entry.value && age <= SUMMARY_CACHE_STALE_MS) {
+  if (!forceRefresh && entry.value && age <= SUMMARY_CACHE_STALE_MS) {
     void entry.inflight.catch(error => {
       console.warn("[usage-postgres] background summary refresh failed:",
         error instanceof Error ? error.message : error);

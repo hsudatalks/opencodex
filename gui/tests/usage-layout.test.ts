@@ -68,7 +68,74 @@ test("usage workspace i18n keys exist in every locale", async () => {
     expect(dict).toContain('"usage.workspace.report":');
     expect(dict).toContain('"usage.range.available":');
     expect(dict).toContain('"usage.historyTruncated":');
+    expect(dict).toContain('"usage.refresh":');
+    expect(dict).toContain('"usage.refreshing":');
     expect(dict).toContain('"api.attribution.totalRequestsAvailable":');
+  }
+});
+
+test("Usage manual refresh asks the server to bypass its aggregate cache", async () => {
+  const globalKeys = ["document", "window", "navigator", "localStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
+  const originalFetch = globalThis.fetch;
+  const testWindow = new Window({ url: "http://localhost/" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    navigator: { configurable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+    ResizeObserver: { configurable: true, value: testWindow.ResizeObserver },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  clearClientResourceStoresForTests();
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return Response.json({
+      range: "30d", surface: "all", since: null, generatedAt: Date.now(),
+      summary: {
+        requests: 1, measuredRequests: 1, reportedRequests: 1, unreportedRequests: 0,
+        unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 1, outputTokens: 0,
+        cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1, coverageRatio: 1,
+      },
+      days: [], models: [], providers: [], historyTruncated: false,
+      truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
+    });
+  }) as typeof fetch;
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(createElement(LanguageProvider, null, createElement(Usage, { apiBase: "http://usage-refresh-test" })));
+    });
+    const deadline = Date.now() + 1_000;
+    while (requests.length < 1 || !container.querySelector('button[aria-label="Refresh usage"]')) {
+      if (Date.now() >= deadline) throw new Error("Usage refresh button did not render");
+      await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
+    }
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage"]')!.click();
+    });
+    while (requests.length < 2) {
+      if (Date.now() >= deadline) throw new Error("Usage refresh request did not run");
+      await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
+    }
+
+    expect(new URL(requests[0]!).searchParams.has("refresh")).toBe(false);
+    expect(new URL(requests[1]!).searchParams.get("refresh")).toBe("1");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    globalThis.fetch = originalFetch;
+    clearClientResourceStoresForTests();
+    testWindow.close();
+    for (const key of globalKeys) {
+      Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+    }
   }
 });
 

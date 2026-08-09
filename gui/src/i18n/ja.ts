@@ -684,6 +684,8 @@ export const ja: Record<TKey, string> = {
   "usage.loading": "使用量データを読み込み中…",
   "usage.empty": "まだ使用量が記録されていません。プロキシ経由でリクエストを送信するとここにアクティビティが表示されます。",
   "usage.loadError": "使用量データを読み込めませんでした。",
+  "usage.refresh": "使用量を更新",
+  "usage.refreshing": "使用量を更新中…",
   "usage.range.all": "すべて",
   "usage.range.available": "利用可能な履歴",
   "usage.historyTruncated": "古い利用履歴が読み込まれていないため、合計は利用可能な履歴のみを対象とします。",

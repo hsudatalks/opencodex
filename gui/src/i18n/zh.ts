@@ -710,6 +710,8 @@ export const zh: Record<TKey, string> = {
   "usage.loading": "正在加载用量数据…",
   "usage.empty": "尚无用量记录。通过代理发送请求后将在此显示。",
   "usage.loadError": "无法加载用量数据。",
+  "usage.refresh": "刷新用量",
+  "usage.refreshing": "正在刷新用量…",
   "usage.range.all": "全部",
   "usage.range.available": "可用历史",
   "usage.historyTruncated": "由于未加载较早的使用记录，合计仅涵盖可用历史。",

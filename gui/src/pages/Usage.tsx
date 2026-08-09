@@ -10,6 +10,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { IconRefresh } from "../icons";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -204,14 +205,18 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
 function UsageFilters({
   surface,
   range,
+  refreshing,
   onSurface,
   onRange,
+  onRefresh,
   t,
 }: {
   surface: UsageSurface;
   range: Range;
+  refreshing: boolean;
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
+  onRefresh: () => void;
   t: TFn;
 }) {
   return (
@@ -261,6 +266,16 @@ function UsageFilters({
           );
         })}
       </div>
+      <button
+        type="button"
+        className="btn btn-ghost btn-icon"
+        aria-label={refreshing ? t("usage.refreshing") : t("usage.refresh")}
+        title={refreshing ? t("usage.refreshing") : t("usage.refresh")}
+        disabled={refreshing}
+        onClick={onRefresh}
+      >
+        <IconRefresh className={refreshing ? "spin-icon" : undefined} aria-hidden="true" />
+      </button>
     </div>
   );
 }
@@ -754,9 +769,14 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
+  const forceRefreshRef = useRef(false);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
+    const forceRefresh = forceRefreshRef.current;
+    forceRefreshRef.current = false;
+    const params = new URLSearchParams({ range, surface });
+    if (forceRefresh) params.set("refresh", "1");
+    const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
     writeHeldUsage(apiBase, range, surface, next);
@@ -775,6 +795,10 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   );
   const { state } = resource;
   const data = state.data ?? cached ?? null;
+  const refreshUsage = useCallback(() => {
+    forceRefreshRef.current = true;
+    resource.refresh();
+  }, [resource]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
@@ -800,7 +824,15 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
+        <UsageFilters
+          surface={surface}
+          range={range}
+          refreshing={state.refreshing}
+          onSurface={setSurface}
+          onRange={setRange}
+          onRefresh={refreshUsage}
+          t={t}
+        />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
 

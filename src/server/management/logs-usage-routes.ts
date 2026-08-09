@@ -189,13 +189,14 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   if (url.pathname === "/api/usage" && req.method === "GET") {
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
+    const forceRefresh = url.searchParams.get("refresh") === "1";
     const now = Date.now();
     try {
       const postgres = usagePostgresClient();
       if (postgres) {
         try {
           return jsonResponse({
-            ...await cachedUsageSummaryFromPostgres(postgres, range, now, surface),
+            ...await cachedUsageSummaryFromPostgres(postgres, range, now, surface, forceRefresh),
             historyTruncated: false,
             truncatedPrefixBytes: 0,
             entriesTruncated: false,
@@ -210,7 +211,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
-      if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
+      if (!forceRefresh && cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
