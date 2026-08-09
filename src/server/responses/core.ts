@@ -65,8 +65,10 @@ import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCapacityError,
+  CodexAccountCapacityQueueError,
   CodexAccountCooldownError,
   codexAccountCapacityResponse,
+  codexAccountCapacityQueueResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -414,6 +416,7 @@ async function retryCodexPoolOnAlternateAccount(
         excludeAccountId: firstAuthCtx.accountId,
         modelId: route.modelId,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        signal: options.abortSignal ?? req.signal,
       },
     );
   } catch (error) {
@@ -423,6 +426,7 @@ async function retryCodexPoolOnAlternateAccount(
       && !(error instanceof CodexAccountCooldownError)
       && !(error instanceof CodexMainProfileDrainingError)
       && !(error instanceof CodexAccountCapacityError)
+      && !(error instanceof CodexAccountCapacityQueueError)
     ) throw error;
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
@@ -838,6 +842,7 @@ async function resolveResponsesCodexAuth(
         accountId: route.codexAccountId,
         modelId: route.modelId,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        signal: options.abortSignal ?? req.signal,
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
@@ -865,6 +870,9 @@ async function resolveResponsesCodexAuth(
     }
     if (err instanceof CodexAccountCapacityError) {
       return { ok: false, response: codexAccountCapacityResponse(err) };
+    }
+    if (err instanceof CodexAccountCapacityQueueError) {
+      return { ok: false, response: codexAccountCapacityQueueResponse(err) };
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
       return {
@@ -1749,6 +1757,7 @@ async function handleResponsesInner(
             ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) } }
             : {}),
           beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+          signal: options.abortSignal ?? req.signal,
         },
       );
     } catch (err) {
@@ -1858,7 +1867,7 @@ async function handleResponsesInner(
       && (!parsed.previousResponseId || parsed._previousResponseInputExpanded === true);
     const rememberPassthroughResponse = passthroughRecordEligible
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
-        rememberResponseState(parsed._rawBody, response, undefined, { force: true })
+        rememberResponseState(parsed._rawBody, response, undefined, { force: true, durable: true })
       : undefined;
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(

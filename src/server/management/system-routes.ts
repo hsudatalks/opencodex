@@ -23,7 +23,7 @@
  */
 import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
-import { getActiveTurnCount, isDraining } from "../lifecycle";
+import { codexAccountCapacityQueueMetrics, getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
 import { responseStateMetrics } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
@@ -103,6 +103,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       eagerRelay,
       watchdog,
       activeTurnCount: getActiveTurnCount(),
+      codexAccountCapacityQueue: codexAccountCapacityQueueMetrics(),
       isDraining: isDraining(),
     });
   }

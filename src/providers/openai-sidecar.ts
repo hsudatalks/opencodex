@@ -93,6 +93,7 @@ export async function resolveFirstUsableOpenAiSidecar(
   options: {
     exactAccount?: ExactOpenAiSidecarAccount;
     beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ResolvedOpenAiForwardSidecar | undefined> {
   const { exactAccount } = options;
@@ -112,6 +113,7 @@ export async function resolveFirstUsableOpenAiSidecar(
         accountId: exactAccount.accountId,
         modelId: exactAccount.modelId,
         beginCodexAccountSelection: options.beginCodexAccountSelection,
+        signal: options.signal,
       });
       if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
         || !isCodexAuthContextUsable(authContext, config)) {
@@ -149,6 +151,7 @@ export async function resolveFirstUsableOpenAiSidecar(
     }
     const authContext = await resolveCodexAuthContext(incomingHeaders, config, candidate.accountMode, {
       beginCodexAccountSelection: options.beginCodexAccountSelection,
+      signal: options.signal,
     });
     if (!isCodexAuthContextUsable(authContext, config)) continue;
     return {

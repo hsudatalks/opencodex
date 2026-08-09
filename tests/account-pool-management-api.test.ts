@@ -41,7 +41,7 @@ describe("Codex account pool strategy management API", () => {
     expect(await resp!.json()).toMatchObject({
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
-      accountMaxConcurrentTurns: 4,
+      accountMaxConcurrentTurns: 6,
       accountPoolOfficialResetAt: null,
     });
   });

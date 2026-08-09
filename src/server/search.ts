@@ -10,7 +10,9 @@
  */
 import { formatErrorResponse } from "../bridge";
 import {
+  CodexAccountCapacityQueueError,
   CodexAccountCooldownError,
+  codexAccountCapacityQueueResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -107,6 +109,7 @@ export async function handleSearch(
     upstream = await resolveFirstUsableOpenAiSidecar(candidates, req.headers, config, {
       exactAccount,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+      signal: req.signal,
     });
     if (!upstream) {
       return formatErrorResponse(
@@ -119,6 +122,7 @@ export async function handleSearch(
       ? `${upstream.providerName}-${accountNamespace}`
       : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
+    if (err instanceof CodexAccountCapacityQueueError) return codexAccountCapacityQueueResponse(err);
     if (err instanceof CodexAccountCooldownError) {
       return cooldownErrorResponse(err, Date.now(), accountNamespace);
     }

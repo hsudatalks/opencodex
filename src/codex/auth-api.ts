@@ -34,7 +34,7 @@ import {
   resetCodexRoutingForManualSelection,
   settleCodexQuotaRecoveryProbe,
 } from "./routing";
-import { activeCodexAccountTurnCounts } from "../server/lifecycle";
+import { activeCodexAccountTurnCounts, codexAccountCapacityQueueMetrics } from "../server/lifecycle";
 import {
   DEFAULT_ACCOUNT_PRIORITY,
   MAX_ACCOUNT_PRIORITY,
@@ -1521,6 +1521,7 @@ export async function handleCodexAuthAPI(
       accountMaxConcurrentTurns: normalizeAccountMaxConcurrentTurns(runtimeConfig.accountMaxConcurrentTurns),
       accountPoolOfficialResetAt: runtimeConfig.accountPoolOfficialResetAt ?? null,
       activeTurnsByAccount: activeCodexAccountTurnCounts(),
+      accountCapacityQueue: codexAccountCapacityQueueMetrics(),
       quotaRouting: getCodexQuotaRoutingSnapshot(runtimeConfig, Date.now(), "shared"),
     });
   }

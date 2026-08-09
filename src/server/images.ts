@@ -14,7 +14,9 @@
  */
 import { formatErrorResponse } from "../bridge";
 import {
+  CodexAccountCapacityQueueError,
   CodexAccountCooldownError,
+  codexAccountCapacityQueueResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -383,10 +385,13 @@ export async function handleImages(
     try {
       forward = await resolveFirstUsableOpenAiSidecar(forwardCandidates, req.headers, config, {
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+        signal: req.signal,
       });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
     } catch (err) {
-      if (err instanceof CodexAccountCooldownError) {
+      if (err instanceof CodexAccountCapacityQueueError) {
+        forwardAuthError = codexAccountCapacityQueueResponse(err);
+      } else if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
       } else if (err instanceof CodexMainProfileDrainingError) {
         forwardAuthError = codexMainProfileDrainingResponse();

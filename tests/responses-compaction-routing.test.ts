@@ -726,6 +726,7 @@ describe("compact alternate-account attempt (#913)", () => {
       // only when the second auth selection receives the same admitted-turn lease.
       config.codexAccounts = [config.codexAccounts![0]!];
       config.activeCodexAccountId = "pool-a";
+      config.accountPoolStrategy = "fill-first";
       writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
         tokens: {
           access_token: "main-access-token",

@@ -136,10 +136,35 @@ export class CodexAccountCapacityError extends Error {
   }
 }
 
+export type CodexAccountCapacityWaitResult = "capacity_changed" | "queue_full" | "aborted" | "draining";
+
+export class CodexAccountCapacityQueueError extends Error {
+  constructor(readonly reason: Exclude<CodexAccountCapacityWaitResult, "capacity_changed">) {
+    super(`Codex account capacity wait ended: ${reason}`);
+    this.name = "CodexAccountCapacityQueueError";
+  }
+}
+
+export function codexAccountCapacityQueueResponse(err: CodexAccountCapacityQueueError): Response {
+  if (err.reason === "aborted") {
+    return formatErrorResponse(499, "request_cancelled", "Request cancelled while waiting for Codex account capacity");
+  }
+  const response = formatErrorResponse(
+    503,
+    "server_busy",
+    err.reason === "queue_full"
+      ? "Codex account capacity queue is full; retry shortly"
+      : "OpenCodex is draining; retry shortly",
+  );
+  const headers = new Headers(response.headers);
+  headers.set("Retry-After", "1");
+  return new Response(response.body, { status: response.status, headers });
+}
+
 export function codexAccountCapacityResponse(err: CodexAccountCapacityError): Response {
   const response = formatErrorResponse(
-    429,
-    "rate_limit_error",
+    503,
+    "server_busy",
     `Selected Codex account is serving ${err.limit} concurrent turns; retry shortly`,
   );
   const headers = new Headers(response.headers);
@@ -262,6 +287,8 @@ export interface ResolveCodexAuthContextOptions {
   isMainAccountTokenLive?: () => boolean;
   getMainAccountToken?: typeof getMainAccountToken;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
+  /** Cancels a queued account-capacity wait when the client disconnects. */
+  signal?: AbortSignal;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -269,6 +296,7 @@ export interface CodexAccountSelectionAdmission {
   canClaimAccount(accountId: string, limit: number): boolean;
   accountTurnCount(accountId: string): number;
   claimAccount(accountId: string, limit: number, onTurnSettled?: () => void): boolean;
+  waitForCapacity(accountId?: string, signal?: AbortSignal): Promise<CodexAccountCapacityWaitResult>;
   claimMainProfile(): boolean;
   release(): void;
 }
@@ -293,7 +321,8 @@ export async function resolveCodexAuthContext(
   // Retained startup recovery makes the physical main identity ineligible. Routing
   // can still preserve service by selecting a healthy configured pool account.
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
-  const selectionAdmission = options.beginCodexAccountSelection?.();
+  let selectionAdmission = options.beginCodexAccountSelection?.();
+  const routingSelectionAdmission = selectionAdmission;
   const maxConcurrentTurns = normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns);
   const nativeMainReadsForbidden = nativeMainTrafficBlocked || selectionAdmission?.mainProfileDraining === true;
   const selectionOptions = {
@@ -302,11 +331,11 @@ export async function resolveCodexAuthContext(
     nativeMainSelectionOnly: !nativeMainTrafficBlocked
       && selectionAdmission?.mainProfileDraining === true,
     isMainAccountTokenLive: options.isMainAccountTokenLive,
-    canClaimAccount: selectionAdmission
-      ? (candidateId: string) => selectionAdmission.canClaimAccount(candidateId, maxConcurrentTurns)
+    canClaimAccount: routingSelectionAdmission
+      ? (candidateId: string) => routingSelectionAdmission.canClaimAccount(candidateId, maxConcurrentTurns)
       : undefined,
-    accountTurnCount: selectionAdmission
-      ? (candidateId: string) => selectionAdmission.accountTurnCount(candidateId)
+    accountTurnCount: routingSelectionAdmission
+      ? (candidateId: string) => routingSelectionAdmission.accountTurnCount(candidateId)
       : undefined,
   };
   let accountId: string;
@@ -353,13 +382,6 @@ export async function resolveCodexAuthContext(
     if (accountId === MAIN_CODEX_ACCOUNT_ID && nativeMainTrafficBlocked) {
       throw new CodexMainProfileDrainingError();
     }
-    if (
-      accountId === MAIN_CODEX_ACCOUNT_ID
-      && selectionAdmission
-      && !selectionAdmission.claimMainProfile()
-    ) {
-      throw new CodexMainProfileDrainingError();
-    }
     if (fixedAccountId !== undefined) {
       if (isCodexAccountPaused(config, accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
@@ -371,9 +393,8 @@ export async function resolveCodexAuthContext(
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
     }
-    if (
-      selectionAdmission
-      && !selectionAdmission.claimAccount(
+    if (selectionAdmission) {
+      while (!selectionAdmission.claimAccount(
         accountId,
         maxConcurrentTurns,
         fixedAccountId === undefined && threadId
@@ -385,9 +406,26 @@ export async function resolveCodexAuthContext(
               quotaScope,
             )
           : undefined,
-      )
+      )) {
+        // Capacity waits can be long. The native-main selection fence protects
+        // credential inspection only; retaining it in the queue would block an
+        // otherwise unrelated login/switch operation. Re-enter the fence after
+        // wake-up before making the claim authoritative.
+        const waitingAdmission = selectionAdmission;
+        selectionAdmission = undefined;
+        waitingAdmission.release();
+        const wait = await waitingAdmission.waitForCapacity(accountId, options.signal);
+        if (wait !== "capacity_changed") throw new CodexAccountCapacityQueueError(wait);
+        selectionAdmission = options.beginCodexAccountSelection?.();
+        if (!selectionAdmission) throw new CodexAccountCapacityQueueError("draining");
+      }
+    }
+    if (
+      accountId === MAIN_CODEX_ACCOUNT_ID
+      && selectionAdmission
+      && !selectionAdmission.claimMainProfile()
     ) {
-      throw new CodexAccountCapacityError(accountId, maxConcurrentTurns);
+      throw new CodexMainProfileDrainingError();
     }
   } finally {
     selectionAdmission?.release();

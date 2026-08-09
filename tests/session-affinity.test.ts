@@ -135,7 +135,7 @@ describe("resolveCodexAccountForThread", () => {
     expect(result).toBe("a");
   });
 
-  test("auto-switch disabled when threshold is 0", () => {
+  test("threshold 0 disables the usage cutoff but keeps deadline scheduling", () => {
     const config = makeConfig({
       activeCodexAccountId: "a",
       autoSwitchThreshold: 0,
@@ -149,7 +149,7 @@ describe("resolveCodexAccountForThread", () => {
     updateAccountQuota("a", 99);
     updateAccountQuota("b", 10);
     const result = resolveCodexAccountForThread("t1", config);
-    expect(result).toBe("a");
+    expect(result).toBe("b");
   });
 });
 

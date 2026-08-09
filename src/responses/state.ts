@@ -14,8 +14,14 @@ import {
   writeResponseSpillDurably,
 } from "./spill-store";
 
+/** Replay grace for response ids that have already been advanced by a child. */
+const SUPERSEDED_RESPONSE_TTL_MS = 60 * 60 * 1_000;
+/** A chain head is authoritative session state, not an ordinary cache entry. */
+const RESPONSE_HEAD_TTL_MS = 24 * 60 * 60 * 1_000;
+/** Soft budget applies only to superseded history. Live chain heads are protected. */
 const MAX_STORED_RESPONSES = 1_000;
-const RESPONSE_TTL_MS = 60 * 60 * 1_000;
+/** Emergency bound for abandoned heads when clients never advance or resume them. */
+const MAX_STORED_RESPONSE_HEADS = 10_000;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
 /** In-memory high-water byte cap across all entries. Forced store:false retention (kiro/cursor
  * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
@@ -37,6 +43,7 @@ const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 interface ResidentResponseState {
   kind: "resident";
   createdAt: number;
+  supersededAt?: number;
   items: unknown[];
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
@@ -45,6 +52,7 @@ interface ResidentResponseState {
 interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
+  supersededAt?: number;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -53,6 +61,7 @@ interface SpilledResponseState {
 interface SpillFailedResponseState {
   kind: "spill-failed";
   createdAt: number;
+  supersededAt?: number;
   sizeBytes: number;
 }
 
@@ -72,6 +81,13 @@ let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
 let stateRevision = 0;
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
+const retentionCounters = {
+  headTtlEvictions: 0,
+  supersededTtlEvictions: 0,
+  supersededCapacityEvictions: 0,
+  emergencyHeadEvictions: 0,
+  replayMisses: 0,
+};
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized
  * candidates routed straight to durable spill without a resident stay or
@@ -170,8 +186,12 @@ function stubSize(id: string, entry: Omit<SpilledResponseState, "sizeBytes">): n
   return serializedBytes({ responseId: id, ...entry }) ?? 0;
 }
 
-function tombstone(id: string, createdAt: number): SpillFailedResponseState {
-  const base = { kind: "spill-failed" as const, createdAt };
+function tombstone(id: string, createdAt: number, supersededAt?: number): SpillFailedResponseState {
+  const base = {
+    kind: "spill-failed" as const,
+    createdAt,
+    ...(supersededAt !== undefined ? { supersededAt } : {}),
+  };
   return { ...base, sizeBytes: serializedBytes({ responseId: id, ...base }) ?? 0 };
 }
 
@@ -202,7 +222,11 @@ function replaceWithSpillFailure(
 ): void {
   const existing = states.get(id);
   if (expected && existing !== expected) return;
-  const failed = tombstone(id, expected?.createdAt ?? existing?.createdAt ?? now());
+  const failed = tombstone(
+    id,
+    expected?.createdAt ?? existing?.createdAt ?? now(),
+    expected?.supersededAt ?? existing?.supersededAt,
+  );
   if (replaceMapEntry(id, failed, expected)) {
     if (existing) {
       if (options.deferSpillUnlink && existing.kind === "spill") {
@@ -250,6 +274,7 @@ function replaceSpillEntryAtomically(
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.supersededAt !== undefined ? { supersededAt: candidate.supersededAt } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -301,6 +326,36 @@ function setResidentEntry(id: string, entry: ResidentInput): void {
   pruneResponses();
 }
 
+function markResponseSuperseded(id: string, at: number): void {
+  const existing = states.get(id);
+  if (!existing || existing.supersededAt !== undefined) return;
+  if (existing.kind === "resident") {
+    const measured = measureResidentEntry(id, { ...existing, supersededAt: at });
+    if (measured) replaceMapEntry(id, measured, existing);
+    return;
+  }
+  if (existing.kind === "spill") {
+    const { sizeBytes: _sizeBytes, ...spill } = existing;
+    const base: Omit<SpilledResponseState, "sizeBytes"> = { ...spill, supersededAt: at };
+    replaceMapEntry(id, { ...base, sizeBytes: stubSize(id, base) }, existing);
+    return;
+  }
+  replaceMapEntry(id, tombstone(id, existing.createdAt, at), existing);
+}
+
+/** Install a completed response as a durable spill as soon as its terminal event is observed. */
+function setDurableEntry(id: string, entry: ResidentInput): void {
+  const expected = states.get(id);
+  const candidate = measureResidentEntry(id, entry);
+  if (!candidate) {
+    replaceWithSpillFailure(id, expected);
+    pruneResponses();
+    return;
+  }
+  admitOversizedCandidate(id, candidate, expected, true);
+  pruneResponses();
+}
+
 /**
  * Admission boundary for candidates that can never fit as resident (larger
  * than the whole resident-map cap). Writes them DIRECTLY to durable spill and
@@ -313,6 +368,7 @@ function admitOversizedCandidate(
   id: string,
   candidate: ResidentResponseState,
   expected?: StoredResponseState,
+  forceDurable = false,
 ): void {
   if (candidate.sizeBytes > responseSpillPayloadCap()) {
     admissionCounters.oversizedDrops += 1;
@@ -337,6 +393,7 @@ function admitOversizedCandidate(
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.supersededAt !== undefined ? { supersededAt: candidate.supersededAt } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -346,7 +403,7 @@ function admitOversizedCandidate(
       return;
     }
     spillCounters.writes += 1;
-    admissionCounters.directSpills += 1;
+    if (forceDurable || candidate.sizeBytes > byteCap()) admissionCounters.directSpills += 1;
     noteStubSwapForTest();
     if (expected?.kind === "spill") {
       // Same deferred-unlink rule as replaceSpillEntryAtomically: the new stub
@@ -385,6 +442,7 @@ function snapshotPath(): string {
 
 interface LegacySnapshotState {
   createdAt?: unknown;
+  supersededAt?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
@@ -405,11 +463,15 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
   if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
+  const supersededAt = typeof rec.supersededAt === "number" && Number.isFinite(rec.supersededAt)
+    ? rec.supersededAt
+    : undefined;
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
+      ...(supersededAt !== undefined ? { supersededAt } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -417,7 +479,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     return;
   }
   if (rec.kind === "spill-failed") {
-    replaceMapEntry(id, tombstone(id, rec.createdAt));
+    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt));
     return;
   }
   if (rec.kind !== undefined && rec.kind !== "resident") return;
@@ -434,11 +496,12 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     : undefined);
   const resident = measureResidentEntry(id, {
     createdAt: rec.createdAt,
+    ...(supersededAt !== undefined ? { supersededAt } : {}),
     items: rec.items,
     ...(providers ? { providers } : {}),
   });
   if (!resident) {
-    replaceMapEntry(id, tombstone(id, rec.createdAt));
+    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt));
     return;
   }
   // Same admission boundary as live writes: an oversized snapshot row goes
@@ -631,8 +694,13 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
       const revision = stateRevision;
       const entries: Array<[string, unknown]> = [];
       let total = 0;
-      // Newest-first so the most recent chains survive both legacy snapshot caps.
-      for (const [id, state] of [...states].reverse()) {
+      // Chain heads are authoritative. Persist them before superseded replay history,
+      // then newest-first inside each class. Durable stubs are tiny, so a busy fleet
+      // no longer loses live heads behind a few large resident entries.
+      const ordered = [...states].reverse().sort(([, left], [, right]) => {
+        return Number(left.supersededAt !== undefined) - Number(right.supersededAt !== undefined);
+      });
+      for (const [id, state] of ordered) {
         let persistable: unknown;
         if (state.kind === "resident") {
           const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
@@ -646,7 +714,7 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
         // past both snapshot caps at up to 2x the intended size.
         const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
         if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
+        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) continue;
         total += size;
         entries.push(persistEntry);
       }
@@ -726,11 +794,26 @@ function inputItems(input: unknown): unknown[] {
 
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
-    if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
+    if (state.supersededAt !== undefined) {
+      if (at - state.supersededAt > SUPERSEDED_RESPONSE_TTL_MS) {
+        retentionCounters.supersededTtlEvictions += 1;
+        deleteEntry(id);
+      }
+    } else if (at - state.createdAt > RESPONSE_HEAD_TTL_MS) {
+      retentionCounters.headTtlEvictions += 1;
+      deleteEntry(id);
+    }
   }
   while (states.size > MAX_STORED_RESPONSES) {
+    const oldest = [...states].find(([, state]) => state.supersededAt !== undefined)?.[0];
+    if (!oldest) break;
+    retentionCounters.supersededCapacityEvictions += 1;
+    deleteEntry(oldest);
+  }
+  while (states.size > MAX_STORED_RESPONSE_HEADS) {
     const oldest = states.keys().next().value;
     if (!oldest) break;
+    retentionCounters.emergencyHeadEvictions += 1;
     deleteEntry(oldest);
   }
   // Unconditional RAM cap. Resident payloads demote durably; stubs/tombstones are
@@ -762,7 +845,12 @@ function pruneResponses(at = now()): void {
 export function sweepExpiredResponseStates(at = now()): number {
   let removed = 0;
   for (const [id, state] of states) {
-    if (at - state.createdAt <= RESPONSE_TTL_MS) continue;
+    const expired = state.supersededAt !== undefined
+      ? at - state.supersededAt > SUPERSEDED_RESPONSE_TTL_MS
+      : at - state.createdAt > RESPONSE_HEAD_TTL_MS;
+    if (!expired) continue;
+    if (state.supersededAt !== undefined) retentionCounters.supersededTtlEvictions += 1;
+    else retentionCounters.headTtlEvictions += 1;
     deleteEntry(id);
     removed += 1;
   }
@@ -848,7 +936,10 @@ export function expandPreviousResponseInput(body: unknown): unknown {
   ensureLoaded();
   pruneResponses();
   const previous = states.get(previousId);
-  if (!previous) return body;
+  if (!previous) {
+    retentionCounters.replayMisses += 1;
+    return body;
+  }
   const materialized = materializeEntry(previousId, previous);
   if (!materialized.ok) {
     replayFailures.set(request, materialized.failure);
@@ -898,6 +989,13 @@ export interface ResponseStateMetrics {
   spillWrites: number;
   spillWriteFailures: number;
   spillReadFailures: number;
+  headCount: number;
+  supersededCount: number;
+  headTtlEvictions: number;
+  supersededTtlEvictions: number;
+  supersededCapacityEvictions: number;
+  emergencyHeadEvictions: number;
+  replayMisses: number;
 }
 
 /**
@@ -917,10 +1015,14 @@ export function responseStateMetrics(): ResponseStateMetrics {
   let spillStubCount = 0;
   let tombstoneCount = 0;
   let spillPayloadBytes = 0;
+  let headCount = 0;
+  let supersededCount = 0;
   for (const state of states.values()) {
     const bytes = state.sizeBytes;
     if (bytes > largestBytes) largestBytes = bytes;
     if (state.createdAt < oldestCreatedAt) oldestCreatedAt = state.createdAt;
+    if (state.supersededAt === undefined) headCount += 1;
+    else supersededCount += 1;
     if (state.kind === "resident") {
       residentCount += 1;
     } else if (state.kind === "spill") {
@@ -940,6 +1042,9 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillWrites: spillCounters.writes,
     spillWriteFailures: spillCounters.writeFailures,
     spillReadFailures: spillCounters.readFailures,
+    headCount,
+    supersededCount,
+    ...retentionCounters,
   };
 }
 
@@ -951,15 +1056,15 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; durable?: boolean },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
   // `force` bypasses only the store:false skip: Codex sends `store:false` on every non-Azure
   // HTTP request (and WS inherits it), yet its WS turns still chain with previous_response_id.
   // The passthrough branch records with force so those chains can be expanded locally; the
-  // store stays in-memory with a 1h TTL, so this is a proxy-internal continuation cache, not
-  // real server-side response storage.
+  // store keeps durable forward-mode chain heads for 24h. Superseded ids retain a bounded
+  // replay grace, while capacity pressure may discard only those historical ids first.
   if (request.store === false && !opts?.force) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
   if (response.status === "incomplete") {
@@ -968,6 +1073,9 @@ export function rememberResponseState(
       || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
   } else if (response.status !== undefined && response.status !== "completed") return;
   ensureLoaded();
+  const previousId = typeof request.previous_response_id === "string"
+    ? request.previous_response_id
+    : undefined;
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }
     : structuredClone(providerState ?? {});
@@ -976,7 +1084,7 @@ export function rememberResponseState(
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     });
   }
-  setResidentEntry(response.id, {
+  const entry: ResidentInput = {
     createdAt: now(),
     items: [...inputItems(request.input), ...response.output],
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
@@ -985,7 +1093,19 @@ export function rememberResponseState(
     // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
     // checkpoint must not be reused — but the conversation id string itself is still valid.
     ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),
-  });
+  };
+  if (opts?.durable) setDurableEntry(response.id, entry);
+  else setResidentEntry(response.id, entry);
+  // Advance the authoritative head only after the child is replayable. A failed
+  // spill write installs a tombstone for the child, but must not age the last
+  // known-good parent into the shorter superseded-history window.
+  if (
+    previousId
+    && previousId !== response.id
+    && states.get(response.id)?.kind !== "spill-failed"
+  ) {
+    markResponseSuperseded(previousId, now());
+  }
   enforceAppOwnedMemoryBudget();
   schedulePersist();
 }
@@ -1023,6 +1143,11 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writes = 0;
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
+  retentionCounters.headTtlEvictions = 0;
+  retentionCounters.supersededTtlEvictions = 0;
+  retentionCounters.supersededCapacityEvictions = 0;
+  retentionCounters.emergencyHeadEvictions = 0;
+  retentionCounters.replayMisses = 0;
   persistAttemptHookForTests = null;
   loaded = false;
 }

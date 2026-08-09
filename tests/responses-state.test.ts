@@ -614,6 +614,27 @@ describe("Responses previous_response_id state", () => {
     expect(events).toEqual(["write", "fsync", "close", "harden", "publish", "dir-fsync", "stub-swap"]);
   });
 
+  test("a failed durable child write does not supersede its replayable parent", () => {
+    rememberResponseState(
+      { model: "m", input: "parent", store: false },
+      fixedResponse("resp_durable_parent", [{ type: "message", role: "assistant", content: "ready" }]),
+      undefined,
+      { force: true, durable: true },
+    );
+    setSpillIoForTest({ write: () => { throw new Error("injected durable write failure"); } });
+
+    rememberResponseState(
+      { model: "m", previous_response_id: "resp_durable_parent", input: "child", store: false },
+      fixedResponse("resp_durable_child", [{ type: "message", role: "assistant", content: "lost" }]),
+      undefined,
+      { force: true, durable: true },
+    );
+
+    expect(responseStateMetrics()).toMatchObject({ headCount: 2, supersededCount: 0 });
+    const replay = expandPreviousResponseInput({ previous_response_id: "resp_durable_parent", input: "retry" });
+    expect(JSON.stringify((replay as { input: unknown[] }).input)).toContain("ready");
+  });
+
   test("directory fsync follows spill unlink", () => {
     const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });
     const events: string[] = [];
@@ -786,7 +807,7 @@ describe("Responses previous_response_id state", () => {
     const realNow = Date.now;
     setResponseStateByteCapForTests(1_024);
     try {
-      Date.now = () => realNow() - 2 * 60 * 60 * 1_000;
+      Date.now = () => realNow() - 25 * 60 * 60 * 1_000;
       rememberLarge("resp_ttl_spill", "t".repeat(8_000));
       const ttlFile = spillFileNames(home)[0]!;
       Date.now = realNow;
@@ -798,7 +819,13 @@ describe("Responses previous_response_id state", () => {
       rememberLarge("resp_count_spill", "v".repeat(8_000));
       const countFile = spillFileNames(home)[0]!;
       setResponseStateByteCapForTests(1_000_000_000);
-      for (let i = 0; i < 1_000; i++) rememberLarge(`resp_count_${i}`, "x");
+      rememberResponseState(
+        { model: "test/model", previous_response_id: "resp_count_spill", input: "advance", store: false },
+        fixedResponse("resp_count_head", [{ role: "assistant", content: "head" }]),
+        undefined,
+        { force: true },
+      );
+      for (let i = 0; i < 999; i++) rememberLarge(`resp_count_${i}`, "x");
       expect(existsSync(join(responseSpillDirectory(home), countFile))).toBe(false);
       expect(responseStateMetrics().count).toBe(1_000);
     } finally {
@@ -1340,7 +1367,7 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
-  test("count-prune eviction releases byte accounting (no phantom debt)", () => {
+  test("count pruning evicts superseded history without deleting the live chain head", () => {
     // Cap far above total volume so ONLY count pruning (MAX_STORED_RESPONSES=1000)
     // evicts; the byte pruner never fires and cannot mask a leaked decrement.
     setResponseStateByteCapForTests(1_000_000_000);
@@ -1349,7 +1376,12 @@ describe("Responses previous_response_id state", () => {
       let lastId = "";
       let perEntryBytes = 0;
       for (let i = 0; i < 1_050; i++) {
-        const body = { model: "cursor/grok-4.5", input: `${bulk}-000${String(i % 10)}`, store: false };
+        const body = {
+          model: "cursor/grok-4.5",
+          input: `${bulk}-000${String(i % 10)}`,
+          store: false,
+          ...(lastId ? { previous_response_id: lastId } : {}),
+        };
         const json = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
         rememberResponseState(body, json, { cursor: { conversationId: `conv_c${i}` } }, { force: true });
         lastId = json.id as string;
@@ -1375,7 +1407,7 @@ describe("Responses previous_response_id state", () => {
       const realNow = Date.now;
       try {
         // Store an old heavy entry, then advance time past the 1h TTL.
-        Date.now = () => realNow() - 2 * 60 * 60 * 1_000;
+        Date.now = () => realNow() - 25 * 60 * 60 * 1_000;
         const oldBody = { model: "cursor/grok-4.5", input: "o".repeat(6_000), store: false };
         const oldJson = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
         rememberResponseState(oldBody, oldJson, { cursor: { conversationId: "conv_old" } }, { force: true });
@@ -1591,12 +1623,12 @@ describe("Responses previous_response_id state", () => {
     await flushResponseState();
     clearResponseStateMemoryForTests();
 
-    // Rewrite the snapshot with an expired createdAt (2h ago > 1h TTL).
+    // Rewrite the snapshot with an expired chain-head timestamp (>24h TTL).
     const path = join(home, "responses-state.json");
     const snapshot = JSON.parse(readFileSync(path, "utf-8")) as {
       states: [string, { createdAt: number }][];
     };
-    for (const [, state] of snapshot.states) state.createdAt = Date.now() - 2 * 60 * 60 * 1_000;
+    for (const [, state] of snapshot.states) state.createdAt = Date.now() - 25 * 60 * 60 * 1_000;
     writeFileSync(path, JSON.stringify(snapshot));
 
     const second = {
@@ -1756,6 +1788,13 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        headCount: 0,
+        supersededCount: 0,
+        headTtlEvictions: 0,
+        supersededTtlEvictions: 0,
+        supersededCapacityEvictions: 0,
+        emergencyHeadEvictions: 0,
+        replayMisses: 0,
       });
     });
 
@@ -1813,6 +1852,13 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        headCount: 0,
+        supersededCount: 0,
+        headTtlEvictions: 0,
+        supersededTtlEvictions: 0,
+        supersededCapacityEvictions: 0,
+        emergencyHeadEvictions: 0,
+        replayMisses: 0,
       });
 
       // The real request path DOES load; the probe then reflects the loaded entry.

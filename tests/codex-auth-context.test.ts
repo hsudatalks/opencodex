@@ -7,12 +7,15 @@ import {
   assertCodexAuthContextNotCooled,
   CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
   CodexAccountCapacityError,
+  CodexAccountCapacityQueueError,
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
+  codexAccountCapacityQueueResponse,
+  codexAccountCapacityResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorMessage,
   cooldownErrorResponse,
@@ -59,6 +62,7 @@ import {
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import {
   acquireNativeMainProfileDrain,
+  codexAccountCapacityQueueMetrics,
   codexAccountSelectionForTurn,
   resetLifecycleDrainStateForTests,
   tryAdmitTurn,
@@ -208,11 +212,14 @@ describe("Codex auth context", () => {
     try {
       await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(first)))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
-      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(second)))
-        .rejects.toBeInstanceOf(CodexAccountCapacityError);
-
+      const waiting = resolveCodexAuthContext(new Headers(), cfg, "pool", options(second));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(codexAccountCapacityQueueMetrics().queued).toBe(1);
+      const drain = acquireNativeMainProfileDrain("capacity-wait-does-not-own-main-selection");
+      expect(drain).not.toBeNull();
+      drain?.release();
       first.release();
-      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options(second)))
+      await expect(waiting)
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
     } finally {
       first.release();
@@ -1320,6 +1327,22 @@ describe("cooldown error surface", () => {
     expect(response.headers.get("Retry-After")).toBe("90");
     const body = await response.json() as { error?: { message?: string } };
     expect(body.error?.message).toContain("ocx account clear-cooldown");
+  });
+
+  test("internal account capacity never masquerades as an upstream 429", async () => {
+    const capacity = codexAccountCapacityResponse(new CodexAccountCapacityError("pool-a", 6));
+    expect(capacity.status).toBe(503);
+    expect(capacity.headers.get("Retry-After")).toBe("1");
+    expect(await capacity.json()).toMatchObject({
+      error: { type: "server_error", code: "server_is_overloaded" },
+    });
+
+    const overflow = codexAccountCapacityQueueResponse(new CodexAccountCapacityQueueError("queue_full"));
+    expect(overflow.status).toBe(503);
+    expect(overflow.headers.get("Retry-After")).toBe("1");
+    expect(await overflow.json()).toMatchObject({
+      error: { type: "server_error", code: "server_is_overloaded" },
+    });
   });
 
   test("an already-elapsed cooldown still yields a valid Retry-After", () => {

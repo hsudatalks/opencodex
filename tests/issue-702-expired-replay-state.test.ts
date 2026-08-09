@@ -24,8 +24,8 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const EXPIRED_AGE_MS = 2 * 60 * 60 * 1_000;
-const REPLAY_TTL_MS = 60 * 60 * 1_000;
+const EXPIRED_AGE_MS = 25 * 60 * 60 * 1_000;
+const REPLAY_TTL_MS = 24 * 60 * 60 * 1_000;
 const FIRST_RESPONSE_ID = "resp_issue_702_first";
 const HISTORICAL_USER_SENTINEL = "issue-702 historical user context";
 const HISTORICAL_ASSISTANT_SENTINEL = "issue-702 historical assistant context";

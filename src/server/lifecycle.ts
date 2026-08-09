@@ -20,7 +20,10 @@ import {
   beginBackgroundShellShutdown,
   terminateAllBackgroundShells,
 } from "../adapters/cursor/native-exec-shell";
-import type { CodexAccountSelectionAdmission } from "../codex/auth-context";
+import type {
+  CodexAccountCapacityWaitResult,
+  CodexAccountSelectionAdmission,
+} from "../codex/auth-context";
 import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-startup";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +47,13 @@ const nativeMainDrainOwners = new Set<symbol>();
 const temporaryDrainWaiters = new Set<() => void>();
 const nativeMainTurns = new Set<ActiveTurnLease>();
 const codexAccountTurns = new Map<string, Set<ActiveTurnLease>>();
+export const MAX_QUEUED_CODEX_ACCOUNT_TURNS = 128;
+interface CodexCapacityWaiter {
+  accountId?: string;
+  settle(result: CodexAccountCapacityWaitResult): void;
+}
+const codexCapacityWaiters: CodexCapacityWaiter[] = [];
+const codexCapacityQueueStats = { admitted: 0, dequeued: 0, rejected: 0, cancelled: 0, peak: 0 };
 let nativeMainSelections = 0;
 let legacyDrainLease: AdmissionLease | null = null;
 let recyclingForExit = false;
@@ -52,6 +62,32 @@ export function activeCodexAccountTurnCounts(): Readonly<Record<string, number>>
   return Object.fromEntries(
     [...codexAccountTurns.entries()].map(([accountId, turns]) => [accountId, turns.size]),
   );
+}
+
+export function codexAccountCapacityQueueMetrics(): Readonly<typeof codexCapacityQueueStats & { queued: number }> {
+  return { ...codexCapacityQueueStats, queued: codexCapacityWaiters.length };
+}
+
+function removeCodexCapacityWaiter(waiter: CodexCapacityWaiter): boolean {
+  const index = codexCapacityWaiters.indexOf(waiter);
+  if (index < 0) return false;
+  codexCapacityWaiters.splice(index, 1);
+  return true;
+}
+
+function notifyCodexCapacityWaiter(accountId: string): void {
+  const index = codexCapacityWaiters.findIndex(waiter => waiter.accountId === accountId);
+  const fallback = index >= 0 ? index : codexCapacityWaiters.findIndex(waiter => waiter.accountId === undefined);
+  if (fallback < 0) return;
+  const [waiter] = codexCapacityWaiters.splice(fallback, 1);
+  codexCapacityQueueStats.dequeued += 1;
+  waiter?.settle("capacity_changed");
+}
+
+function drainCodexCapacityWaiters(result: "draining" | "aborted"): void {
+  const waiters = codexCapacityWaiters.splice(0);
+  if (result === "aborted") codexCapacityQueueStats.cancelled += waiters.length;
+  for (const waiter of waiters) waiter.settle(result);
 }
 let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
@@ -118,6 +154,7 @@ export function acquireNativeMainProfileDrain(owner: string): AdmissionLease | n
 export function beginShutdownDrain(): boolean {
   if (shutdownDraining) return false;
   shutdownDraining = true;
+  drainCodexCapacityWaiters("draining");
   return true;
 }
 
@@ -155,6 +192,12 @@ export function resetLifecycleDrainStateForTests(): void {
   nativeMainDrainOwners.clear();
   nativeMainTurns.clear();
   codexAccountTurns.clear();
+  drainCodexCapacityWaiters("aborted");
+  codexCapacityQueueStats.admitted = 0;
+  codexCapacityQueueStats.dequeued = 0;
+  codexCapacityQueueStats.rejected = 0;
+  codexCapacityQueueStats.cancelled = 0;
+  codexCapacityQueueStats.peak = 0;
   nativeMainSelections = 0;
   for (const resolve of temporaryDrainWaiters) resolve();
   temporaryDrainWaiters.clear();
@@ -175,10 +218,12 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
   let settleCodexAccountClaim: (() => void) | undefined;
   const releaseCodexAccountClaim = (settled = false) => {
     if (!claimedCodexAccountId) return;
+    const releasedAccountId = claimedCodexAccountId;
     const owners = codexAccountTurns.get(claimedCodexAccountId);
     owners?.delete(lease);
     if (owners?.size === 0) codexAccountTurns.delete(claimedCodexAccountId);
     claimedCodexAccountId = undefined;
+    notifyCodexCapacityWaiter(releasedAccountId);
     const settle = settleCodexAccountClaim;
     settleCodexAccountClaim = undefined;
     if (settled && settle) {
@@ -229,6 +274,34 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
           claimedCodexAccountId = accountId;
           settleCodexAccountClaim = onTurnSettled;
           return true;
+        },
+        waitForCapacity(accountId, signal) {
+          if (!active || signal?.aborted) return Promise.resolve("aborted");
+          if (isDraining()) return Promise.resolve("draining");
+          if (codexCapacityWaiters.length >= MAX_QUEUED_CODEX_ACCOUNT_TURNS) {
+            codexCapacityQueueStats.rejected += 1;
+            return Promise.resolve("queue_full");
+          }
+          return new Promise<CodexAccountCapacityWaitResult>(resolve => {
+            let settled = false;
+            const finish = (result: CodexAccountCapacityWaitResult) => {
+              if (settled) return;
+              settled = true;
+              signal?.removeEventListener("abort", onAbort);
+              resolve(result);
+            };
+            const waiter: CodexCapacityWaiter = { accountId, settle: finish };
+            const onAbort = () => {
+              if (!removeCodexCapacityWaiter(waiter)) return;
+              codexCapacityQueueStats.cancelled += 1;
+              finish("aborted");
+            };
+            codexCapacityWaiters.push(waiter);
+            codexCapacityQueueStats.admitted += 1;
+            codexCapacityQueueStats.peak = Math.max(codexCapacityQueueStats.peak, codexCapacityWaiters.length);
+            signal?.addEventListener("abort", onAbort, { once: true });
+            if (signal?.aborted) onAbort();
+          });
         },
         claimMainProfile() {
           if (released || mainProfileDraining || !active) return false;

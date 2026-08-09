@@ -122,7 +122,9 @@ describe("state-store sweeper", () => {
     for (const name of ["responses-continuation", "antigravity-replay"]) {
       registerStateStore(STATE_STORE_REGISTRATIONS.find(registration => registration.name === name)!);
     }
-    const result = sweepExpired(Date.now() + 60 * 60 * 1_000 + 1);
+    // Superseded replay history and Antigravity state retain the one-hour grace,
+    // while an unadvanced Responses chain head is durable session state for 24h.
+    const result = sweepExpired(Date.now() + 24 * 60 * 60 * 1_000 + 1);
     expect(result.rowsRemoved).toBe(2);
     expect(responseStateMetrics().count).toBe(0);
     expect(antigravityReplayMetrics().sessions).toBe(0);

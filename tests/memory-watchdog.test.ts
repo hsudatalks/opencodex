@@ -191,6 +191,9 @@ describe("GET /api/system/memory", () => {
 	        count: number; residentCount: number; spillStubCount: number; tombstoneCount: number;
 	        totalBytes: number; spillPayloadBytes: number; largestBytes: number; oldestAgeMs: number;
 	        spillWrites: number; spillWriteFailures: number; spillReadFailures: number;
+	        headCount: number; supersededCount: number; headTtlEvictions: number;
+	        supersededTtlEvictions: number; supersededCapacityEvictions: number;
+	        emergencyHeadEvictions: number; replayMisses: number;
 	      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
@@ -213,7 +216,7 @@ describe("GET /api/system/memory", () => {
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
     const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(11);
+    expect(responseStateValues).toHaveLength(18);
     expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.appOwnedBytes).toEqual({

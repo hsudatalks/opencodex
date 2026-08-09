@@ -43,8 +43,10 @@ import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCapacityError,
+  CodexAccountCapacityQueueError,
   CodexAccountCooldownError,
   codexAccountCapacityResponse,
+  codexAccountCapacityQueueResponse,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -170,6 +172,7 @@ async function resolveAlternateCompactContext(args: {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+      signal: req.signal,
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -194,6 +197,7 @@ async function resolveAlternateCompactContext(args: {
       return null;
     }
     if (err instanceof CodexAccountCapacityError) return null;
+    if (err instanceof CodexAccountCapacityQueueError) return null;
     // No eligible alternate (all cooled, affinity expired, reauth needed) — the caller
     // returns the first account's rejection unchanged, which is today's behavior.
     return null;
@@ -364,6 +368,7 @@ export async function handleResponsesCompact(
           accountId: route.codexAccountId,
           modelId: selectedModelId,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+          signal: req.signal,
         });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -383,6 +388,7 @@ export async function handleResponsesCompact(
       }
       if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
       if (err instanceof CodexAccountCapacityError) return codexAccountCapacityResponse(err);
+      if (err instanceof CodexAccountCapacityQueueError) return codexAccountCapacityQueueResponse(err);
       if (err instanceof CodexThreadAffinityExpiredError) {
         return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       }
