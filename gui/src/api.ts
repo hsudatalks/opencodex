@@ -41,12 +41,14 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
 const ARK_EMBED_SESSION_FRAGMENT = "ark_admin_session";
 const ARK_EMBED_SESSION_HEADER = "X-Ark-OpenCodex-Session";
+export const ARK_EMBED_SESSION_EXPIRED_MESSAGE = "ark-opencodex-admin-session-expired";
 
 /** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
 let memoryToken: string | null = null;
 let memoryArkEmbedSession: string | null = null;
 let memoryCsrfToken: string | null = null;
 let memorySessionOrigin: string | null = null;
+let arkEmbedRefreshRequested = false;
 
 function readToken(): string | null {
   return memoryArkEmbedSession ?? memoryToken;
@@ -61,6 +63,18 @@ function clearToken(): void {
   memoryArkEmbedSession = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+}
+
+function requestArkEmbedSessionRefresh(failedToken: string | null): boolean {
+  if (arkEmbedRefreshRequested) return true;
+  if (!failedToken || failedToken !== memoryArkEmbedSession || window.parent === window) return false;
+  clearTokenIfCurrent(failedToken);
+  arkEmbedRefreshRequested = true;
+  // No credential crosses this boundary. The parent validates both source window and origin
+  // before minting a replacement session, so a wildcard target is safe when referrerPolicy
+  // intentionally suppresses the Console origin.
+  window.parent.postMessage({ type: ARK_EMBED_SESSION_EXPIRED_MESSAGE }, "*");
+  return true;
 }
 
 function loadArkEmbedSession(): void {
@@ -223,6 +237,11 @@ export function installApiAuthFetch(): void {
     const response = await originalFetch(firstInput, firstInit);
     if (response.status !== 401) return response;
 
+    // Ark embeds cannot silently mint an OpenCodex-local GUI session. Ask the authenticated
+    // Console parent to replace the one-time iframe URL instead of prompting for an admin token
+    // that mobile users neither have nor should receive.
+    if (requestArkEmbedSessionRefresh(token)) return response;
+
     // Another request may have stored a token while this one was in flight (or while prompt blocked).
     const refreshed = readToken();
     if (refreshed && refreshed !== token) {
@@ -251,6 +270,7 @@ export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = p
   memoryArkEmbedSession = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  arkEmbedRefreshRequested = false;
   resolutionInFlight = null;
   rawFetch = null;
   promptCancelled = false;

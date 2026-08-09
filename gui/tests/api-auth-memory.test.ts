@@ -83,6 +83,38 @@ test("Ark embeds keep their short-lived session in memory and attach it only to 
   expect(sessionStorage.length).toBe(0);
 });
 
+test("expired Ark embed sessions ask the authenticated parent for replacement", async () => {
+  const session = "fedcba9876543210fedcba9876543210";
+  window.history.replaceState(null, "", `/#ark_admin_session=${session}`);
+  const messages: Array<{ message: unknown; targetOrigin: string }> = [];
+  Object.defineProperty(window, "parent", {
+    configurable: true,
+    value: {
+      postMessage(message: unknown, targetOrigin: string) {
+        messages.push({ message, targetOrigin });
+      },
+    },
+  });
+  let promptCalls = 0;
+  window.prompt = () => {
+    promptCalls += 1;
+    return null;
+  };
+  const mockFetch = (async () => new Response("unauthorized", { status: 401 })) as typeof fetch;
+
+  await installMockAuthFetch(mockFetch);
+  const response = await fetch("/api/codex-auth/pool-strategy", { method: "PUT" });
+  const concurrentResponse = await fetch("/api/codex-auth/active");
+
+  expect(response.status).toBe(401);
+  expect(concurrentResponse.status).toBe(401);
+  expect(messages).toEqual([{
+    message: { type: "ark-opencodex-admin-session-expired" },
+    targetOrigin: "*",
+  }]);
+  expect(promptCalls).toBe(0);
+});
+
 test("prompted API tokens stay memory-only and are not written to sessionStorage", async () => {
   sessionStorage.setItem(LEGACY_TOKEN_KEY, "legacy-secret");
 

@@ -207,7 +207,11 @@ export default function CodexPoolStrategySetting({
       hydratedRef.current = true;
       setHydrated(true);
     } else {
-      setError(t("accountPool.strategyUpdateFailed"));
+      const detail = [
+        result.status ? String(result.status) : null,
+        result.message,
+      ].filter((value): value is string => Boolean(value)).join(": ");
+      setError(`${t("accountPool.strategyUpdateFailed")}${detail ? ` ${detail}` : ""}`);
       setStrategy(previousStrategy);
       onStrategyResolved?.(previousStrategy);
       setStickyLimit(previousSticky);

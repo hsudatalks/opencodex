@@ -150,6 +150,19 @@ describe("account pool strategy helpers", () => {
     });
   });
 
+  test("putCodexPoolStrategy preserves HTTP failure details", async () => {
+    const result = await putCodexPoolStrategy(
+      "http://proxy",
+      { officialResetAt: Date.now() + 60_000 },
+      async () => new Response(JSON.stringify({ error: "session expired" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    expect(result).toEqual({ ok: false, status: 401, message: "session expired" });
+  });
+
   test("round-trips timezone-free reset inputs as Singapore time", () => {
     const resetAt = Date.parse("2026-08-10T09:30:00+08:00");
     expect(toSingaporeDateTimeInput(resetAt)).toBe("2026-08-10T09:30");

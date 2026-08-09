@@ -51,7 +51,7 @@ export async function putCodexPoolStrategy(
   strategy: AccountPoolStrategy;
   stickyLimit: number;
   officialResetAt: number | null;
-} | { ok: false }> {
+} | { ok: false; status?: number; message?: string }> {
   if (body.strategy === undefined && body.stickyLimit === undefined && body.officialResetAt === undefined) {
     return { ok: false };
   }
@@ -65,7 +65,23 @@ export async function putCodexPoolStrategy(
         ...(body.officialResetAt !== undefined ? { officialResetAt: body.officialResetAt } : {}),
       }),
     });
-    if (!response.ok) return { ok: false };
+    if (!response.ok) {
+      let message: string | undefined;
+      try {
+        const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+          const json = await response.json() as { error?: unknown; message?: unknown };
+          const candidate = typeof json.error === "string" ? json.error : json.message;
+          if (typeof candidate === "string" && candidate.trim()) message = candidate.trim();
+        } else {
+          const text = (await response.text()).trim();
+          if (text && text.length <= 240) message = text;
+        }
+      } catch {
+        // The HTTP status remains enough to distinguish auth, validation, and server failures.
+      }
+      return { ok: false, status: response.status, message };
+    }
     const json = await response.json() as {
       accountPoolStrategy?: unknown;
       accountPoolStickyLimit?: unknown;
@@ -79,7 +95,10 @@ export async function putCodexPoolStrategy(
         ? json.accountPoolOfficialResetAt
         : null,
     };
-  } catch {
-    return { ok: false };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 }
