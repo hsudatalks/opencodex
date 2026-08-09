@@ -114,18 +114,21 @@ describe("no admission decision changed", () => {
 });
 
 describe("the two wrappers still differ", () => {
-  test("bearer is accepted by the broad path and rejected by the Responses path", () => {
+  test("a configured admission bearer is accepted by the Responses path", () => {
     const config = remoteConfig();
     const bearer = request({ authorization: "Bearer ocx_data_firstsecret" });
 
-    // /v1/models and /v1/messages take bearer...
     expect(resolveApiAuth(bearer, config)).toEqual({ kind: "configured", keyId: "first-key" });
     expect(hasValidApiAuth(bearer, config)).toBe(true);
+    expect(resolveResponsesApiAuth(bearer, config)).toEqual({ kind: "configured", keyId: "first-key" });
+    expect(requireResponsesApiAuth(bearer, config)).toBeNull();
+  });
 
-    // ...but Responses/Chat must not, because Authorization there may belong to
-    // Codex Direct passthrough.
-    expect(resolveResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config)).toBeNull();
-    expect(requireResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config)?.status).toBe(401);
+  test("an arbitrary upstream bearer is not accepted as Responses admission", () => {
+    const config = remoteConfig();
+    const upstream = request({ authorization: "Bearer chatgpt-upstream-token" });
+    expect(resolveResponsesApiAuth(upstream, config)).toBeNull();
+    expect(requireResponsesApiAuth(upstream, config)?.status).toBe(401);
   });
 
   test("x-api-key is accepted only by the broad path", () => {
@@ -140,6 +143,15 @@ describe("the two wrappers still differ", () => {
     expect(resolveApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key" });
     expect(resolveResponsesApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key" });
     expect(requireResponsesApiAuth(dedicated(), config)).toBeNull();
+  });
+
+  test("the dedicated admission header takes precedence over bearer", () => {
+    const config = remoteConfig();
+    const both = request({
+      "x-opencodex-api-key": "ocx_data_secondsecret",
+      authorization: "Bearer ocx_data_firstsecret",
+    });
+    expect(resolveResponsesApiAuth(both, config)).toEqual({ kind: "configured", keyId: "second-key" });
   });
 });
 

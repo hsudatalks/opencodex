@@ -327,17 +327,16 @@ export interface ApiAuthMatrixRow {
 
 /**
  * Which headers each data-plane endpoint actually accepts, shipped to the GUI so
- * it stops describing the rule from memory. The dashboard has been telling users
- * that Chat Completions takes `Authorization: Bearer`, which this file has never
- * allowed — that route uses the dedicated-header-only wrapper because
- * `Authorization` there may belong to Codex Direct passthrough.
+ * it stops describing the rule from memory. Responses-shaped routes accept a
+ * bearer only when it resolves to one of OpenCodex's own admission credentials;
+ * an arbitrary bearer may belong to Codex Direct passthrough and is rejected.
  *
  * It lives next to the wrappers it describes, and a test drives real requests
  * against every cell rather than reading the table back to itself.
  */
 export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
-  { endpoint: "/v1/responses", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
-  { endpoint: "/v1/chat/completions", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
+  { endpoint: "/v1/responses", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
+  { endpoint: "/v1/chat/completions", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
   { endpoint: "/v1/messages", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
 ];
@@ -393,17 +392,19 @@ export function requireApiAuth(req: Request, config: RequestPolicyView, _kind: "
 }
 
 /**
- * Admission for OpenAI Responses transports whose Authorization header belongs to
- * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
- * domains can never be confused.
+ * Admission for OpenAI Responses transports whose Authorization header can belong
+ * either to Codex Direct or to the proxy. A dedicated credential wins when both
+ * are present. Bearer fallback is accepted only when the token resolves to an
+ * OpenCodex data-plane admission, so an upstream OAuth bearer can never be
+ * mistaken for proxy authentication.
  */
 export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
   if (!isApiAuthRequired(config)) return { kind: "loopback" };
-  // Dedicated header ONLY. `Authorization` on these transports may belong to
-  // Codex Direct passthrough, and the two bearer domains must stay unconfusable.
-  const actual = req.headers.get("x-opencodex-api-key")?.trim();
-  if (!actual) return null;
-  return resolveDataPlaneAdmissionSecret(actual, config);
+  const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
+  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config);
+  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!bearer) return null;
+  return resolveDataPlaneAdmissionSecret(bearer, config);
 }
 
 export function requireResponsesApiAuth(req: Request, config: RequestPolicyView): Response | null {
