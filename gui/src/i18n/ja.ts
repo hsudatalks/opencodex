@@ -1391,6 +1391,10 @@ export const ja: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "1 から 100 までの整数を入力してください",
   "accountPool.strategyLoadFailed": "ローテーション戦略を読み込めませんでした。",
   "accountPool.strategyUpdateFailed": "ローテーション戦略を保存できませんでした。",
+  "accountPool.officialReset": "公式運用リセット",
+  "accountPool.officialResetHelp": "運用チームがプール全体のリセットを確認した場合、週次および手動リセット期限と合わせて新規タスクの割り当てに使用します。",
+  "accountPool.officialResetInvalid": "未来の日時を選択してください。",
+  "accountPool.singaporeTime": "すべてのリセット時刻はシンガポール時間（SGT、UTC+8）で表示・解釈されます。",
 
   "accountPool.priority": "選択順序",
   "accountPool.priorityAria": "このアカウントの選択順序",

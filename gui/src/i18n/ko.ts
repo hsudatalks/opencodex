@@ -1012,6 +1012,10 @@ export const ko: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "1에서 100 사이의 정수를 입력하세요",
   "accountPool.strategyLoadFailed": "로테이션 전략을 불러오지 못했습니다.",
   "accountPool.strategyUpdateFailed": "로테이션 전략을 저장하지 못했습니다.",
+  "accountPool.officialReset": "공식 운영 초기화",
+  "accountPool.officialResetHelp": "운영팀이 풀 전체 초기화를 확인하면 주간 및 수동 초기화 기한과 함께 새 작업 배정에 사용합니다.",
+  "accountPool.officialResetInvalid": "미래 날짜와 시간을 선택하세요.",
+  "accountPool.singaporeTime": "모든 초기화 시간은 싱가포르 시간(SGT, UTC+8)으로 표시하고 해석합니다.",
 
   "accountPool.priority": "선택 순서",
   "accountPool.priorityAria": "이 계정의 선택 순서",

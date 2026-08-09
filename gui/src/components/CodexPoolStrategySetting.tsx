@@ -11,10 +11,15 @@ import {
 } from "../account-pool-strategy";
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
 import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
+import {
+  fromSingaporeDateTimeInput,
+  toSingaporeDateTimeInput,
+} from "../singapore-time";
 
 function strategyFieldsFromActive(value: unknown): {
   strategy: AccountPoolStrategy;
   stickyLimit: number;
+  officialResetAt: number | null;
 } | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
@@ -22,6 +27,9 @@ function strategyFieldsFromActive(value: unknown): {
   return {
     strategy: normalizeAccountPoolStrategy(row.accountPoolStrategy),
     stickyLimit: normalizeAccountPoolStickyLimit(row.accountPoolStickyLimit),
+    officialResetAt: typeof row.accountPoolOfficialResetAt === "number"
+      ? row.accountPoolOfficialResetAt
+      : null,
   };
 }
 
@@ -46,6 +54,8 @@ export default function CodexPoolStrategySetting({
   const [strategy, setStrategy] = useState<AccountPoolStrategy>(DEFAULT_ACCOUNT_POOL_STRATEGY);
   const [stickyLimit, setStickyLimit] = useState(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT);
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
+  const [officialResetAt, setOfficialResetAt] = useState<number | null>(null);
+  const [officialResetDraft, setOfficialResetDraft] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const hydratedRef = useRef(false);
   const [saving, setSaving] = useState(false);
@@ -59,6 +69,7 @@ export default function CodexPoolStrategySetting({
   const applyServer = useCallback((json: {
     accountPoolStrategy?: unknown;
     accountPoolStickyLimit?: unknown;
+    accountPoolOfficialResetAt?: unknown;
   }) => {
     const nextStrategy = normalizeAccountPoolStrategy(json.accountPoolStrategy);
     const nextSticky = normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit);
@@ -66,6 +77,11 @@ export default function CodexPoolStrategySetting({
     onStrategyResolved?.(nextStrategy);
     setStickyLimit(nextSticky);
     setStickyDraft(String(nextSticky));
+    const nextOfficialResetAt = typeof json.accountPoolOfficialResetAt === "number"
+      ? json.accountPoolOfficialResetAt
+      : null;
+    setOfficialResetAt(nextOfficialResetAt);
+    setOfficialResetDraft(toSingaporeDateTimeInput(nextOfficialResetAt));
     hydratedRef.current = true;
     setHydrated(true);
     setLoadError(false);
@@ -78,6 +94,7 @@ export default function CodexPoolStrategySetting({
     applyServer({
       accountPoolStrategy: fields.strategy,
       accountPoolStickyLimit: fields.stickyLimit,
+      accountPoolOfficialResetAt: fields.officialResetAt,
     });
   }, [applyServer]);
 
@@ -88,6 +105,7 @@ export default function CodexPoolStrategySetting({
       const payload = await res.json() as {
         accountPoolStrategy?: unknown;
         accountPoolStickyLimit?: unknown;
+        accountPoolOfficialResetAt?: unknown;
       };
       // A save started while this GET was in flight — retry once after it settles.
       if (savingRef.current) {
@@ -155,10 +173,12 @@ export default function CodexPoolStrategySetting({
   const save = useCallback(async (next: {
     strategy?: AccountPoolStrategy;
     stickyLimit?: number;
+    officialResetAt?: number | null;
   }) => {
     if (savingRef.current) return;
     const previousStrategy = strategy;
     const previousSticky = stickyLimit;
+    const previousOfficialResetAt = officialResetAt;
     if (next.strategy !== undefined) {
       setStrategy(next.strategy);
       onStrategyResolved?.(next.strategy);
@@ -166,6 +186,10 @@ export default function CodexPoolStrategySetting({
     if (next.stickyLimit !== undefined) {
       setStickyLimit(next.stickyLimit);
       setStickyDraft(String(next.stickyLimit));
+    }
+    if (next.officialResetAt !== undefined) {
+      setOfficialResetAt(next.officialResetAt);
+      setOfficialResetDraft(toSingaporeDateTimeInput(next.officialResetAt));
     }
     savingRef.current = true;
     setSaving(true);
@@ -178,6 +202,8 @@ export default function CodexPoolStrategySetting({
       onStrategyResolved?.(result.strategy);
       setStickyLimit(result.stickyLimit);
       setStickyDraft(String(result.stickyLimit));
+      setOfficialResetAt(result.officialResetAt);
+      setOfficialResetDraft(toSingaporeDateTimeInput(result.officialResetAt));
       hydratedRef.current = true;
       setHydrated(true);
     } else {
@@ -186,11 +212,13 @@ export default function CodexPoolStrategySetting({
       onStrategyResolved?.(previousStrategy);
       setStickyLimit(previousSticky);
       setStickyDraft(String(previousSticky));
+      setOfficialResetAt(previousOfficialResetAt);
+      setOfficialResetDraft(toSingaporeDateTimeInput(previousOfficialResetAt));
     }
     savingRef.current = false;
     setSaving(false);
     scheduleDeferredActiveRefresh();
-  }, [apiBase, onStrategyResolved, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
+  }, [apiBase, officialResetAt, onStrategyResolved, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
 
   // Block writes until /active confirms — defaults paint for CLS but must not overwrite server state.
   const controlsDisabled = saving || loadError || !hydrated;
@@ -237,6 +265,55 @@ export default function CodexPoolStrategySetting({
             void save({ stickyLimit: parsed });
           }}
         />
+      )}
+      {!loadError && (
+        <div className="setting-row account-pool-official-reset">
+          <label className="setting-label" htmlFor="codex-pool-official-reset">
+            <span className="title">{t("accountPool.officialReset")}</span>
+            <span className="desc">{t("accountPool.officialResetHelp")}</span>
+            <span className="desc">{t("accountPool.singaporeTime")}</span>
+          </label>
+          <div className="setting-controls account-pool-official-reset__controls">
+            <input
+              id="codex-pool-official-reset"
+              className="input mono"
+              type="datetime-local"
+              step={60}
+              value={officialResetDraft}
+              disabled={controlsDisabled}
+              aria-label={t("accountPool.officialReset")}
+              onChange={(event) => setOfficialResetDraft(event.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={controlsDisabled || (() => {
+                const parsed = fromSingaporeDateTimeInput(officialResetDraft);
+                return parsed === null || parsed === officialResetAt;
+              })()}
+              onClick={() => {
+                const parsed = fromSingaporeDateTimeInput(officialResetDraft);
+                if (parsed === null || parsed <= Date.now()) {
+                  setError(t("accountPool.officialResetInvalid"));
+                  return;
+                }
+                void save({ officialResetAt: parsed });
+              }}
+            >
+              {saving ? t("common.saving") : t("common.save")}
+            </button>
+            {officialResetAt !== null && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={controlsDisabled}
+                onClick={() => { void save({ officialResetAt: null }); }}
+              >
+                {t("common.remove")}
+              </button>
+            )}
+          </div>
+        </div>
       )}
       {error && (
         <div role="alert" className="card-sub account-pool-strategy-card__error">

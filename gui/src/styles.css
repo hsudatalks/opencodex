@@ -1674,6 +1674,21 @@ dialog.modal-overlay::backdrop {
   justify-content: space-between;
   border-radius: var(--radius-sm);
 }
+.account-pool-official-reset {
+  margin: 0 -16px -14px;
+  border-top: 1px solid var(--border-soft);
+}
+.account-pool-official-reset__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.account-pool-official-reset__controls .input {
+  width: 218px;
+  max-width: 100%;
+}
 .account-pool-strategy-controls .select-trigger > span {
   overflow: hidden;
   text-overflow: ellipsis;

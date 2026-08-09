@@ -1005,6 +1005,10 @@ export const zh: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "请输入 1 到 100 之间的整数",
   "accountPool.strategyLoadFailed": "无法加载轮换策略。",
   "accountPool.strategyUpdateFailed": "无法保存轮换策略。",
+  "accountPool.officialReset": "官方运营重置",
+  "accountPool.officialResetHelp": "运营确认账号池会统一重置时，将此期限与周重置、手动重置期限一起用于新任务调度。",
+  "accountPool.officialResetInvalid": "请选择未来的日期和时间。",
+  "accountPool.singaporeTime": "所有重置时间均按新加坡时间显示和解析（SGT，UTC+8）。",
 
   "accountPool.priority": "选择顺序",
   "accountPool.priorityAria": "此账号的选择顺序",

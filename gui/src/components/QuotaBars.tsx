@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Locale, TFn } from "../i18n/shared";
+import { SINGAPORE_TIME_ZONE, singaporeDateKey } from "../singapore-time";
 import { useI18n } from "../i18n/shared";
 import { IconAlert } from "../icons";
 import { type AccountQuota, normalizeQuotaForPlan } from "../codex-quota-utils";
@@ -344,14 +345,22 @@ function formatResetAt(resetAt: number | undefined, t: TFn, locale: Locale): { d
   if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return { day: "", time: "" };
   const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
   const date = new Date(ms);
-  const now = new Date();
+  const now = Date.now();
   const tag = bcp47(locale);
-  const time = new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
-  const isToday = date.getFullYear() === now.getFullYear()
-    && date.getMonth() === now.getMonth()
-    && date.getDate() === now.getDate();
+  const time = new Intl.DateTimeFormat(tag, {
+    timeZone: SINGAPORE_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(date);
+  const isToday = singaporeDateKey(ms) === singaporeDateKey(now);
   if (isToday) return { day: t("codexAuth.today"), time };
-  const day = new Intl.DateTimeFormat(tag, { day: "numeric", month: "short" }).format(date);
+  const day = new Intl.DateTimeFormat(tag, {
+    timeZone: SINGAPORE_TIME_ZONE,
+    day: "numeric",
+    month: "short",
+  }).format(date);
   return { day, time };
 }
 
@@ -366,18 +375,25 @@ export function formatResetFuture(
   const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
   const date = new Date(ms);
   const tag = bcp47(locale);
-  const time = new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
-  const nowDate = new Date(now);
-  const startOfToday = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
-  const startOfTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const dayDiff = Math.round((startOfTarget - startOfToday) / 86_400_000);
+  const time = new Intl.DateTimeFormat(tag, {
+    timeZone: SINGAPORE_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(date);
+  const dayDiff = Math.round((
+    Date.parse(`${singaporeDateKey(ms)}T00:00:00+08:00`)
+    - Date.parse(`${singaporeDateKey(now)}T00:00:00+08:00`)
+  ) / 86_400_000);
 
   if (dayDiff === 1) {
     return t("quota.resetsTomorrow", { time });
   }
 
-  const includeYear = date.getFullYear() !== nowDate.getFullYear();
+  const includeYear = singaporeDateKey(ms).slice(0, 4) !== singaporeDateKey(now).slice(0, 4);
   const dateStr = new Intl.DateTimeFormat(tag, {
+    timeZone: SINGAPORE_TIME_ZONE,
     day: "numeric",
     month: "short",
     ...(includeYear ? { year: "numeric" as const } : {}),

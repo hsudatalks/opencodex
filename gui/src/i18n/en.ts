@@ -1443,6 +1443,10 @@ export const en = {
   "accountPool.stickyLimitInvalid": "Enter a whole number from 1 to 100",
   "accountPool.strategyLoadFailed": "Rotation strategy could not be loaded.",
   "accountPool.strategyUpdateFailed": "Rotation strategy could not be saved.",
+  "accountPool.officialReset": "Official operations reset",
+  "accountPool.officialResetHelp": "When operations confirms a pool-wide reset, use its deadline together with weekly and manual-reset deadlines to schedule new tasks.",
+  "accountPool.officialResetInvalid": "Choose a future date and time.",
+  "accountPool.singaporeTime": "All reset times are interpreted and displayed in Singapore time (SGT, UTC+8).",
 
   // Selection order. User-visible copy stays in sequence words (first/earlier/later/last);
   // only identifiers use the internal "priority" name.

@@ -14,6 +14,10 @@ import {
 import AccountPoolStrategyControls from "../src/components/AccountPoolStrategyControls";
 import CodexPoolStrategySetting from "../src/components/CodexPoolStrategySetting";
 import { LanguageProvider } from "../src/i18n/provider";
+import {
+  fromSingaporeDateTimeInput,
+  toSingaporeDateTimeInput,
+} from "../src/singapore-time";
 
 let previousLanguage: unknown;
 
@@ -131,7 +135,12 @@ describe("account pool strategy helpers", () => {
         }), { status: 200 });
       },
     );
-    expect(result).toEqual({ ok: true, strategy: "round-robin", stickyLimit: 3 });
+    expect(result).toEqual({
+      ok: true,
+      strategy: "round-robin",
+      stickyLimit: 3,
+      officialResetAt: null,
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("http://proxy/api/codex-auth/pool-strategy");
     expect(calls[0]!.init.method).toBe("PUT");
@@ -139,6 +148,12 @@ describe("account pool strategy helpers", () => {
       strategy: "round-robin",
       stickyLimit: 3,
     });
+  });
+
+  test("round-trips timezone-free reset inputs as Singapore time", () => {
+    const resetAt = Date.parse("2026-08-10T09:30:00+08:00");
+    expect(toSingaporeDateTimeInput(resetAt)).toBe("2026-08-10T09:30");
+    expect(fromSingaporeDateTimeInput("2026-08-10T09:30")).toBe(resetAt);
   });
 });
 

@@ -1433,6 +1433,10 @@ export const ru: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "Введите целое число от 1 до 100",
   "accountPool.strategyLoadFailed": "Не удалось загрузить стратегию ротации.",
   "accountPool.strategyUpdateFailed": "Не удалось сохранить стратегию ротации.",
+  "accountPool.officialReset": "Официальный операционный сброс",
+  "accountPool.officialResetHelp": "После подтверждения общего сброса пула его срок используется вместе с недельным и ручным сбросом для новых задач.",
+  "accountPool.officialResetInvalid": "Выберите будущую дату и время.",
+  "accountPool.singaporeTime": "Все сроки сброса отображаются и интерпретируются по времени Сингапура (SGT, UTC+8).",
 
   "accountPool.priority": "Порядок выбора",
   "accountPool.priorityAria": "Порядок выбора для этого аккаунта",

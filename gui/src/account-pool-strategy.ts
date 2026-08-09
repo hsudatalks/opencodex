@@ -40,10 +40,21 @@ export type PoolStrategyFetch = (input: string, init: RequestInit) => Promise<Re
 
 export async function putCodexPoolStrategy(
   apiBase: string,
-  body: { strategy?: AccountPoolStrategy; stickyLimit?: number },
+  body: {
+    strategy?: AccountPoolStrategy;
+    stickyLimit?: number;
+    officialResetAt?: number | null;
+  },
   fetchImpl: PoolStrategyFetch = (input, init) => fetch(input, init),
-): Promise<{ ok: true; strategy: AccountPoolStrategy; stickyLimit: number } | { ok: false }> {
-  if (body.strategy === undefined && body.stickyLimit === undefined) return { ok: false };
+): Promise<{
+  ok: true;
+  strategy: AccountPoolStrategy;
+  stickyLimit: number;
+  officialResetAt: number | null;
+} | { ok: false }> {
+  if (body.strategy === undefined && body.stickyLimit === undefined && body.officialResetAt === undefined) {
+    return { ok: false };
+  }
   try {
     const response = await fetchImpl(`${apiBase}/api/codex-auth/pool-strategy`, {
       method: "PUT",
@@ -51,17 +62,22 @@ export async function putCodexPoolStrategy(
       body: JSON.stringify({
         ...(body.strategy !== undefined ? { strategy: body.strategy } : {}),
         ...(body.stickyLimit !== undefined ? { stickyLimit: body.stickyLimit } : {}),
+        ...(body.officialResetAt !== undefined ? { officialResetAt: body.officialResetAt } : {}),
       }),
     });
     if (!response.ok) return { ok: false };
     const json = await response.json() as {
       accountPoolStrategy?: unknown;
       accountPoolStickyLimit?: unknown;
+      accountPoolOfficialResetAt?: unknown;
     };
     return {
       ok: true,
       strategy: normalizeAccountPoolStrategy(json.accountPoolStrategy ?? body.strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit ?? body.stickyLimit),
+      officialResetAt: typeof json.accountPoolOfficialResetAt === "number"
+        ? json.accountPoolOfficialResetAt
+        : null,
     };
   } catch {
     return { ok: false };

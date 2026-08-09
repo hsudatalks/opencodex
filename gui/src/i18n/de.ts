@@ -988,6 +988,10 @@ export const de: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "Gib eine ganze Zahl von 1 bis 100 ein",
   "accountPool.strategyLoadFailed": "Rotationsstrategie konnte nicht geladen werden.",
   "accountPool.strategyUpdateFailed": "Rotationsstrategie konnte nicht gespeichert werden.",
+  "accountPool.officialReset": "Offizieller Betriebs-Reset",
+  "accountPool.officialResetHelp": "Wenn der Betrieb einen poolweiten Reset bestaetigt, wird dessen Frist zusammen mit Wochen- und manuellen Reset-Fristen fuer neue Aufgaben verwendet.",
+  "accountPool.officialResetInvalid": "Waehlen Sie ein zukuenftiges Datum und eine Uhrzeit.",
+  "accountPool.singaporeTime": "Alle Reset-Zeiten werden in Singapur-Zeit (SGT, UTC+8) angezeigt und interpretiert.",
 
   "accountPool.priority": "Auswahlreihenfolge",
   "accountPool.priorityAria": "Auswahlreihenfolge für dieses Konto",

@@ -20,17 +20,20 @@ export function cachedNumberFormat(
 }
 
 const CREDIT_DATE_OPTIONS: Intl.DateTimeFormatOptions = {
+  timeZone: "Asia/Singapore",
   month: "short",
   day: "numeric",
   year: "numeric",
 };
 
 const CREDIT_DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  timeZone: "Asia/Singapore",
   month: "short",
   day: "numeric",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+  timeZoneName: "short",
 };
 
 const dateFormatters = new Map<string, Intl.DateTimeFormat>();

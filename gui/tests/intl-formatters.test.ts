@@ -9,12 +9,10 @@ describe("credit date formatting", () => {
     expect(formatCreditDate(iso, "de-DE")).not.toContain(time);
   });
 
-  test("includes the local time for expiration dates", () => {
+  test("formats expiration dates in Singapore time", () => {
     const iso = "2026-07-31T12:34:56Z";
-
-    const time = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
-
-    expect(formatCreditDateTime(iso, "de-DE")).toContain(time);
+    expect(formatCreditDateTime(iso, "de-DE")).toContain("20:34");
+    expect(formatCreditDateTime(iso, "de-DE")).not.toContain("12:34");
     expect(formatCreditDateTime(iso, "de-DE")).not.toBe("—");
   });
 
