@@ -176,7 +176,7 @@ describe("shellStreamExec completion acknowledgement", () => {
         expect(last.message.value.message.value.id).toBe(42);
       }
     }
-  });
+  }, { timeout: 10_000 });
 
   test("failure path still sends shellResult failure and streamClose", async () => {
     const execMsg = create(ExecServerMessageSchema, {

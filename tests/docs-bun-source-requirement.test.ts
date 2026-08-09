@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 /**
  * Every contributor entry point must say that building from source needs a local `bun`, and
  * must keep that separate from the bundled runtime that ships inside the npm package. Users
- * who install `ocx` never need their own Bun; contributors always do.
+ * who install `ugw` never need their own Bun; contributors always do.
  *
  * Each file is checked as one whole normalized paragraph rather than as scattered fragments.
  * Matching fragments independently across a whole file passes even after the explanatory
@@ -25,7 +25,7 @@ const CASES = [
     path: "../README.md",
     paragraph:
       "Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm"
-      + " package's bundled Bun runtime, which is used only by installed `ocx` commands.",
+      + " package's bundled Bun runtime, which is used only by installed `ugw` commands.",
   },
   {
     path: "../docs-site/src/content/docs/contributing.md",
