@@ -1,9 +1,11 @@
 import {
-  currentUsageLogRevision,
+  currentUsageLedgerRevision,
   readUsageSnapshotForManagement,
   usageLogRevisionKey,
   type PersistedUsageEntry,
 } from "../../usage/log";
+import type { SQL } from "bun";
+import { USAGE_DIMENSION_KIND, usagePostgresClient } from "../../usage/postgres-ingest";
 
 /**
  * Per-key usage as the API tab renders it.
@@ -111,6 +113,7 @@ export function rollupApiKeyUsage(
  * caching it costs nothing; a new row changes the revision and invalidates it.
  */
 let rollupCache: { revisionKey: string; expiresAt: number; snapshot: ApiKeyUsageSnapshot } | null = null;
+let postgresRollupCaches = new WeakMap<SQL, Map<string, { expiresAt: number; snapshot: ApiKeyUsageSnapshot }>>();
 
 /**
  * The rollup is a function of the log AND of the clock: a request ages out of
@@ -127,6 +130,100 @@ const ROLLUP_CACHE_TTL_MS = 60_000;
 /** Test seam: the cache is module state and would otherwise leak between cases. */
 export function clearApiKeyUsageCacheForTests(): void {
   rollupCache = null;
+  postgresRollupCaches = new WeakMap();
+}
+
+type ApiKeyUsageSqlRow = {
+  api_key_id: string | null;
+  requests_7d: number | string | bigint | null;
+  total_requests: number | string | bigint | null;
+  last_used_at: Date | string | null;
+  attribution_since: Date | string | null;
+};
+
+function count(value: ApiKeyUsageSqlRow["total_requests"]): number {
+  const parsed = typeof value === "bigint" ? Number(value) : Number(value ?? 0);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isoTimestamp(value: Date | string | null): string | undefined {
+  if (value === null) return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/** Exact all-history rollup over normalized facts. No raw request JSON or label scan. */
+export async function readApiKeyUsageRollupFromPostgres(
+  sql: SQL,
+  configuredIds: string[],
+  now: number = Date.now(),
+): Promise<ApiKeyUsageSnapshot> {
+  const duplicated = new Set<string>();
+  const uniqueIds: string[] = [];
+  const seen = new Set<string>();
+  for (const id of configuredIds) {
+    if (seen.has(id)) duplicated.add(id);
+    else uniqueIds.push(id);
+    seen.add(id);
+  }
+
+  const rows = await sql.unsafe<ApiKeyUsageSqlRow[]>(`
+    WITH wanted(value) AS (
+      SELECT value FROM jsonb_array_elements_text($1::jsonb)
+    ), attribution AS (
+      SELECT min(occurred_at) AS attribution_since
+      FROM opencodex_usage.requests
+      WHERE admission_code IN (1, 2, 3)
+    ), per_key AS (
+      SELECT d.value AS api_key_id,
+        count(*) FILTER (WHERE r.occurred_at >= $2::timestamptz - interval '7 days') AS requests_7d,
+        count(*) AS total_requests,
+        max(r.occurred_at) AS last_used_at
+      FROM wanted w
+      JOIN opencodex_usage.dimensions d
+        ON d.kind = $3::smallint AND d.value = w.value
+      JOIN opencodex_usage.requests r ON r.api_key_id = d.id
+      WHERE r.admission_code = 1
+      GROUP BY d.value
+    )
+    SELECT p.api_key_id, p.requests_7d, p.total_requests, p.last_used_at,
+      a.attribution_since
+    FROM attribution a
+    LEFT JOIN per_key p ON true
+  `, [JSON.stringify(uniqueIds), new Date(now).toISOString(), USAGE_DIMENSION_KIND.apiKey]);
+
+  const rollup = new Map<string, ApiKeyUsage>();
+  for (const id of uniqueIds) rollup.set(id, { requests7d: 0, totalRequests: 0 });
+  for (const row of rows) {
+    if (!row.api_key_id || !seen.has(row.api_key_id)) continue;
+    const lastUsedAt = isoTimestamp(row.last_used_at);
+    rollup.set(row.api_key_id, {
+      requests7d: count(row.requests_7d),
+      totalRequests: count(row.total_requests),
+      ...(lastUsedAt ? { lastUsedAt } : {}),
+    });
+  }
+  for (const id of duplicated) rollup.set(id, { ambiguous: true });
+  const attributionSince = isoTimestamp(rows[0]?.attribution_since ?? null);
+  return { rollup, ...(attributionSince ? { attributionSince } : {}) };
+}
+
+async function cachedApiKeyUsageRollupFromPostgres(
+  sql: SQL,
+  configuredIds: string[],
+  now: number,
+): Promise<ApiKeyUsageSnapshot> {
+  let cache = postgresRollupCaches.get(sql);
+  if (!cache) {
+    cache = new Map();
+    postgresRollupCaches.set(sql, cache);
+  }
+  const key = JSON.stringify(configuredIds);
+  const cached = cache.get(key);
+  if (cached && now < cached.expiresAt) return cached.snapshot;
+  const snapshot = await readApiKeyUsageRollupFromPostgres(sql, configuredIds, now);
+  cache.set(key, { expiresAt: now + ROLLUP_CACHE_TTL_MS, snapshot });
+  return snapshot;
 }
 
 /**
@@ -142,8 +239,19 @@ export async function readApiKeyUsageRollup(configuredIds: string[], maxReadByte
   // config could be served the other's cached rollup.
   const idsKey = JSON.stringify([configuredIds, maxReadBytes]);
   const now = Date.now();
+  const postgres = usagePostgresClient();
+  if (postgres) {
+    try {
+      return await cachedApiKeyUsageRollupFromPostgres(postgres, configuredIds, now);
+    } catch (error) {
+      console.warn(
+        "[usage-postgres] API key rollup unavailable; falling back to JSONL:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
   try {
-    const observedKey = `${usageLogRevisionKey(currentUsageLogRevision())}|${idsKey}`;
+    const observedKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}|${idsKey}`;
     if (rollupCache?.revisionKey === observedKey && now < rollupCache.expiresAt) {
       return rollupCache.snapshot;
     }

@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { AUTH_MATRIX } from "../src/server/auth-cors";
-import { clearApiKeyUsageCacheForTests, rollupApiKeyUsage } from "../src/server/management/api-key-usage";
+import type { SQL } from "bun";
+import {
+  clearApiKeyUsageCacheForTests,
+  readApiKeyUsageRollupFromPostgres,
+  rollupApiKeyUsage,
+} from "../src/server/management/api-key-usage";
 import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../src/usage/log";
 import type { OcxConfig } from "../src/types";
 
@@ -422,6 +427,65 @@ describe("rollupApiKeyUsage", () => {
   test("no attributable row means no attributionSince at all", () => {
     const { attributionSince } = rollupApiKeyUsage([row({})], ["k"], now);
     expect(attributionSince).toBeUndefined();
+  });
+});
+
+describe("readApiKeyUsageRollupFromPostgres", () => {
+  test("returns exact normalized facts, zeroes unused keys, and preserves duplicate ambiguity", async () => {
+    const calls: Array<{ query: string; params: unknown[] }> = [];
+    const sql = {
+      async unsafe(query: string, params: unknown[]) {
+        calls.push({ query, params });
+        return [{
+          api_key_id: "used",
+          requests_7d: "7",
+          total_requests: 12n,
+          last_used_at: "2026-07-30T12:00:00.000Z",
+          attribution_since: new Date("2026-07-01T00:00:00.000Z"),
+        }];
+      },
+    } as unknown as SQL;
+    const now = new Date("2026-07-31T00:00:00.000Z").getTime();
+
+    const result = await readApiKeyUsageRollupFromPostgres(
+      sql,
+      ["used", "unused", "duplicate", "duplicate"],
+      now,
+    );
+
+    expect(result.attributionSince).toBe("2026-07-01T00:00:00.000Z");
+    expect(result.rollup.get("used")).toEqual({
+      requests7d: 7,
+      totalRequests: 12,
+      lastUsedAt: "2026-07-30T12:00:00.000Z",
+    });
+    expect(result.rollup.get("unused")).toEqual({ requests7d: 0, totalRequests: 0 });
+    expect(result.rollup.get("duplicate")).toEqual({ ambiguous: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params).toEqual([
+      JSON.stringify(["used", "unused", "duplicate"]),
+      "2026-07-31T00:00:00.000Z",
+      16,
+    ]);
+    expect(calls[0]?.query).toContain("opencodex_usage.requests");
+  });
+
+  test("a database with attribution but no matching key returns explicit zero usage", async () => {
+    const sql = {
+      async unsafe() {
+        return [{
+          api_key_id: null,
+          requests_7d: null,
+          total_requests: null,
+          last_used_at: null,
+          attribution_since: "2026-07-20T00:00:00.000Z",
+        }];
+      },
+    } as unknown as SQL;
+
+    const result = await readApiKeyUsageRollupFromPostgres(sql, ["unused"]);
+    expect(result.rollup.get("unused")).toEqual({ requests7d: 0, totalRequests: 0 });
+    expect(result.attributionSince).toBe("2026-07-20T00:00:00.000Z");
   });
 });
 
