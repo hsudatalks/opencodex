@@ -2404,6 +2404,43 @@ describe("server local API auth", () => {
     }
   }, { timeout: SERVER_BUDGET_MS });
 
+  test.each(["legacy-tee", "eager-relay"] as const)(
+    "model capacity SSE becomes client-retryable without rotating accounts (%s)",
+    async (streamMode) => {
+      const harness = await startPoolRetryHarness(() => new Response(
+        [
+          'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+          "",
+          'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ), { streamMode });
+      try {
+        const text = await (await harness.request({ stream: true })).text();
+        expect(text).toContain('"code":"upstream_server_error"');
+        expect(text).toContain("try again in 2s");
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+
+        const logs = logsFromApiBody(await originalGlobalFetch(
+          new URL("/api/logs?tail=1", harness.server.url),
+          { headers: managementHeaders() },
+        ).then(response => response.json()));
+        expect(logs.at(-1)).toMatchObject({
+          status: 503,
+          errorCode: "server_is_overloaded",
+          upstreamError: "Our servers are currently overloaded. Please try again later.",
+        });
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+    { timeout: SERVER_BUDGET_MS },
+  );
+
   test("oversized 400 body never authorizes a pool retry", async () => {
     const body = `${unsupportedModelBody()}${"x".repeat(65_536)}`;
     const harness = await startPoolRetryHarness(() => rejectionResponse(body));

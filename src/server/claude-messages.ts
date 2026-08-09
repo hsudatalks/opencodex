@@ -734,7 +734,10 @@ async function handleClaudeMessagesWithBudget(
     inboundWire: "anthropic",
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
-    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
+    onNativePassthroughTerminal: (status, httpStatusOverride) => finalizeNativeLog(
+      httpStatusOverride ?? httpStatusForTerminalStatus(status),
+      { terminalStatus: status, closeReason: "terminal" },
+    ),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;

@@ -561,7 +561,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   }
 
   // Codex treats empty / non-JSON 503 bodies as "Unknown error" (#452). Keep Retry-After and
-  // the server_is_overloaded code so clients can back off, but always return a JSON envelope.
+  // a generic server code that participates in Codex's bounded retry loop, and always return JSON.
   // These two run BEFORE the auth/origin checks, so they need the receiving listener's policy
   // explicitly (#1102). Reaching for the shared `config` here would attach public-policy CORS
   // headers to a 503 on the loopback listener — no model runs and no credential is spent, but
@@ -1095,8 +1095,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             turnAdmissionLease,
             abortSignal: req.signal,
             onFirstOutput: () => recordFirstOutput(logCtx, start),
-            onNativePassthroughTerminal: status => {
-              finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
+            onNativePassthroughTerminal: (status, httpStatusOverride) => {
+              finalizeNativePassthroughLog(httpStatusOverride ?? httpStatusForTerminalStatus(status), {
                 terminalStatus: status,
                 closeReason: "terminal",
               });

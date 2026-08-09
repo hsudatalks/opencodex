@@ -199,9 +199,9 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("server is busy") ||
     text.includes("temporarily unavailable")
   ) {
-    // Codex recognizes "server_is_overloaded" and applies retry-after backoff
-    // (responses.rs is_server_overloaded_error); generic "upstream_server_error" is not recognized.
-    return { message, type: "server_error", code: "server_is_overloaded" };
+    // Codex treats server_is_overloaded/slow_down as fatal. A generic server
+    // error participates in its native bounded retry loop instead.
+    return { message, type: "server_error", code: "upstream_server_error" };
   }
   if (
     text.includes("validationexception") ||

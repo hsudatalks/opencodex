@@ -277,7 +277,7 @@ describe("drain 503 JSON (#452)", () => {
       expect(response.headers.get("retry-after")).toBe("5");
       const json = await response.json() as { error?: { message?: string; code?: string | null } };
       expect(json.error?.message).toContain("shutting down");
-      expect(json.error?.code).toBe("server_is_overloaded");
+      expect(json.error?.code).toBe("upstream_server_error");
     } finally {
       setDraining(false);
       await server.stop(true);

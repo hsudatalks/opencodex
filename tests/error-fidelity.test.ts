@@ -146,13 +146,13 @@ describe("error fidelity", () => {
 });
 
 describe("overload and transient-429 classification (F3)", () => {
-  test("503 / overloaded maps to the Codex-recognized server_is_overloaded", () => {
+  test("503 / overloaded maps to a Codex-retryable generic server error", () => {
     expect(classifyError(503, "upstream_error", "The server is overloaded")).toMatchObject({
       type: "server_error",
-      code: "server_is_overloaded",
+      code: "upstream_server_error",
     });
     expect(classifyError(500, "upstream_error", "model is currently overloaded")).toMatchObject({
-      code: "server_is_overloaded",
+      code: "upstream_server_error",
     });
   });
 

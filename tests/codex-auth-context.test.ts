@@ -1273,7 +1273,7 @@ describe("cooldown error surface", () => {
     const body = await response.json() as { error?: { message?: string; code?: string } };
     expect(body.error).toMatchObject({
       message: CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
-      code: "server_is_overloaded",
+      code: "upstream_server_error",
     });
   });
 
@@ -1334,14 +1334,14 @@ describe("cooldown error surface", () => {
     expect(capacity.status).toBe(503);
     expect(capacity.headers.get("Retry-After")).toBe("1");
     expect(await capacity.json()).toMatchObject({
-      error: { type: "server_error", code: "server_is_overloaded" },
+      error: { type: "server_error", code: "upstream_server_error" },
     });
 
     const overflow = codexAccountCapacityQueueResponse(new CodexAccountCapacityQueueError("queue_full"));
     expect(overflow.status).toBe(503);
     expect(overflow.headers.get("Retry-After")).toBe("1");
     expect(await overflow.json()).toMatchObject({
-      error: { type: "server_error", code: "server_is_overloaded" },
+      error: { type: "server_error", code: "upstream_server_error" },
     });
   });
 

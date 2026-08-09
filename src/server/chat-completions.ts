@@ -201,7 +201,10 @@ async function handleChatCompletionsWithBudget(
     inboundWire: "chat",
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
-    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
+    onNativePassthroughTerminal: (status, httpStatusOverride) => finalizeNativeLog(
+      httpStatusOverride ?? httpStatusForTerminalStatus(status),
+      { terminalStatus: status, closeReason: "terminal" },
+    ),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
 

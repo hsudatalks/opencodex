@@ -3,6 +3,7 @@ import {
   resolveClientRetryAfter,
   validateClientRetryAfterHeader,
 } from "../../lib/retry-after";
+import { rewriteResponsesCapacityErrorBody } from "../responses-capacity-retry";
 
 /**
  * Passthrough adapters historically relayed upstream non-2xx bodies verbatim.
@@ -26,9 +27,13 @@ export function formatPassthroughUpstreamError(
     statusText?: string;
     headers?: Headers;
     now?: number;
+    rewriteModelCapacityForRetry?: boolean;
   },
 ): Response {
   const trimmed = bodyText.trim();
+  const clientBodyText = options?.rewriteModelCapacityForRetry
+    ? rewriteResponsesCapacityErrorBody(bodyText)
+    : bodyText;
   const now = options?.now ?? Date.now();
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const originalValid = validateClientRetryAfterHeader(upstreamRetryAfter, now);
@@ -46,7 +51,7 @@ export function formatPassthroughUpstreamError(
       && originalValid === undefined;
 
     if (!needsSet && !needsDelete) {
-      return new Response(bodyText, {
+      return new Response(clientBodyText, {
         status,
         ...(options?.statusText ? { statusText: options.statusText } : {}),
         ...(options?.headers ? { headers: options.headers } : { headers: { "Content-Type": "application/json" } }),
@@ -58,7 +63,7 @@ export function formatPassthroughUpstreamError(
       : new Headers({ "Content-Type": "application/json" });
     if (needsSet) headers.set("Retry-After", resolved!);
     else headers.delete("Retry-After");
-    return new Response(bodyText, {
+    return new Response(clientBodyText, {
       status,
       ...(options?.statusText ? { statusText: options.statusText } : {}),
       headers,

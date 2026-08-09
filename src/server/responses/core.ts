@@ -204,6 +204,10 @@ import {
   relaySseWithBlockRewrite,
 } from "../sse-payload-rewrite";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
+import {
+  createResponsesCapacityRetryBlockRewrite,
+  isResponsesCapacityErrorBody,
+} from "../responses-capacity-retry";
 import { responsesJsonToSseBody } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 
@@ -554,9 +558,12 @@ export function codexForwardTerminalOutcomeRecorder(
     // httpStatusOverride: the combo WS path inspects SSE payloads into the parent
     // logCtx, but this recorder closes over the child logCtx. The caller passes
     // the parent's terminalHttpStatus so the semantic status is not lost.
-    const outcome = status === "completed"
+    const terminalOutcome = status === "completed"
       ? 200
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
+    const outcome: CodexUpstreamOutcome = terminalOutcome === 503
+      ? "model_capacity"
+      : terminalOutcome;
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
       fixedAccount: authCtx.fixedAccount,
@@ -621,7 +628,10 @@ export interface HandleResponsesOptions {
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
   recordTerminalOutcomes?: boolean;
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined) => void;
-  onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
+  onNativePassthroughTerminal?: (
+    status: ResponsesTerminalStatus,
+    httpStatusOverride?: number,
+  ) => void;
   onNativePassthroughCancel?: () => void;
   /**
    * When true, body `prompt_cache_key` is a Claude Desktop shared cache cohort
@@ -745,13 +755,15 @@ export function usageFromComboFailureText(text: string): OcxUsage | undefined {
 
 export function createChildPassthroughCallbackGate(options: HandleResponsesOptions) {
   type Pending =
-    | { kind: "terminal"; status: ResponsesTerminalStatus }
+    | { kind: "terminal"; status: ResponsesTerminalStatus; httpStatusOverride?: number }
     | { kind: "cancel" };
   let state: "pending" | "committed" | "discarded" = "pending";
   let pending: Pending | undefined;
   let accepted = false;
   const publish = (value: Pending): void => {
-    if (value.kind === "terminal") options.onNativePassthroughTerminal?.(value.status);
+    if (value.kind === "terminal") {
+      options.onNativePassthroughTerminal?.(value.status, value.httpStatusOverride);
+    }
     else options.onNativePassthroughCancel?.();
   };
   const receive = (value: Pending): void => {
@@ -761,7 +773,11 @@ export function createChildPassthroughCallbackGate(options: HandleResponsesOptio
     pending ??= value;
   };
   return {
-    onTerminal: (status: ResponsesTerminalStatus) => receive({ kind: "terminal", status }),
+    onTerminal: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => receive({
+      kind: "terminal",
+      status,
+      ...(httpStatusOverride !== undefined ? { httpStatusOverride } : {}),
+    }),
     onCancel: () => receive({ kind: "cancel" }),
     commit: () => {
       if (state !== "pending") return;
@@ -2156,9 +2172,12 @@ async function handleResponsesInner(
               );
             }
           }
-          options.onNativePassthroughTerminal?.(status);
+          options.onNativePassthroughTerminal?.(
+            status,
+            httpStatusOverride ?? logCtx.terminalHttpStatus,
+          );
         });
-      } else if (!shouldDeferCodexResetDerivedCooldown(
+      } else if ((upstreamResponse.ok || options.comboAttempt) && !shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
       )) {
@@ -2196,9 +2215,29 @@ async function handleResponsesInner(
         return failure.response;
       }
       const errorText = await upstreamResponse.text().catch(() => "");
+      if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+        const outcome: CodexUpstreamOutcome = isResponsesCapacityErrorBody(errorText)
+          ? "model_capacity"
+          : upstreamResponse.status;
+        if (!shouldDeferCodexResetDerivedCooldown(
+          upstreamResponse,
+          options.deferCodexResetDerivedCooldown,
+        )) {
+          recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+            ...codexQuotaOutcomeMeta(upstreamResponse),
+            threadId: req.headers.get("x-codex-parent-thread-id"),
+            fixedAccount: authCtx.fixedAccount,
+            modelId: route.modelId,
+            probeLeaseId: codexProbeLeaseId(authCtx),
+            probeQuotaScope: codexProbeQuotaScope(authCtx),
+            writerGeneration: authCtx.writerGeneration,
+          });
+        }
+      }
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
+        rewriteModelCapacityForRetry: usesCodexForwardPoolAuth(authCtx, route.provider),
       });
     }
 
@@ -2241,6 +2280,16 @@ async function handleResponsesInner(
         }
       })();
       const blockRewrites = [
+        usesCodexForwardPoolAuth(authCtx, route.provider)
+          ? createResponsesCapacityRetryBlockRewrite({
+              onPreOutputCapacity: (error) => {
+                logCtx.terminalHttpStatus ??= 503;
+                if (!logCtx.upstreamError && error.message?.trim()) {
+                  logCtx.upstreamError = redactSecretString(error.message).slice(0, 500);
+                }
+              },
+            })
+          : undefined,
         payloadRewrites.length > 0
           ? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites))
           : undefined,
@@ -2289,7 +2338,10 @@ async function handleResponsesInner(
                 );
               }
             }
-            options.onNativePassthroughTerminal?.(status);
+            options.onNativePassthroughTerminal?.(
+              status,
+              httpStatusOverride ?? logCtx.terminalHttpStatus,
+            );
           }
           : undefined;
         const inspector = createSseInspector({
@@ -2369,7 +2421,10 @@ async function handleResponsesInner(
               );
             }
           }
-          options.onNativePassthroughTerminal?.(status);
+          options.onNativePassthroughTerminal?.(
+            status,
+            httpStatusOverride ?? logCtx.terminalHttpStatus,
+          );
         };
         consumeForInspection(
           inspectBody,

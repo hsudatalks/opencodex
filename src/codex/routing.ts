@@ -122,7 +122,7 @@ const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHeal
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
-export type CodexUpstreamOutcome = number | "connect_error" | "timeout" | "connect_neutral";
+export type CodexUpstreamOutcome = number | "connect_error" | "timeout" | "connect_neutral" | "model_capacity";
 export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "neutral" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 /**
@@ -420,7 +420,7 @@ function compareQuotaCandidates(
 }
 
 export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): CodexUpstreamOutcomeClass {
-  if (outcome === "connect_neutral") return "neutral";
+  if (outcome === "connect_neutral" || outcome === "model_capacity") return "neutral";
   if (outcome === "connect_error" || outcome === "timeout") return "transient";
   if (!Number.isFinite(outcome)) return "unknown";
   if (outcome >= 200 && outcome < 300) return "success";
