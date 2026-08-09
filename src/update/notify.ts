@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { hasStarPromptRun } from "../cli/star-prompt";
+import { RELEASE_NOTES_URL } from "../brand";
 import {
   type Channel,
   currentVersion,
@@ -16,7 +17,6 @@ import {
 
 const VERSION_FILENAME = "version.json";
 const REFRESH_INTERVAL_MS = 20 * 60 * 60 * 1000; // 20h, matching codex-rs
-const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 
 export interface VersionCache {
   latest_version: string;

@@ -8,7 +8,7 @@ import { currentVersion } from "../update/index";
 import { agentDrivenMarkers, isAgentDriven } from "./agent-driven";
 import { interactiveConfirm } from "./interactive-confirm";
 
-const REPO = "lidge-jun/opencodex";
+const REPO = "hsudatalks/opencodex";
 /** Fires exactly once from the first interactive `ocx start`. */
 const MARKER = ".star-prompted";
 /**

@@ -129,8 +129,8 @@ describe("GET /api/github/star", () => {
       expect(status).toBe(200);
       const star = body as Record<string, unknown>;
       expect(["starred", "not-starred", "unauthenticated"]).toContain(star.state);
-      expect(star.repo).toBe("lidge-jun/opencodex");
-      expect(star.url).toBe("https://github.com/lidge-jun/opencodex");
+      expect(star.repo).toBe("hsudatalks/opencodex");
+      expect(star.url).toBe("https://github.com/hsudatalks/opencodex");
     });
     expect(calls).toEqual([["auth", "status", "--hostname", "github.com"]]);
   });

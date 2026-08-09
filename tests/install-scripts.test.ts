@@ -45,7 +45,7 @@ describe("install scripts", () => {
   test("Node can import the package main without executing the CLI", () => {
     const result = spawnSync("node", [
       "-e",
-      "import('./bin/package-main.mjs').then(m => { if (m.cliCommand !== 'ocx') process.exit(2); })",
+      "import('./bin/package-main.mjs').then(m => { if (m.packageName !== 'univers-gateway' || m.cliCommand !== 'ugw') process.exit(2); })",
     ], {
       cwd: repoRoot,
       encoding: "utf8",
@@ -71,10 +71,10 @@ describe("install scripts", () => {
     const script = await readText("scripts/install.sh");
 
     expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("npm install -g @bitkyc08/opencodex");
+    expect(script).toContain("npm install -g univers-gateway");
     expect(script).toContain("command -v ocx");
     expect(script).toContain("ocx help");
-    expect(script).not.toContain("bun install -g @bitkyc08/opencodex");
+    expect(script).not.toContain("bun install -g univers-gateway");
     expect(script).not.toContain("bun.sh/install");
   });
 
@@ -82,12 +82,12 @@ describe("install scripts", () => {
     const script = await readText("scripts/install.ps1");
 
     expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("& $npm.Source install -g @bitkyc08/opencodex");
+    expect(script).toContain("& $npm.Source install -g univers-gateway");
     expect(script).toContain("$LASTEXITCODE");
     expect(script).toContain("Get-Command ocx.cmd");
     expect(script).toContain("Get-Command ocx");
     expect(script).toContain("& $ocx.Source help");
-    expect(script).not.toContain("bun install -g @bitkyc08/opencodex");
+    expect(script).not.toContain("bun install -g univers-gateway");
     expect(script).not.toContain("bun.sh/install.ps1");
   });
 

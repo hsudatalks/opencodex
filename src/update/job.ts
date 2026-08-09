@@ -37,13 +37,13 @@ import {
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { RELEASE_NOTES_URL } from "../brand";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
   type NpmCachePreflightReason,
 } from "./npm-cache-preflight.mjs";
 
-const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 const UPDATE_JOB_FILENAME = "update-job.json";
 const UPDATE_TIMEOUT_MS = 180_000;
 const RESTART_TIMEOUT_MS = 60_000;
@@ -1399,7 +1399,7 @@ function restartFailureHint(port: number): string {
   return `Update installed, but the restarted proxy did not stay healthy on port ${port}. `
     + `Try 'ocx start --port ${port}'. `
     + "If the update log shows bun postinstall or EPERM warnings, "
-    + "reinstall with 'npm install -g --allow-scripts=bun @bitkyc08/opencodex'.";
+    + "reinstall with 'npm install -g --allow-scripts=bun univers-gateway'.";
 }
 
 type AwaitHealthyResult =

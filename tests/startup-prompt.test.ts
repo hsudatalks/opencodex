@@ -142,7 +142,7 @@ describe("startup star prompt", () => {
     // of the settle rule. Relocating it must not be allowed to thin it out.
     expect(install).toContain("User-consent actions");
     expect(install).toContain("agent_consent_required");
-    expect(install).toContain("Star lidge-jun/opencodex? Yes / No");
+    expect(install).toContain("Star hsudatalks/opencodex? Yes / No");
     expect(install).toContain("POST /api/github/star");
     expect(install.toLowerCase()).toContain("silence is");
     expect(install.toLowerCase()).toContain("explicit yes");

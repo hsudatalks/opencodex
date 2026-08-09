@@ -10,6 +10,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { PACKAGE_NAME, PRODUCT_NAME } from "../brand";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -25,7 +26,7 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
   }
 }
 
-export const PKG = "@bitkyc08/opencodex";
+export const PKG = PACKAGE_NAME;
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
 export type Installer = "bun" | "npm" | "source";
@@ -156,7 +157,7 @@ export async function runUpdate(): Promise<void> {
   const installer = detectInstall();
   const current = currentVersion();
   const tag = updateTag(current);
-  console.log(`opencodex v${current} (installed via ${installer}, tag ${tag})`);
+  console.log(`${PRODUCT_NAME} v${current} (installed via ${installer}, tag ${tag})`);
 
   if (installer === "source") {
     console.log("Running from a source checkout — update with:  git pull && bun install");

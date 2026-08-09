@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLI_NAME, LEGACY_CLI_NAMES, PRODUCT_NAME } from "../brand";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
@@ -273,11 +274,11 @@ function packageVersion(): string {
 }
 
 export function printVersion(): void {
-  console.log(`opencodex ${packageVersion()}`);
+  console.log(`${PRODUCT_NAME} ${packageVersion()}`);
 }
 
 export function printUsage(): void {
-  console.log(`opencodex (ocx) — Universal provider proxy for Codex
+  console.log(`${PRODUCT_NAME} (${CLI_NAME}; legacy: ${LEGACY_CLI_NAMES.join(", ")}) — AI model gateway for Codex and compatible clients
 
 Usage:
   ocx setup                   Interactive setup (alias: init)
@@ -300,8 +301,8 @@ Usage:
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
   ocx login <provider>        OAuth or API-key provider login
   ocx logout <provider>       Remove a stored OAuth login
-  ocx gui                     Open the opencodex dashboard
-  ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
+  ocx gui                     Open the Univers Gateway dashboard
+  ocx update [--tag <tag>]    Update Univers Gateway (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|threads)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)

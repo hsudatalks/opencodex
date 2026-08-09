@@ -20,6 +20,7 @@ import { type Page } from "./app-routing";
 import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
+import { PRODUCT_NAME } from "./brand";
 
 installApiAuthFetch();
 
@@ -187,7 +188,7 @@ export default function App() {
   const brand = (
     <div className="brand">
       <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
-      <span className="name">opencodex</span>
+      <span className="name">{PRODUCT_NAME}</span>
       <span className="ver">v{displayedVersion}</span>
     </div>
   );

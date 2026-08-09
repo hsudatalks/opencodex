@@ -1,17 +1,16 @@
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
-Two commands, and every one of them runs any LLM you point it at.</p>
+<h1 align="center">Univers Gateway</h1>
+<p align="center"><b>A production AI model gateway for Codex, Pi, Claude Code, Claude Desktop, and OpenAI-compatible clients.</b><br>
+Centralize providers, account pools, routing continuity, observability, and client integration behind one stable gateway.</p>
 
 <p align="center">
-  <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Follow @claudeebum on X"></a>
-  <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
-  <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
+  <a href="https://www.npmjs.com/package/univers-gateway"><img src="https://img.shields.io/npm/v/univers-gateway?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
+  <a href="https://github.com/hsudatalks/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/univers-gateway?color=blue" alt="license"></a>
+  <img src="https://img.shields.io/node/v/univers-gateway?logo=node.js&label=node" alt="node version">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
-ocx start        # proxy + dashboard on localhost:10100
+npm install -g univers-gateway
+ugw start        # proxy + dashboard on localhost:10100
 ```
 
 <table align="center">
@@ -41,7 +40,7 @@ ocx start        # proxy + dashboard on localhost:10100
   <a href="README.md">English</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
 </p>
 
-opencodex is a lightweight local proxy that translates Codex's Responses API into whatever your
+Univers Gateway translates Codex's Responses API into whatever your
 provider speaks — streaming, tool calls, reasoning tokens, images, in both directions. Use Claude,
 Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex, Claude Code, Claude
 Desktop, and Grok Build. It can also manage a **ChatGPT account pool** for Codex auth: add accounts,
@@ -54,12 +53,12 @@ pinned to the account that started them.
 ### For humans
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
-ocx start                            # or `ocx service` to run it in the background
+npm install -g univers-gateway   # Node 18+; the Bun runtime is bundled automatically
+ugw start                            # or `ugw service` to run it in the background
 ```
 
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
-(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
+(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ugw gui`
 re-opens the dashboard at any time.
 It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, remaining capacity is
@@ -75,17 +74,17 @@ once the others are drained.
 ### For agents
 
 ```bash
-npm install -g @bitkyc08/opencodex
-ocx start     # or `ocx service`
-ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
+npm install -g univers-gateway
+ugw start     # or `ugw service`
+ugw init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
 
-`ocx init` never starts the proxy; start it first (or after — either order works, but headless
-commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
-when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
+`ugw init` never starts the proxy; start it first (or after — either order works, but headless
+commands like `ugw provider add` and `ugw combo set` talk to the **live** proxy and exit nonzero
+when it is unreachable). `ugw status` / `ugw doctor` / `ugw health` report the running state.
 
-> **Agents installing or running opencodex:** read
-> [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
+> **Agents installing or running Univers Gateway:** read
+> [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ugw start` may ask once whether to
 > star this repository — that is the user's decision, never an agent's. The CLI suppresses the
 > prompt for agent-driven runs and the API refuses them with `403 agent_consent_required`.
 
@@ -118,7 +117,7 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
   through a sidecar over your ChatGPT login.
 - **See what's happening** — the dashboard shows providers, OAuth status, model selection, and a
   live request log with cache token counts.
-- **Clean exit, zero residue** — `ocx stop` restores Codex to its original configuration.
+- **Clean exit, zero residue** — `ugw stop` restores Codex to its original configuration.
 
 ## Model routing
 
@@ -139,26 +138,26 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
-Qwen Cloud, SiliconFlow, and more. Full list: `ocx init` or the
+Qwen Cloud, SiliconFlow, and more. Full list: `ugw init` or the
 [provider docs](https://opencodex.me/guides/providers/).
 
 ## CLI
 
 ```bash
-ocx init                       # interactive setup (writes config, wires Codex, offers the shim)
-ocx start [--port 10100]       # start the proxy in the foreground
-ocx stop                       # stop + restore native Codex
-ocx service [install|start|stop|status|uninstall|remove]  # background service
-ocx codex-shim install         # start the proxy on demand whenever `codex` launches
-ocx health [--json]            # check immediate proxy liveness
-ocx ready [--json] [--wait [--timeout <seconds>]]  # check post-sync readiness
-ocx status                     # is the proxy running?
-ocx gui                        # open the web dashboard
-ocx provider <...>             # manage providers (list/add/edit/test/remove)
-ocx account <...>              # manage ChatGPT accounts & API-key pools
-ocx combo <...>                # manage failover / round-robin combos
-ocx v2 <...>                   # multi-agent v1/v2 surface controls
-ocx update [--tag preview]     # update opencodex
+ugw init                       # interactive setup (writes config, wires Codex, offers the shim)
+ugw start [--port 10100]       # start the proxy in the foreground
+ugw stop                       # stop + restore native Codex
+ugw service [install|start|stop|status|uninstall|remove]  # background service
+ugw codex-shim install         # start the proxy on demand whenever `codex` launches
+ugw health [--json]            # check immediate proxy liveness
+ugw ready [--json] [--wait [--timeout <seconds>]]  # check post-sync readiness
+ugw status                     # is the proxy running?
+ugw gui                        # open the web dashboard
+ugw provider <...>             # manage providers (list/add/edit/test/remove)
+ugw account <...>              # manage ChatGPT accounts & API-key pools
+ugw combo <...>                # manage failover / round-robin combos
+ugw v2 <...>                   # multi-agent v1/v2 surface controls
+ugw update [--tag preview]     # update opencodex
 ```
 
 Unpinned starts may pick another free port if the preferred one is busy; an explicit `--port`
@@ -171,7 +170,7 @@ post-sync readiness with the sanitized JSON identity `{service, version, uptime,
 It returns `200` when `status` is `ready`; `pending` and terminal `failed` return `503` with
 `Retry-After: 1`.
 
-`ocx ready [--json] [--wait [--timeout <seconds>]]` performs one probe by default. `--wait` polls
+`ugw ready [--json] [--wait [--timeout <seconds>]]` performs one probe by default. `--wait` polls
 for up to 45 seconds by default, but exits immediately when it observes terminal `failed`;
 `--timeout <seconds>` sets a 1–300 second limit, requires `--wait`, and accepts only positive integers. CLI `--json` output is
 `{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or `unreachable`.
@@ -182,20 +181,20 @@ for up to 45 seconds by default, but exits immediately when it observes terminal
 | `1` | Not ready: pending, failed, timeout, or unreachable |
 | `64` | Invalid arguments |
 
-An older proxy without `/readyz` fails closed as `unreachable` with exit 1, while `ocx health`
+An older proxy without `/readyz` fails closed as `unreachable` with exit 1, while `ugw health`
 remains compatible.
 
 ### Autostart: service vs shim
 
-Use the **service** (`ocx service`) for an always-on proxy that restarts on crash. Use the
-**shim** (`ocx codex-shim install`) for lightweight, on-demand startup without a background
-daemon. Remove them with `ocx service uninstall` / `ocx codex-shim uninstall`.
+Use the **service** (`ugw service`) for an always-on proxy that restarts on crash. Use the
+**shim** (`ugw codex-shim install`) for lightweight, on-demand startup without a background
+daemon. Remove them with `ugw service uninstall` / `ugw codex-shim uninstall`.
 
 ### Uninstall
 
 ```bash
-ocx uninstall                  # stop, remove service/shim, restore native Codex, clean up state
-npm uninstall -g @bitkyc08/opencodex
+ugw uninstall                  # stop, remove service/shim, restore native Codex, clean up state
+npm uninstall -g univers-gateway
 ```
 
 ## Remote access
@@ -207,20 +206,24 @@ without `OPENCODEX_API_AUTH_TOKEN`, and every client request must carry it as
 
 ## Documentation
 
-The public docs — install, providers, routing, combos, sub-agents, sidecars, integrations, and
-the CLI/config/management-API references — are built from [`docs-site/`](./docs-site) and
-published to **[opencodex.me](https://opencodex.me/)**.
+The install, provider, routing, combo, sub-agent, sidecar, integration, CLI, configuration, and
+management API references are built from [`docs-site/`](./docs-site). The compatibility and
+branding boundary is documented in [`docs/univers-gateway-brand.md`](./docs/univers-gateway-brand.md).
 
 Maintainer source-of-truth notes live under [`structure/`](./structure), contributor setup in
 [`CONTRIBUTING.md`](./CONTRIBUTING.md), and security reporting in [`SECURITY.md`](./SECURITY.md).
 Report undisclosed vulnerabilities privately through
-[GitHub private vulnerability reporting](https://github.com/lidge-jun/opencodex/security/advisories/new),
+[GitHub private vulnerability reporting](https://github.com/hsudatalks/opencodex/security/advisories/new),
 not a public issue.
+
+Univers Gateway is derived from the MIT-licensed OpenCodex project. Upstream changes are reviewed
+and adopted selectively; compatibility identifiers such as `~/.opencodex`, `OPENCODEX_*`, `ocx`,
+and the `opencodex` provider id remain supported for existing installations and session history.
 
 ## Development
 
 Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm
-package's bundled Bun runtime, which is used only by installed `ocx` commands.
+package's bundled Bun runtime, which is used only by installed `ugw` commands.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

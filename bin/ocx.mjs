@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * opencodex npm bin launcher.
+ * Univers Gateway npm bin launcher.
  *
  * The package source is TypeScript that runs on the Bun runtime. To let
- * `npm install -g @bitkyc08/opencodex` work without a separately-installed Bun,
+ * `npm install -g univers-gateway` work without a separately-installed Bun,
  * we bundle the runtime via the `bun` npm dependency and exec it from this
  * Node shim. (Dev still runs `bun run src/cli/index.ts` directly via the shebang on
  * src/cli/index.ts — only the published npm `bin` routes through here.)
@@ -23,7 +23,8 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
-const PKG = "@bitkyc08/opencodex";
+const PKG = "univers-gateway";
+const PRODUCT_NAME = "Univers Gateway";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, "..", "src", "cli", "index.ts");
@@ -92,7 +93,7 @@ function repairCodexShimIfNeeded() {
     windowsHide: true,
   });
   if (res.status !== 0) {
-    console.warn(`opencodex: Codex shim repair failed (${res.status ?? "unknown exit"}). Try: ocx codex-shim install`);
+    console.warn(`${PRODUCT_NAME}: Codex shim repair failed (${res.status ?? "unknown exit"}). Try: ugw codex-shim install`);
   }
 }
 
@@ -123,7 +124,7 @@ function runNpmSelfUpdate() {
   const latestInvocation = npmInvocation(["view", `${PKG}@${tag}`, "version"]);
   const installInvocation = npmInvocation(["install", "-g", `${PKG}@${tag}`]);
   if (!latestInvocation || !installInvocation) {
-    console.error("opencodex: could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.");
+    console.error(`${PRODUCT_NAME}: could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.`);
     process.exit(1);
   }
   const latestResult = spawnSync(latestInvocation.file, latestInvocation.args, {
@@ -134,7 +135,7 @@ function runNpmSelfUpdate() {
   });
   const latest = latestResult.status === 0 ? latestResult.stdout.trim() : "";
 
-  console.log(`opencodex v${current} (installed via npm, tag ${tag})`);
+  console.log(`${PRODUCT_NAME} v${current} (installed via npm, tag ${tag})`);
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
     process.exit(0);
@@ -142,7 +143,7 @@ function runNpmSelfUpdate() {
 
   const cachePreflight = runNpmCachePreflight();
   if (!cachePreflight.ok) {
-    console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+    console.error(`${PRODUCT_NAME}: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
     process.exit(1);
   }
 
@@ -394,7 +395,7 @@ function fail(msg) {
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
       "install skipped lifecycle scripts (e.g. npm blocked bun's postinstall\n" +
       "under allowScripts) or optional dependencies. Reinstall with:\n" +
-      "  npm install -g --allow-scripts=bun @bitkyc08/opencodex\n" +
+      "  npm install -g --allow-scripts=bun univers-gateway\n" +
       "(use sudo if the original install used sudo; without --ignore-scripts\n" +
       "and without --omit=optional / optional=false)"
   );
@@ -441,7 +442,7 @@ function resolveBun() {
 const updateHelpRequested = process.argv[2] === "update" &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
-  console.log("Usage: ocx update [--tag latest|preview]\n\nUpdate opencodex. Preview installs stay on the preview tag unless overridden.");
+  console.log("Usage: ugw update [--tag latest|preview]\n\nUpdate Univers Gateway. Preview installs stay on the preview tag unless overridden.");
   process.exit(0);
 }
 
