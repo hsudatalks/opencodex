@@ -1017,7 +1017,8 @@ describe("codex-auth API", () => {
       upstreamFailoverThreshold: 3,
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
-      accountMaxConcurrentTurns: 10,
+      accountMaxConcurrentTurns: 4,
+      accountPoolOfficialResetAt: null,
       activeTurnsByAccount: {},
       quotaRouting: [{
         accountId: "pool-live",

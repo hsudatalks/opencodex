@@ -122,20 +122,20 @@ describe("warn and exhaustion tones", () => {
 });
 
 describe("formatResetFuture", () => {
-  // Fixed reference: 2026-07-17 12:00 local time.
-  const NOW = new Date(2026, 6, 17, 12, 0, 0).getTime();
+  // Fixed reference in the product's canonical Singapore timezone.
+  const NOW = Date.parse("2026-07-17T12:00:00+08:00");
 
   test("branches: minutes, hours, today, tomorrow, date, date+year, past, invalid", () => {
     expect(formatResetFuture(NOW + 30 * 60_000, t, "en", NOW)).toBe("quota.resetsRelativeMinutes:30");
     expect(formatResetFuture(NOW + 3 * 3_600_000, t, "en", NOW)).toBe("quota.resetsRelativeHours:3");
     // Same calendar day but past the 12h relative window → today copy.
-    const lateToday = new Date(2026, 6, 17, 23, 59).getTime();
+    const lateToday = Date.parse("2026-07-17T23:59:00+08:00");
     expect(formatResetFuture(lateToday, t, "en", NOW)).toContain("quota.resetsToday");
-    const tomorrow = new Date(2026, 6, 18, 9, 0).getTime();
+    const tomorrow = Date.parse("2026-07-18T09:00:00+08:00");
     expect(formatResetFuture(tomorrow, t, "en", NOW)).toContain("quota.resetsTomorrow");
-    const nextWeek = new Date(2026, 6, 24, 9, 0).getTime();
+    const nextWeek = Date.parse("2026-07-24T09:00:00+08:00");
     expect(formatResetFuture(nextWeek, t, "en", NOW)).toContain("quota.resetsAt");
-    const nextYear = new Date(2027, 0, 2, 9, 0).getTime();
+    const nextYear = Date.parse("2027-01-02T09:00:00+08:00");
     const withYear = formatResetFuture(nextYear, t, "en", NOW);
     expect(withYear).toContain("quota.resetsAt");
     expect(withYear).toContain("2027");
