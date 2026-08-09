@@ -32,7 +32,6 @@ import {
 } from "../providers/openai-sidecar";
 import { routeModel } from "../router";
 import { readJsonRequestBody } from "./request-decompress";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
@@ -54,11 +53,6 @@ export async function handleSearch(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
-  try { validateForwardAdmissionCredential(req.headers, config); }
-  catch (err) {
-    if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
-    throw err;
-  }
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);

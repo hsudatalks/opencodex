@@ -596,8 +596,59 @@ test("the proxy admission secret is never relayed to the search upstream", async
     });
     expect(response.status).toBe(401);
     const json = await response.json() as { error: { message: string } };
-    expect(json.error.message).toContain("admission credentials");
+    expect(json.error.message).toContain("ChatGPT auth");
     expect(captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("a proxy bearer admits Pool search without being forwarded upstream", async () => {
+  const scopedKey = "ocx_data_workbench_scoped_key";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured);
+  saveConfig({
+    ...forwardConfig(),
+    hostname: "0.0.0.0",
+    apiKeys: [{
+      id: "workbench-key",
+      name: "ark-workbench:test::host",
+      key: scopedKey,
+      createdAt: "2026-08-09T00:00:00.000Z",
+    }],
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    codexAccounts: [
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-a", {
+    accessToken: "pool-access-token",
+    refreshToken: "pool-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-a",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/alpha/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${scopedKey}` },
+      body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-access-token");
+    expect(captured[0].headers.get("authorization")).not.toContain(scopedKey);
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-a");
   } finally {
     await server.stop(true);
     await upstream.stop(true);
