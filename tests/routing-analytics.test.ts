@@ -10,7 +10,8 @@ import {
   type PersistedUsageEntry,
 } from "../src/usage/log";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
-import { computeRoutingAnalytics } from "../src/routing/analytics";
+import { computeRoutingAnalytics, postgresRoutingAnalyticsRows } from "../src/routing/analytics";
+import type { SQL } from "bun";
 import type { OcxConfig } from "../src/types";
 
 let testDir = "";
@@ -53,6 +54,70 @@ function config(): OcxConfig {
 }
 
 describe("routing analytics (RI-03)", () => {
+  test("loads normalized PostgreSQL facts without row JSON", async () => {
+    let capturedValues: unknown[] = [];
+    const sql = {
+      unsafe: async (_query: string, values: unknown[]) => {
+        capturedValues = values;
+        return [{
+          occurred_at: "2026-08-10T00:00:00.000Z",
+          request_id: "pg-1",
+          provider: "provider-a",
+          model: "model-a",
+          api_key_id: "workbench-key",
+          profile_id: "balanced",
+          profile_revision: "r1",
+          http_status: 503,
+          duration_ms: 1250,
+          first_output_ms: 150,
+          close_reason_code: 1,
+          terminal_status: "incomplete",
+          usage_status_code: 1,
+          input_tokens: 100,
+          output_tokens: 20,
+          context_total_tokens: 120,
+          cached_input_tokens: 30,
+          cache_read_input_tokens: 30,
+          cache_creation_input_tokens: null,
+          reasoning_output_tokens: 5,
+          attempt_count: 2,
+          requested_service_tier: "priority",
+          requested_speed_label: "fast",
+          configured_service_tier: null,
+          configured_speed_label: null,
+          model_supports_service_tier: true,
+          response_service_tier: "priority",
+          cooldown_triggering_failure: true,
+        }];
+      },
+    } as unknown as SQL;
+    const rows = await postgresRoutingAnalyticsRows(sql, {
+      provider: "provider-a",
+      model: "model-a",
+      profileId: "balanced",
+      surface: "claude",
+      from: 1_000,
+      to: 2_000,
+    }, 5);
+    expect(capturedValues).toEqual(["provider-a", "model-a", "balanced", 1, 1_000, 2_000, 6]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      provider: "provider-a",
+      model: "model-a",
+      apiKeyId: "workbench-key",
+      profileId: "balanced",
+      status: 503,
+      attemptCount: 2,
+      fallback: 1,
+      cooldownTriggeringFailure: true,
+    });
+    expect(JSON.parse(rows[0]!.rowJson)).toMatchObject({
+      usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30 },
+      requestedServiceTier: "priority",
+      responseServiceTier: "priority",
+    });
+  });
+
   test("classifies success, failure, cancellation and incomplete streams", async () => {
     appendUsageEntry(entry("r1", { timestamp: 1000, status: 200, durationMs: 100, firstOutputMs: 10 }));
     appendUsageEntry(entry("r2", { timestamp: 2000, status: 200, durationMs: 200, firstOutputMs: 30 }));

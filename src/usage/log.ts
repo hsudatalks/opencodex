@@ -5,6 +5,7 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { recordRoutingHealthEntry } from "../routing/health-store";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 
@@ -447,8 +448,10 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
     try { chmodSync(usageSegmentDir(), 0o700); } catch { /* best-effort */ }
   }
   recordOwnedConfigPath(getConfigDir(), path);
-  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
+  const normalized = normalizeUsageEntry(entry);
+  appendFileSync(path, `${JSON.stringify(normalized)}\n`, { encoding: "utf-8", mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+  recordRoutingHealthEntry(normalized);
 }
 
 export type UsageLogRevision = {

@@ -48,6 +48,8 @@ export interface RequestHistoryIndexMeta {
   indexedRows: number;
   builtAtMs: number;
   lastError: string | null;
+  retentionHours: number;
+  maxRows: number;
 }
 
 export interface RequestHistoryFilters {
@@ -80,6 +82,8 @@ export const REQUEST_HISTORY_READ_CHUNK_BYTES = 64 * 1024;
 // this bound are omitted from the projection; the canonical usage.jsonl is
 // never truncated or rewritten by the indexer.
 export const REQUEST_HISTORY_MAX_RECORD_BYTES = 1024 * 1024;
+export const REQUEST_HISTORY_DEFAULT_RETENTION_HOURS = 168;
+export const REQUEST_HISTORY_DEFAULT_MAX_ROWS = 25_000;
 
 interface SourceTailResult {
   inserted: number;
@@ -126,7 +130,49 @@ function readIndexedMeta(dbHandle: Database): Omit<RequestHistoryIndexMeta, "dbP
     indexedRows: asNumber(HISTORY_META_KEYS.indexedRows),
     builtAtMs: asNumber(HISTORY_META_KEYS.builtAtMs),
     lastError: metaValue(dbHandle, HISTORY_META_KEYS.lastError),
+    retentionHours: requestHistoryRetentionHours(),
+    maxRows: requestHistoryMaxRows(),
   };
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function requestHistoryRetentionHours(): number {
+  return positiveIntegerEnv(
+    "OPENCODEX_REQUEST_HISTORY_RETENTION_HOURS",
+    REQUEST_HISTORY_DEFAULT_RETENTION_HOURS,
+  );
+}
+
+function requestHistoryMaxRows(): number {
+  return positiveIntegerEnv("OPENCODEX_REQUEST_HISTORY_MAX_ROWS", REQUEST_HISTORY_DEFAULT_MAX_ROWS);
+}
+
+/**
+ * This index is a local management fallback, not an archive. PostgreSQL owns
+ * full history. Anchor TTL to the newest indexed event so offline imports and
+ * deterministic test fixtures are not discarded merely because wall time moved.
+ */
+function enforceRequestHistoryRetention(dbHandle: Database): number {
+  const newest = dbHandle.query("SELECT MAX(timestamp) AS timestamp FROM requests").get() as
+    | { timestamp: number | null }
+    | undefined;
+  if (newest?.timestamp !== null && newest?.timestamp !== undefined) {
+    const cutoff = Number(newest.timestamp) - requestHistoryRetentionHours() * 60 * 60 * 1_000;
+    dbHandle.query("DELETE FROM requests WHERE timestamp < ?").run(cutoff);
+  }
+  const maxRows = requestHistoryMaxRows();
+  dbHandle.query(`
+    DELETE FROM requests WHERE rowid IN (
+      SELECT rowid FROM requests
+      ORDER BY timestamp DESC, request_id DESC
+      LIMIT -1 OFFSET ?
+    )
+  `).run(maxRows);
+  return Number((dbHandle.query("SELECT COUNT(*) AS count FROM requests").get() as { count: number }).count);
 }
 
 function metaFor(dbHandle: Database): RequestHistoryIndexMeta {
@@ -385,8 +431,7 @@ function updateAggregateSourceMeta(dbHandle: Database, legacy: UsageLogRevision 
     .get() as { size: number; mtime_ms: number };
   setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, (legacy?.size ?? 0) + Number(segments.size));
   setMeta(dbHandle, HISTORY_META_KEYS.sourceMtimeMs, Math.max(legacy?.mtimeMs ?? 0, Number(segments.mtime_ms)));
-  setMeta(dbHandle, HISTORY_META_KEYS.indexedRows,
-    Number((dbHandle.query("SELECT count(*) count FROM requests").get() as { count: number }).count));
+  setMeta(dbHandle, HISTORY_META_KEYS.indexedRows, enforceRequestHistoryRetention(dbHandle));
   setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
 }
 
@@ -570,6 +615,8 @@ export function closeRequestHistoryIndex(): void {
 export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexMeta> {
   const handle = openIndexDb();
   fullRebuild(handle, "manual rebuild requested");
+  handle.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  handle.exec("VACUUM");
   return metaFor(handle);
 }
 

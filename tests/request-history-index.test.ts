@@ -203,6 +203,26 @@ describe("request-history index (RI-02)", () => {
     expect(pages).toBe(15);
   });
 
+  test("bounds the local fallback by TTL and newest-row cap", async () => {
+    process.env.OPENCODEX_REQUEST_HISTORY_RETENTION_HOURS = "1";
+    process.env.OPENCODEX_REQUEST_HISTORY_MAX_ROWS = "3";
+    try {
+      appendUsageEntry(entry("expired", 1_000));
+      const recentBase = 2 * 60 * 60 * 1_000;
+      for (let index = 0; index < 5; index++) {
+        appendUsageEntry(entry(`recent-${index}`, recentBase + index));
+      }
+      const page = await queryRequestHistory({}, undefined, 10);
+      expect(page.rows.map(row => row.requestId)).toEqual(["recent-4", "recent-3", "recent-2"]);
+      expect(page.meta.indexedRows).toBe(3);
+      expect(page.meta.retentionHours).toBe(1);
+      expect(page.meta.maxRows).toBe(3);
+    } finally {
+      delete process.env.OPENCODEX_REQUEST_HISTORY_RETENTION_HOURS;
+      delete process.env.OPENCODEX_REQUEST_HISTORY_MAX_ROWS;
+    }
+  });
+
   test("corrupt database is repaired by a full rebuild without losing canonical rows", async () => {
     for (const row of seedRows(8)) appendUsageEntry(row);
     await queryRequestHistory({}, undefined, 10);

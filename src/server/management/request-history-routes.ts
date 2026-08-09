@@ -6,9 +6,8 @@
  * - `GET /api/request-history/:requestId/route-decision` - why-this-route
  *   explanation (RI-09): durable trace + attempts + outcome
  *
- * The index is a derived projection of `usage.jsonl`; every response carries
- * an `index` status block so callers can see schema version, indexed rows and
- * any repair the indexer performed.
+ * PostgreSQL owns complete history. The local index is a bounded, rebuildable
+ * management fallback; every response exposes its retention contract.
  */
 
 import {
@@ -116,6 +115,8 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
           sourceMtimeMs: page.meta.sourceMtimeMs,
           builtAtMs: page.meta.builtAtMs,
           lastError: page.meta.lastError,
+          retentionHours: page.meta.retentionHours,
+          maxRows: page.meta.maxRows,
         },
       }, 200, req, config);
     } catch (err) {

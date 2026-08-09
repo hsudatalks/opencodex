@@ -4,7 +4,7 @@
  * Health evidence combines:
  * - live in-memory routing state: Codex account cooldown / soft-avoid
  *   (authoritative hard state);
- * - historical evidence from the request-history index: success rate,
+ * - historical evidence from the compact routing-health projection: success rate,
  *   consecutive failures, incomplete-stream rate, recent latency, sample
  *   count, recency-decayed weights.
  *
@@ -17,7 +17,6 @@
  */
 
 import type { OcxConfig } from "../types";
-import { openRequestHistoryIndexSync, requestHistoryDb } from "./history/indexer";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import {
   getCodexAccountCooldownUntil,
@@ -27,6 +26,12 @@ import {
   listLiveCodexAccountIds,
 } from "../codex/routing";
 import type { RouteHealthEvidence } from "./trace";
+import {
+  recentRoutingHealthSamples,
+  ROUTING_HEALTH_MAX_SAMPLES,
+  ROUTING_HEALTH_WINDOW_MS,
+  type RoutingHealthSample,
+} from "./health-store";
 
 export const HEALTH_SCORE_CONSTANTS = {
   /** Recent-success weight in the composite. */
@@ -47,14 +52,14 @@ export const HEALTH_SCORE_CONSTANTS = {
   RECENCY_HALF_LIFE_DAYS: 7,
 } as const;
 
-export const HEALTH_WINDOW_MS = 14 * 86_400_000;
-export const HEALTH_MAX_SAMPLES = 100;
+export const HEALTH_WINDOW_MS = ROUTING_HEALTH_WINDOW_MS;
+export const HEALTH_MAX_SAMPLES = ROUTING_HEALTH_MAX_SAMPLES;
 
 /**
  * Historical health evidence is cached briefly across candidates within one
  * routing decision (and rapid successive decisions). Live cooldown/soft-avoid
  * state is always read fresh - it is never cached. The TTL bounds how stale
- * the history index read may be; 1.5s keeps routing deterministic within a
+ * the compact projection read may be; 1.5s keeps routing deterministic within a
  * decision while bounding per-candidate SQLite work.
  */
 const HEALTH_HISTORY_CACHE_TTL_MS = 1_500;
@@ -83,54 +88,6 @@ export interface HealthEvidenceInput {
   /** Live codex account id for cooldown/soft-avoid state (provider "openai"). */
   codexAccountId?: string;
   now?: number;
-}
-
-interface HealthSample {
-  status: number;
-  closeReason: string | null;
-  terminalStatus: string | null;
-  durationMs: number;
-  timestamp: number;
-}
-
-interface HealthRow extends HealthSample {
-  attemptCount?: number;
-  rowJson?: string | null;
-}
-
-/**
- * Per-attempt samples for a candidate from a row's persisted entry.
- * Combo/failover requests store each upstream try in `entry.attempts` while
- * the top-level row records the final outcome; a provider/model that failed
- * as a non-final attempt must still contribute its own health samples.
- */
-function attemptSamplesFor(
-  row: Pick<HealthRow, "timestamp" | "attemptCount" | "rowJson">,
-  provider: string,
-  model: string,
-): HealthSample[] {
-  if (!row.rowJson || (row.attemptCount ?? 1) <= 1) return [];
-  try {
-    const parsed = JSON.parse(row.rowJson) as { attempts?: unknown };
-    if (!Array.isArray(parsed.attempts)) return [];
-    const samples: HealthSample[] = [];
-    for (const attempt of parsed.attempts) {
-      if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)) continue;
-      const record = attempt as Record<string, unknown>;
-      if (record.provider !== provider || record.model !== model) continue;
-      if (typeof record.status !== "number" || typeof record.durationMs !== "number") continue;
-      samples.push({
-        status: record.status,
-        closeReason: null,
-        terminalStatus: null,
-        durationMs: record.durationMs,
-        timestamp: row.timestamp,
-      });
-    }
-    return samples;
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -203,7 +160,7 @@ export function policyCandidateHealthEvidence(
   };
 }
 
-function classifySample(sample: HealthSample): "success" | "failure" | "neutral" {
+function classifySample(sample: RoutingHealthSample): "success" | "failure" | "neutral" {
   if (sample.closeReason === "client_cancel" || sample.status === 499) return "neutral";
   // Invalid requests and policy refusals must not poison target health.
   if (sample.status >= 400 && sample.status < 500 && sample.status !== 429) return "neutral";
@@ -225,63 +182,15 @@ function median(sorted: number[]): number | undefined {
 }
 
 /**
- * Historical health evidence from the derived index (synchronous: called at
- * routing time). Never throws; an unopened/unreadable index yields unknown.
+ * Historical health evidence from the compact projection (synchronous: called
+ * at routing time). Never throws; an unreadable projection yields unknown.
  */
 function computeHistoricalHealthEvidence(
   input: Pick<HealthEvidenceInput, "provider" | "model" | "accountRef">,
   now: number,
 ): HistoricalHealthEvidence {
   try {
-    openRequestHistoryIndexSync();
-    const handle = requestHistoryDb();
-    const where: string[] = ["provider = ?", "model = ?", "timestamp >= ?"];
-    const values: Array<string | number> = [input.provider, input.model, now - HEALTH_WINDOW_MS];
-    if (input.accountRef) {
-      where.push("api_key_id = ?");
-      values.push(input.accountRef);
-    }
-    const rows = handle.query(
-      `SELECT status, close_reason AS closeReason, terminal_status AS terminalStatus,
-              duration_ms AS durationMs, timestamp,
-              attempt_count AS attemptCount, row_json AS rowJson
-       FROM requests WHERE ${where.join(" AND ")}
-       ORDER BY timestamp DESC LIMIT ?`,
-    ).all(...values, HEALTH_MAX_SAMPLES) as HealthRow[];
-    // Rows whose top-level target differs from this candidate may still carry
-    // candidate attempts (combo/failover): expand those too. The serialized
-    // provider/model LIKE prefilter keeps the LIMIT from being consumed by
-    // rows that cannot contribute samples for this candidate.
-    const escapeLike = (value: string): string => value.replace(/[\\%_]/g, match => `\\${match}`);
-    const attemptRows = handle.query(
-      `SELECT timestamp, attempt_count AS attemptCount, row_json AS rowJson
-       FROM requests WHERE timestamp >= ? AND attempt_count > 1
-         AND row_json LIKE ? ESCAPE '\\'
-         AND row_json LIKE ? ESCAPE '\\'
-         AND NOT (provider = ? AND model = ?)
-       ORDER BY timestamp DESC LIMIT ?`,
-    ).all(
-      now - HEALTH_WINDOW_MS,
-      `%\"provider\":\"${escapeLike(input.provider)}\"%`,
-      `%\"model\":\"${escapeLike(input.model)}\"%`,
-      input.provider,
-      input.model,
-      HEALTH_MAX_SAMPLES,
-    ) as Array<
-      Pick<HealthRow, "timestamp" | "attemptCount" | "rowJson">
-    >;
-
-    const samples: HealthSample[] = [];
-    for (const row of rows) {
-      const attemptSamples = attemptSamplesFor(row, input.provider, input.model);
-      samples.push(...(attemptSamples.length > 0 ? attemptSamples : [row]));
-    }
-    for (const row of attemptRows) {
-      samples.push(...attemptSamplesFor(row, input.provider, input.model));
-    }
-    // Newest first for the consecutive-failure walk; attempt samples inherit
-    // their row's timestamp.
-    samples.sort((a, b) => b.timestamp - a.timestamp);
+    const samples = recentRoutingHealthSamples({ ...input, now });
 
     let successes = 0;
     let failures = 0;
@@ -327,7 +236,7 @@ function computeHistoricalHealthEvidence(
     }
     return out;
   } catch {
-    /* index unreadable: evidence stays unknown */
+    /* projection unreadable: evidence stays unknown */
     return {};
   }
 }

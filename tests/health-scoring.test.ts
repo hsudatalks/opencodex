@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendUsageEntry, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../src/usage/log";
-import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
+import { closeRoutingHealthStore } from "../src/routing/health-store";
 import {
   clearHealthHistoryCacheForTests,
   codexPoolHealthEvidence,
@@ -42,11 +42,11 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   resetUsageReadCacheForTests();
   clearHealthHistoryCacheForTests();
-  closeRequestHistoryIndex();
+  closeRoutingHealthStore();
 });
 
 afterEach(() => {
-  closeRequestHistoryIndex();
+  closeRoutingHealthStore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
