@@ -335,14 +335,15 @@ export async function handleImages(
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
-  // forwarded as OpenAI ChatGPT credentials. When the caller sent it, skip OpenAI forward
-  // and allow CCA / keyed paths instead of rejecting the whole request.
-  let skipOpenAiForwardForAdmissionBearer = false;
+  // forwarded as OpenAI ChatGPT credentials. Direct mode depends on the caller bearer, so drop
+  // only direct candidates. Pool modes replace it with a server-owned account credential and
+  // remain safe to use.
+  let forwardCandidates = candidates.forwardCandidates;
   if (!explicitKeyedProvider) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
       if (err instanceof ForwardAdmissionCredentialError) {
-        skipOpenAiForwardForAdmissionBearer = true;
+        forwardCandidates = forwardCandidates.filter(candidate => candidate.accountMode !== "direct");
       } else {
         throw err;
       }
@@ -357,7 +358,7 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  const canUseOpenAiForward = !skipOpenAiForwardForAdmissionBearer && candidates.forwardCandidates.length > 0;
+  const canUseOpenAiForward = forwardCandidates.length > 0;
 
   if (!canUseOpenAiForward && !candidates.keyed) {
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint);
@@ -380,7 +381,7 @@ export async function handleImages(
   let forwardAuthError: Response | undefined;
   if (canUseOpenAiForward) {
     try {
-      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config, {
+      forward = await resolveFirstUsableOpenAiSidecar(forwardCandidates, req.headers, config, {
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
       });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);

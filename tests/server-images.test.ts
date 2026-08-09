@@ -227,6 +227,47 @@ test("a routed pool account's token overrides the caller bearer on the forward r
   }
 });
 
+test("a proxy admission bearer uses a server-owned pool account without leaking the admission key", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  saveConfig({
+    ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
+    hostname: "0.0.0.0",
+    defaultProvider: "openai",
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+    },
+    codexAccounts: [
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-a", {
+    accessToken: "pool-access-token",
+    refreshToken: "pool-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-a",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer local-secret" },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-access-token");
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-a");
+    expect([...captured[0].headers.values()].some(value => value.includes("local-secret"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("zstd-compressed request bodies are decoded before the relay", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
