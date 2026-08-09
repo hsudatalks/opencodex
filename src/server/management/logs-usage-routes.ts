@@ -48,7 +48,7 @@ import {
   requestStorageCleanupPolicyRun,
 } from "../../storage/policy-job";
 import {
-  currentUsageLogRevision,
+  currentUsageLedgerRevision,
   readUsageSnapshotForManagement,
   usageLogRevisionKey,
   type PersistedUsageEntry,
@@ -208,7 +208,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       }
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
-      const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
+      const observedRevisionKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));

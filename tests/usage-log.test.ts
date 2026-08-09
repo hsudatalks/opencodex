@@ -14,6 +14,8 @@ import {
   resetUsageReadCacheForTests,
   usageForFinalLog,
   usageLogPath,
+  usageLedgerPaths,
+  usageSegmentPath,
   usageStatusForFinalLog,
   usageTotalTokens,
   usageReadCacheStatsForTests,
@@ -23,9 +25,12 @@ import {
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousSegments: string | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousSegments = process.env.OPENCODEX_USAGE_SEGMENTS;
+  delete process.env.OPENCODEX_USAGE_SEGMENTS;
   testDir = mkdtempSync(join(tmpdir(), "ocx-usage-"));
   process.env.OPENCODEX_HOME = testDir;
   resetUsageReadCacheForTests();
@@ -34,6 +39,8 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousSegments === undefined) delete process.env.OPENCODEX_USAGE_SEGMENTS;
+  else process.env.OPENCODEX_USAGE_SEGMENTS = previousSegments;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -559,6 +566,28 @@ describe("usage log", () => {
 
   test("uses OPENCODEX_HOME for the append-only JSONL path", () => {
     expect(usageLogPath()).toBe(join(testDir, "usage.jsonl"));
+  });
+
+  test("segmented WAL appends hourly while readers preserve legacy history", async () => {
+    writeFileSync(usageLogPath(), `${persistedLine("legacy")}\n`);
+    process.env.OPENCODEX_USAGE_SEGMENTS = "1";
+    appendUsageEntry({
+      requestId: "segment",
+      timestamp: Date.now(),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      usage: { inputTokens: 2, outputTokens: 1 },
+      totalTokens: 3,
+    });
+
+    expect(existsSync(usageSegmentPath())).toBe(true);
+    expect(usageLedgerPaths()).toEqual([usageLogPath(), usageSegmentPath()]);
+    expect(readUsageEntries().map(entry => entry.requestId)).toEqual(["legacy", "segment"]);
+    expect(readRecentUsageEntries(1).map(entry => entry.requestId)).toEqual(["segment"]);
+    expect((await readUsageEntriesForManagement()).map(entry => entry.requestId)).toEqual(["legacy", "segment"]);
   });
 
   test("appends secret-safe usage entries and reads them back", () => {

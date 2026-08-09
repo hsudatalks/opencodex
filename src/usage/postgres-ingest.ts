@@ -1,11 +1,14 @@
-import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
 import { hostname } from "node:os";
+import { basename } from "node:path";
 import { SQL } from "bun";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { baseProviderLabel } from "../providers/label";
 import {
   normalizeUsageEntryForTest,
+  usageLedgerPaths,
   usageLogPath,
+  usageSegmentTimestamp,
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
 } from "./log";
@@ -655,9 +658,9 @@ async function readCursor(sql: SQL, sourceId: string): Promise<UsageCursor | nul
   return rows[0] ?? null;
 }
 
-async function initializeCursor(sql: SQL, sourceId: string, identity: SourceIdentity): Promise<number> {
+async function initializeCursor(sql: SQL, sourceId: string, identity: SourceIdentity, isSegment: boolean): Promise<number> {
   const startMode = process.env.OPENCODEX_USAGE_POSTGRES_START_MODE === "backfill" ? "backfill" : "tail";
-  const initialOffset = startMode === "backfill" ? 0 : lastCompleteOffset(identity.path, identity.size);
+  const initialOffset = isSegment || startMode === "backfill" ? 0 : lastCompleteOffset(identity.path, identity.size);
   await sql.unsafe(`
     INSERT INTO opencodex_usage.ingestion_cursors (
       source_id, source_path, source_device, source_inode, byte_offset
@@ -668,12 +671,17 @@ async function initializeCursor(sql: SQL, sourceId: string, identity: SourceIden
   return cursor ? Number(cursor.byte_offset) : initialOffset;
 }
 
-async function pollUsagePostgresOnce(sql: SQL, sourceId: string): Promise<boolean> {
-  const path = usageLogPath();
+function ledgerSourceId(baseSourceId: string, path: string): string {
+  return path === usageLogPath() ? baseSourceId : `${baseSourceId}:segment:${basename(path)}`;
+}
+
+async function pollUsagePostgresPath(sql: SQL, baseSourceId: string, path: string): Promise<boolean> {
+  const sourceId = ledgerSourceId(baseSourceId, path);
   const identity = sourceIdentity(path);
   if (!identity) return false;
   const cursor = await readCursor(sql, sourceId);
-  let offset = cursor ? Number(cursor.byte_offset) : await initializeCursor(sql, sourceId, identity);
+  const isSegment = usageSegmentTimestamp(path) !== null;
+  let offset = cursor ? Number(cursor.byte_offset) : await initializeCursor(sql, sourceId, identity, isSegment);
   if (cursor && (
     Number(cursor.source_device) !== identity.device
     || Number(cursor.source_inode) !== identity.inode
@@ -686,7 +694,32 @@ async function pollUsagePostgresOnce(sql: SQL, sourceId: string): Promise<boolea
   );
   if (!batch || batch.nextOffset === offset) return false;
   await ingestBatch(sql, sourceId, batch);
-  return batch.nextOffset < batch.identity.size;
+  return true;
+}
+
+async function removeAcknowledgedExpiredSegments(sql: SQL, baseSourceId: string): Promise<void> {
+  const retentionHours = positiveInteger(process.env.OPENCODEX_USAGE_SEGMENT_RETENTION_HOURS, 168);
+  const cutoff = Date.now() - retentionHours * 60 * 60 * 1_000;
+  for (const path of usageLedgerPaths()) {
+    const segmentTimestamp = usageSegmentTimestamp(path);
+    if (segmentTimestamp === null || segmentTimestamp >= cutoff) continue;
+    const identity = sourceIdentity(path);
+    if (!identity) continue;
+    const cursor = await readCursor(sql, ledgerSourceId(baseSourceId, path));
+    if (!cursor
+      || Number(cursor.source_device) !== identity.device
+      || Number(cursor.source_inode) !== identity.inode
+      || Number(cursor.byte_offset) < identity.size) continue;
+    try { unlinkSync(path); } catch { /* retention is best-effort; retry next poll */ }
+  }
+}
+
+async function pollUsagePostgresOnce(sql: SQL, sourceId: string): Promise<boolean> {
+  for (const path of usageLedgerPaths()) {
+    if (await pollUsagePostgresPath(sql, sourceId, path)) return true;
+  }
+  await removeAcknowledgedExpiredSegments(sql, sourceId);
+  return false;
 }
 
 function warnThrottled(error: unknown): void {
@@ -694,7 +727,7 @@ function warnThrottled(error: unknown): void {
   if (now - lastWarningAt < 30_000) return;
   lastWarningAt = now;
   const message = error instanceof Error ? error.message : String(error);
-  console.warn(`[usage-postgres] ingestion delayed; JSONL remains authoritative: ${message}`);
+  console.warn(`[usage-postgres] ingestion delayed; recoverable JSONL WAL retained: ${message}`);
 }
 
 function scheduleNext(delayMs: number): void {

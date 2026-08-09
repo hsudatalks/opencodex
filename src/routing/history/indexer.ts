@@ -1,12 +1,10 @@
 /**
  * Derived request-history index (RI-02).
  *
- * `usage.jsonl` stays canonical; this module maintains a rebuildable SQLite
- * projection (ADR-1, ADR-8). On every open/query it verifies schema version,
- * file identity, integrity, and byte offset, then appends whatever complete
- * JSONL rows arrived since the last index. Missing/corrupt/stale index or a
- * replaced/truncated source triggers an automatic full rebuild; canonical
- * history is never touched.
+ * The legacy usage ledger plus hourly JSONL WAL segments feed a rebuildable SQLite
+ * projection (ADR-1, ADR-8). Each source file has an independent identity and byte
+ * cursor, so hourly rotation never rebuilds or drops query history. Missing/corrupt
+ * index state is repaired from every retained WAL source.
  */
 
 import { Database } from "bun:sqlite";
@@ -23,6 +21,7 @@ import { recordOwnedConfigPath } from "../../lib/config-ownership";
 import {
   currentUsageLogRevision,
   normalizeUsageEntryForTest,
+  usageLedgerPaths,
   usageLogPath,
   type PersistedUsageEntry,
   type UsageLogRevision,
@@ -82,6 +81,13 @@ export const REQUEST_HISTORY_READ_CHUNK_BYTES = 64 * 1024;
 // never truncated or rewritten by the indexer.
 export const REQUEST_HISTORY_MAX_RECORD_BYTES = 1024 * 1024;
 
+interface SourceTailResult {
+  inserted: number;
+  nextOffset: number;
+  size: number;
+  mtimeMs: number;
+}
+
 let db: Database | null = null;
 let dbPath = "";
 let openPromise: Promise<RequestHistoryIndexMeta> | null = null;
@@ -137,8 +143,8 @@ function readStoredMetaField(dbHandle: Database, key: string): string {
 
 function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
   const stored = readIndexedMeta(dbHandle);
-  if (revision === null) return stored.sourceSize === 0;
   const storedPath = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourcePath);
+  if (revision === null) return storedPath === "";
   if (!storedPath) return false;
   const storedDev = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceDev));
   const storedIno = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceIno));
@@ -214,7 +220,7 @@ function parsedEntryFromLine(line: string): PersistedUsageEntry | null {
   return null;
 }
 
-function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number): number {
+function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number): SourceTailResult {
   let inserted = 0;
   let pending: Array<Array<string | number | null>> = [];
   const insert = dbHandle.prepare(ROW_INSERT);
@@ -278,13 +284,7 @@ function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number):
       position += bytesRead;
     }
     if (pending.length > 0) commitBatch();
-    const current = readIndexedMeta(dbHandle);
-    setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, nextOffset);
-    setMeta(dbHandle, HISTORY_META_KEYS.indexedRows, current.indexedRows + inserted);
-    setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, Number(stat.size));
-    setMeta(dbHandle, HISTORY_META_KEYS.sourceMtimeMs, Number(stat.mtimeMs));
-    setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
-    return inserted;
+    return { inserted, nextOffset, size: Number(stat.size), mtimeMs: Number(stat.mtimeMs) };
   } finally {
     if (fd !== undefined) closeSync(fd);
     // Windows file locks: an unterminated prepared statement keeps the DB
@@ -295,6 +295,7 @@ function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number):
 
 function resetAndCreateSchema(dbHandle: Database): void {
   dbHandle.exec("DROP TABLE IF EXISTS requests");
+  dbHandle.exec("DROP TABLE IF EXISTS source_files");
   dbHandle.exec("DROP TABLE IF EXISTS schema_meta");
   dbHandle.exec(HISTORY_DDL);
   setMeta(dbHandle, HISTORY_META_KEYS.schemaVersion, HISTORY_SCHEMA_VERSION);
@@ -311,6 +312,82 @@ function recordSourceMeta(dbHandle: Database, revision: UsageLogRevision | null)
   setMeta(dbHandle, HISTORY_META_KEYS.sourceBirthtimeMs, revision?.birthtimeMs ?? 0);
   setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, revision?.size ?? 0);
   setMeta(dbHandle, HISTORY_META_KEYS.sourceMtimeMs, revision?.mtimeMs ?? 0);
+}
+
+function fileRevision(path: string): UsageLogRevision | null {
+  if (!existsSync(path)) return null;
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    return {
+      path,
+      dev: Number(stat.dev),
+      ino: Number(stat.ino),
+      birthtimeMs: Number(stat.birthtimeMs),
+      size: Number(stat.size),
+      mtimeMs: Number(stat.mtimeMs),
+      ctimeMs: Number(stat.ctimeMs),
+    };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function segmentPaths(): string[] {
+  const legacy = usageLogPath();
+  return usageLedgerPaths().filter(path => path !== legacy);
+}
+
+function refreshSegments(dbHandle: Database, rebuild = false): number {
+  let inserted = 0;
+  const livePaths = new Set(segmentPaths());
+  for (const path of livePaths) {
+    const revision = fileRevision(path);
+    if (!revision) continue;
+    const stored = dbHandle.query(`
+      SELECT dev, ino, birthtime_ms, indexed_offset
+      FROM source_files WHERE path = ?
+    `).get(path) as { dev: number; ino: number; birthtime_ms: number; indexed_offset: number } | undefined;
+    const sameIdentity = stored
+      && Number(stored.dev) === revision.dev
+      && Number(stored.ino) === revision.ino
+      && Number(stored.birthtime_ms) === revision.birthtimeMs
+      && Number(stored.indexed_offset) <= revision.size;
+    const fromOffset = !rebuild && sameIdentity ? Number(stored.indexed_offset) : 0;
+    const result = ingestSourceTail(dbHandle, path, fromOffset);
+    inserted += result.inserted;
+    dbHandle.query(`
+      INSERT INTO source_files (path, dev, ino, birthtime_ms, size, mtime_ms, indexed_offset)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        dev = excluded.dev, ino = excluded.ino, birthtime_ms = excluded.birthtime_ms,
+        size = excluded.size, mtime_ms = excluded.mtime_ms,
+        indexed_offset = excluded.indexed_offset
+    `).run(path, revision.dev, revision.ino, revision.birthtimeMs,
+      result.size, result.mtimeMs, result.nextOffset);
+  }
+  const tracked = dbHandle.query("SELECT path FROM source_files").all() as Array<{ path: string }>;
+  const remove = dbHandle.prepare("DELETE FROM source_files WHERE path = ?");
+  try {
+    for (const row of tracked) {
+      if (!livePaths.has(row.path)) remove.run(row.path);
+    }
+  } finally {
+    remove.finalize();
+  }
+  return inserted;
+}
+
+function updateAggregateSourceMeta(dbHandle: Database, legacy: UsageLogRevision | null): void {
+  const segments = dbHandle.query("SELECT COALESCE(sum(size), 0) size, COALESCE(max(mtime_ms), 0) mtime_ms FROM source_files")
+    .get() as { size: number; mtime_ms: number };
+  setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, (legacy?.size ?? 0) + Number(segments.size));
+  setMeta(dbHandle, HISTORY_META_KEYS.sourceMtimeMs, Math.max(legacy?.mtimeMs ?? 0, Number(segments.mtime_ms)));
+  setMeta(dbHandle, HISTORY_META_KEYS.indexedRows,
+    Number((dbHandle.query("SELECT count(*) count FROM requests").get() as { count: number }).count));
+  setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
 }
 
 function isHealthy(dbHandle: Database): boolean {
@@ -412,18 +489,14 @@ function fullRebuild(dbHandle: Database, reason: string): void {
   const path = usageLogPath();
   const revision = sourceIdentity();
   recordSourceMeta(dbHandle, revision);
-  if (!existsSync(path)) {
-    setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, 0);
+  if (existsSync(path)) {
+    const result = ingestSourceTail(dbHandle, path, 0);
+    setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, result.nextOffset);
+  } else {
     setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, 0);
-    setMeta(dbHandle, HISTORY_META_KEYS.indexedRows, 0);
-    setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
-    return;
   }
-  const inserted = ingestSourceTail(dbHandle, path, 0);
-  const current = readIndexedMeta(dbHandle);
-  setMeta(dbHandle, HISTORY_META_KEYS.indexedRows, inserted);
-  setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, Math.max(current.indexedOffset, 0));
-  setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
+  refreshSegments(dbHandle, true);
+  updateAggregateSourceMeta(dbHandle, revision);
 }
 
 function refreshLockedSync(): RequestHistoryIndexMeta {
@@ -437,8 +510,14 @@ function refreshLockedSync(): RequestHistoryIndexMeta {
   }
   const current = readIndexedMeta(handle);
   if (revision === null) {
-    // Source gone: the derived index must not outlive its canonical ledger.
-    if (current.indexedRows > 0) fullRebuild(handle, "source ledger missing; index reset");
+    if (usageLedgerPaths().length === 0) {
+      // Every WAL source is gone: the derived index must not outlive its evidence.
+      if (current.indexedRows > 0) fullRebuild(handle, "source ledger missing; index reset");
+      return metaFor(handle);
+    }
+    const inserted = refreshSegments(handle);
+    if (inserted > 0) setMeta(handle, HISTORY_META_KEYS.lastError, "");
+    updateAggregateSourceMeta(handle, null);
     return metaFor(handle);
   }
   const tailNextOffset = current.indexedOffset;
@@ -448,11 +527,15 @@ function refreshLockedSync(): RequestHistoryIndexMeta {
     return metaFor(handle);
   }
     if (tailNextOffset < Number(revision.size)) {
-      const inserted = ingestSourceTail(handle, revision.path, tailNextOffset);
+      const result = ingestSourceTail(handle, revision.path, tailNextOffset);
+      setMeta(handle, HISTORY_META_KEYS.indexedOffset, result.nextOffset);
       // A clean tail ingest proves the index is healthy: clear any earlier
       // rebuild marker so status readers can distinguish rebuilds from tails.
-      if (inserted > 0) setMeta(handle, HISTORY_META_KEYS.lastError, "");
+      if (result.inserted > 0) setMeta(handle, HISTORY_META_KEYS.lastError, "");
     }
+  const segmentInserted = refreshSegments(handle);
+  if (segmentInserted > 0) setMeta(handle, HISTORY_META_KEYS.lastError, "");
+  updateAggregateSourceMeta(handle, revision);
   return metaFor(handle);
 }
 

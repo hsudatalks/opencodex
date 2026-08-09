@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -132,6 +132,44 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
 
 export function usageLogPath(): string {
   return join(getConfigDir(), "usage.jsonl");
+}
+
+const USAGE_SEGMENT_PATTERN = /^usage-(\d{8})-(\d{2})\.jsonl$/;
+
+export function usageSegmentDir(): string {
+  return join(getConfigDir(), "usage");
+}
+
+export function usageSegmentPath(now = Date.now()): string {
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, "");
+  return join(usageSegmentDir(), `usage-${stamp.slice(0, 8)}-${stamp.slice(9, 11)}.jsonl`);
+}
+
+export function usageSegmentTimestamp(path: string): number | null {
+  const filename = path.split(/[\\/]/).at(-1) ?? "";
+  const match = USAGE_SEGMENT_PATTERN.exec(filename);
+  if (!match) return null;
+  const day = match[1]!;
+  const hour = match[2]!;
+  const timestamp = Date.parse(`${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T${hour}:00:00Z`);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+/** Oldest first. `usage.jsonl` is the immutable migration ledger; hourly files are
+ * recoverable WAL segments and become the only append target after opt-in. */
+export function usageLedgerPaths(): string[] {
+  const paths: string[] = [];
+  const legacy = usageLogPath();
+  if (existsSync(legacy)) paths.push(legacy);
+  const dir = usageSegmentDir();
+  if (existsSync(dir)) {
+    const segments = readdirSync(dir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && USAGE_SEGMENT_PATTERN.test(entry.name))
+      .map(entry => join(dir, entry.name))
+      .sort();
+    paths.push(...segments);
+  }
+  return paths;
 }
 
 export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
@@ -396,14 +434,19 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
 
 function ensureUsageLogDir(): void {
   const dir = getConfigDir();
-  recordOwnedConfigPath(dir, usageLogPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   ensureUsageLogDir();
-  const path = usageLogPath();
+  const segmented = process.env.OPENCODEX_USAGE_SEGMENTS === "1";
+  const path = segmented ? usageSegmentPath() : usageLogPath();
+  if (segmented) {
+    mkdirSync(usageSegmentDir(), { recursive: true, mode: 0o700 });
+    try { chmodSync(usageSegmentDir(), 0o700); } catch { /* best-effort */ }
+  }
+  recordOwnedConfigPath(getConfigDir(), path);
   appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
 }
@@ -497,6 +540,30 @@ export function currentUsageLogRevision(): UsageLogRevision | null {
   }
 }
 
+export function currentUsageLedgerRevision(): UsageLogRevision | null {
+  const revisions = usageLedgerPaths().flatMap(path => {
+    let fd: number | undefined;
+    try {
+      fd = openSync(path, "r");
+      return [usageLogRevision(path, fstatSync(fd))];
+    } catch {
+      return [];
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  });
+  if (revisions.length === 0) return null;
+  return {
+    path: revisions.map(revision => revision.path).join("\n"),
+    dev: 0,
+    ino: 0,
+    birthtimeMs: Math.min(...revisions.map(revision => revision.birthtimeMs)),
+    size: revisions.reduce((sum, revision) => sum + revision.size, 0),
+    mtimeMs: Math.max(...revisions.map(revision => revision.mtimeMs)),
+    ctimeMs: Math.max(...revisions.map(revision => revision.ctimeMs)),
+  };
+}
+
 async function parseUsageTextCooperatively(text: string, signal: AbortSignal): Promise<{
   entries: PersistedUsageEntry[];
   entriesDropped: number;
@@ -582,9 +649,9 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   entriesDropped: number;
 }> {
   if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes <= 0) throw new RangeError("management usage max read bytes must be positive");
-  const path = usageLogPath();
-  if (!existsSync(path)) return { entries: [], revision: null, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 };
-  const observed = currentUsageLogRevision();
+  const paths = usageLedgerPaths();
+  if (paths.length === 0) return { entries: [], revision: null, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 };
+  const observed = currentUsageLedgerRevision();
   const key = `${usageLogRevisionKey(observed)}\0${maxReadBytes}`;
   const existing = managementUsageReadInflight;
   if (existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
@@ -593,7 +660,27 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   }
   existing?.abort.abort(new Error("management usage read superseded"));
   const abort = new AbortController();
-  const promise = readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes);
+  const promise = (async (): Promise<ManagementUsageSnapshot> => {
+    let remaining = maxReadBytes;
+    const snapshots: ManagementUsageSnapshot[] = [];
+    for (const path of paths.slice().reverse()) {
+      if (remaining <= 0) break;
+      const snapshot = await readUsageEntriesFullCooperatively(path, abort.signal, remaining);
+      snapshots.push(snapshot);
+      remaining -= Math.min(snapshot.revision.size, remaining);
+    }
+    snapshots.reverse();
+    const entries = snapshots.flatMap(snapshot => snapshot.entries);
+    const entriesDropped = snapshots.reduce((sum, snapshot) => sum + snapshot.entriesDropped, 0)
+      + Math.max(0, entries.length - MANAGEMENT_USAGE_MAX_ENTRIES);
+    return {
+      entries: entries.slice(-MANAGEMENT_USAGE_MAX_ENTRIES),
+      revision: observed!,
+      truncatedPrefixBytes: Math.max(0, (observed?.size ?? 0) - maxReadBytes),
+      entriesTruncated: entriesDropped > 0,
+      entriesDropped,
+    };
+  })();
   managementUsageReadInflight = { key, promise, startedAt: Date.now(), abort };
   try {
     const snapshot = await promise;
@@ -608,20 +695,9 @@ export async function readUsageEntriesForManagement(): Promise<PersistedUsageEnt
 }
 
 export function readUsageEntries(): PersistedUsageEntry[] {
-  const path = usageLogPath();
-  if (!existsSync(path)) return [];
-  const lines = readFileSync(path, "utf-8").split(/\r?\n/);
   const entries: PersistedUsageEntry[] = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
-    } catch {
-      /* keep reading after a partially written or hand-edited line */
-    }
+  for (const path of usageLedgerPaths()) {
+    entries.push(...parseUsageLines(readFileSync(path, "utf-8").split(/\r?\n/)));
   }
   return entries;
 }
@@ -648,8 +724,16 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
  */
 export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
   if (!Number.isFinite(limit) || limit <= 0) return [];
-  const path = usageLogPath();
-  if (!existsSync(path)) return [];
+  const entries: PersistedUsageEntry[] = [];
+  for (const path of usageLedgerPaths().slice().reverse()) {
+    entries.unshift(...readRecentUsageEntriesFromPath(path, Math.ceil(limit) - entries.length));
+    if (entries.length >= limit) break;
+  }
+  return entries.slice(-limit);
+}
+
+function readRecentUsageEntriesFromPath(path: string, limit: number): PersistedUsageEntry[] {
+  if (limit <= 0 || !existsSync(path)) return [];
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");

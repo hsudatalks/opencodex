@@ -1,9 +1,9 @@
 /**
  * Schema contract for the derived request-history index (RI-02).
  *
- * `usage.jsonl` remains the canonical append-only evidence ledger;
- * `routing-history.sqlite` is a disposable, rebuildable query projection
- * (ADR-1/ADR-8 in devlog/_plan/260804_router_intelligence/000_master_plan.md).
+ * The retained JSONL WAL is recoverable evidence; `routing-history.sqlite` is a
+ * disposable query projection with one cursor per source segment (ADR-1/ADR-8 in
+ * devlog/_plan/260804_router_intelligence/000_master_plan.md).
  */
 
 export const HISTORY_SCHEMA_VERSION = 1;
@@ -27,6 +27,16 @@ export const HISTORY_DDL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_files (
+  path            TEXT PRIMARY KEY,
+  dev             INTEGER NOT NULL,
+  ino             INTEGER NOT NULL,
+  birthtime_ms    REAL NOT NULL,
+  size            INTEGER NOT NULL,
+  mtime_ms        REAL NOT NULL,
+  indexed_offset  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS requests (

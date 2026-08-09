@@ -35,6 +35,7 @@ import type { OcxConfig } from "../src/types";
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousSegments: string | undefined;
 
 function entry(
   requestId: string,
@@ -65,6 +66,8 @@ function seedRows(count: number, startTimestamp = 1000, provider = "a"): Persist
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousSegments = process.env.OPENCODEX_USAGE_SEGMENTS;
+  delete process.env.OPENCODEX_USAGE_SEGMENTS;
   testDir = mkdtempSync(join(tmpdir(), "ocx-history-"));
   process.env.OPENCODEX_HOME = testDir;
   resetUsageReadCacheForTests();
@@ -75,6 +78,8 @@ afterEach(() => {
   closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousSegments === undefined) delete process.env.OPENCODEX_USAGE_SEGMENTS;
+  else process.env.OPENCODEX_USAGE_SEGMENTS = previousSegments;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -119,6 +124,23 @@ describe("request-history index (RI-02)", () => {
     expect(after.meta.indexedRows).toBe(6);
     expect(after.meta.indexedOffset).toBeGreaterThan(offsetAfterInitial);
     expect(after.meta.lastError).not.toMatch(/identity changed/i);
+  });
+
+  test("indexes legacy plus hourly WAL segments incrementally across reopen", async () => {
+    appendUsageEntry(entry("legacy", 1_000));
+    expect((await queryRequestHistory({}, undefined, 10)).rows.map(row => row.requestId)).toEqual(["legacy"]);
+
+    process.env.OPENCODEX_USAGE_SEGMENTS = "1";
+    appendUsageEntry(entry("segment-a", 2_000));
+    const mixed = await queryRequestHistory({}, undefined, 10);
+    expect(mixed.rows.map(row => row.requestId)).toEqual(["segment-a", "legacy"]);
+    expect(mixed.meta.indexedRows).toBe(2);
+
+    closeRequestHistoryIndex();
+    appendUsageEntry(entry("segment-b", 3_000));
+    const reopened = await queryRequestHistory({}, undefined, 10);
+    expect(reopened.rows.map(row => row.requestId)).toEqual(["segment-b", "segment-a", "legacy"]);
+    expect(reopened.meta.indexedRows).toBe(3);
   });
 
   test("appended rows are ingested as a tail, never a full rebuild", async () => {
