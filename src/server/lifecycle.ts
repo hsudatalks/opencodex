@@ -25,6 +25,7 @@ import type {
   CodexAccountSelectionAdmission,
 } from "../codex/auth-context";
 import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-startup";
+import { stopUsagePostgresIngestion } from "../usage/postgres-ingest";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -571,6 +572,7 @@ export async function drainAndShutdown(
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
     stopStateStoreSweeper();
+    await stopUsagePostgresIngestion();
     cancelQueuedStorageWorkerSpawns();
     const shutdownJoins = await Promise.allSettled([
       abortStorageCleanupPolicyJobAsync(),

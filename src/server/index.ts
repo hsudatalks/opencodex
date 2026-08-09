@@ -31,6 +31,7 @@ import {
   setLiveStateStoreConfig,
 } from "../lib/state-store-registrations";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
+import { startUsagePostgresIngestion } from "../usage/postgres-ingest";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -496,6 +497,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
   startStateStoreSweeper();
+  startUsagePostgresIngestion();
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
