@@ -61,6 +61,28 @@ test("installApiAuthFetch deletes legacy sessionStorage token without reading it
   }
 });
 
+test("Ark embeds keep their short-lived session in memory and attach it only to same-origin APIs", async () => {
+  const session = "0123456789abcdef0123456789abcdef";
+  window.history.replaceState(null, "", `/#ark_admin_session=${session}`);
+  const seen: Array<[string, string | null]> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    seen.push([url.pathname, new Headers(init?.headers).get("X-Ark-OpenCodex-Session")]);
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+
+  await installMockAuthFetch(mockFetch);
+  await fetch("/api/settings");
+  await fetch("https://example.com/api/settings");
+
+  expect(seen).toEqual([
+    ["/api/settings", session],
+    ["/api/settings", null],
+  ]);
+  expect(window.location.hash).toBe("");
+  expect(sessionStorage.length).toBe(0);
+});
+
 test("prompted API tokens stay memory-only and are not written to sessionStorage", async () => {
   sessionStorage.setItem(LEGACY_TOKEN_KEY, "legacy-secret");
 

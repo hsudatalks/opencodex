@@ -39,14 +39,17 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
 
 /** Legacy sessionStorage key from pre-memory auth — wiped once on install, never read. */
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+const ARK_EMBED_SESSION_FRAGMENT = "ark_admin_session";
+const ARK_EMBED_SESSION_HEADER = "X-Ark-OpenCodex-Session";
 
 /** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
 let memoryToken: string | null = null;
+let memoryArkEmbedSession: string | null = null;
 let memoryCsrfToken: string | null = null;
 let memorySessionOrigin: string | null = null;
 
 function readToken(): string | null {
-  return memoryToken;
+  return memoryArkEmbedSession ?? memoryToken;
 }
 
 function storeToken(token: string): void {
@@ -55,8 +58,19 @@ function storeToken(token: string): void {
 
 function clearToken(): void {
   memoryToken = null;
+  memoryArkEmbedSession = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+}
+
+function loadArkEmbedSession(): void {
+  const hash = window.location.hash.slice(1);
+  if (!hash) return;
+  const params = new URLSearchParams(hash);
+  const session = params.get(ARK_EMBED_SESSION_FRAGMENT)?.trim() ?? "";
+  if (!/^[a-f0-9]{32}$/i.test(session)) return;
+  memoryArkEmbedSession = session;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 }
 
 function takeMetaContent(name: string): string | null {
@@ -144,8 +158,12 @@ function clearLegacySessionToken(): void {
 
 function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string): [RequestInfo | URL, RequestInit | undefined] {
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  headers.set("X-OpenCodex-API-Key", token);
-  if (memorySessionOrigin && memoryCsrfToken && token.startsWith("ocx_session_")) {
+  if (token === memoryArkEmbedSession) {
+    headers.set(ARK_EMBED_SESSION_HEADER, token);
+  } else {
+    headers.set("X-OpenCodex-API-Key", token);
+  }
+  if (!memoryArkEmbedSession && memorySessionOrigin && memoryCsrfToken && token.startsWith("ocx_session_")) {
     headers.set("X-OpenCodex-GUI-Origin", memorySessionOrigin);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     if (method !== "GET" && method !== "HEAD") {
@@ -194,6 +212,7 @@ export function installApiAuthFetch(): void {
   // Drop any leftover XSS-readable token; new tokens stay memory-only (no read/migrate).
   clearLegacySessionToken();
   loadInjectedSession();
+  loadArkEmbedSession();
   const originalFetch = window.fetch.bind(window);
   rawFetch = originalFetch;
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -229,6 +248,7 @@ export function installApiAuthFetch(): void {
 export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = promptForAdminToken): void {
   installed = false;
   memoryToken = null;
+  memoryArkEmbedSession = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
   resolutionInFlight = null;
