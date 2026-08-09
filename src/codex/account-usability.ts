@@ -12,6 +12,8 @@ export interface CodexAccountUsabilityOptions {
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
   /** Turn-scoped capacity check used only when assigning an unbound request. */
   canClaimAccount?: (accountId: string) => boolean;
+  /** Current admitted turns, used to spread new work without rebinding sessions. */
+  accountTurnCount?: (accountId: string) => number;
 }
 
 export function isCodexAccountUsable(

@@ -212,6 +212,9 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
           if (claimedCodexAccountId === accountId) return true;
           return (codexAccountTurns.get(accountId)?.size ?? 0) < limit;
         },
+        accountTurnCount(accountId) {
+          return codexAccountTurns.get(accountId)?.size ?? 0;
+        },
         claimAccount(accountId, limit, onTurnSettled) {
           if (!active) return false;
           if (claimedCodexAccountId === accountId) {

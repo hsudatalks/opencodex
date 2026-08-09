@@ -20,6 +20,7 @@ import {
   getCodexAccountCooldownUntil,
   getEffectiveActiveCodexAccountId,
   getCodexQuotaHealthSnapshot,
+  getCodexQuotaRoutingSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
   isCodexAccountInCooldown,
@@ -308,6 +309,27 @@ describe("codex routing", () => {
       resetCredits: 1,
       resetCreditExpiresAt: now / 1000 + 72 * 60 * 60,
     }, "plus", now)).toBe(120);
+    expect(computeCodexQuotaUrgency({
+      weeklyPercent: 40,
+      weeklyResetAt: now / 1000 + 144 * 60 * 60,
+    }, "plus", now, now + 48 * 60 * 60_000)).toBe(180);
+  });
+
+  test("quota routing keeps at least the three most urgent accounts in the candidate cohort", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig({
+      codexAccounts: ["a", "b", "c", "d"].map(id => ({ id, email: `${id}@test`, isMain: false })),
+    });
+    saveTestCredential("c");
+    saveTestCredential("d");
+    for (const [index, id] of ["a", "b", "c", "d"].entries()) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: index * 20,
+        weeklyResetAt: now / 1000 + 144 * 60 * 60,
+      });
+    }
+    const snapshot = getCodexQuotaRoutingSnapshot(config, now);
+    expect(snapshot.filter(row => row.candidate).map(row => row.accountId).sort()).toEqual(["a", "b", "c"]);
   });
 
   test("completed turn may release a binding lagging the highest urgency bucket by over 50 points", () => {
@@ -472,7 +494,7 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("b");
   });
 
-  test("transient turn capacity never changes quota routing or existing affinity", () => {
+  test("turn capacity spreads unbound quota work without changing existing affinity", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
@@ -481,8 +503,29 @@ describe("codex routing", () => {
 
     const capacity = { canClaimAccount: (accountId: string) => accountId !== "a" };
     expect(resolveCodexAccountForThreadDetailed("new-thread", config, Date.now(), undefined, capacity))
-      .toEqual({ status: "selected", accountId: "a" });
+      .toEqual({ status: "selected", accountId: "b" });
     expect(resolveCodexAccountForThreadDetailed("affined", config, Date.now(), undefined, capacity))
+      .toEqual({ status: "selected", accountId: "a" });
+  });
+
+  test("quota routing balances unbound work by active turns before affinity count", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig();
+    for (const id of ["a", "b"]) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 20,
+        weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      });
+    }
+    expect(resolveCodexAccountForThread("affinity-a", config, now)).toBe("a");
+    expect(resolveCodexAccountForThread("affinity-b", config, now + 1)).toBe("b");
+    expect(resolveCodexAccountForThread("affinity-a-2", config, now + 2)).toBe("a");
+
+    const capacity = {
+      canClaimAccount: () => true,
+      accountTurnCount: (accountId: string) => accountId === "a" ? 0 : 2,
+    };
+    expect(resolveCodexAccountForThreadDetailed("new-balanced", config, now + 3, undefined, capacity))
       .toEqual({ status: "selected", accountId: "a" });
   });
 

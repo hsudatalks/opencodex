@@ -41,7 +41,8 @@ describe("Codex account pool strategy management API", () => {
     expect(await resp!.json()).toMatchObject({
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
-      accountMaxConcurrentTurns: 10,
+      accountMaxConcurrentTurns: 4,
+      accountPoolOfficialResetAt: null,
     });
   });
 
@@ -97,10 +98,16 @@ describe("Codex account pool strategy management API", () => {
 
   test("PUT /api/codex-auth/pool-strategy accepts valid values and mutates runtime", async () => {
     const config = makeCodexConfig();
+    const officialResetAt = Date.now() + 86_400_000;
     const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strategy: "fill-first", stickyLimit: 7, maxConcurrentTurns: 12 }),
+      body: JSON.stringify({
+        strategy: "fill-first",
+        stickyLimit: 7,
+        maxConcurrentTurns: 12,
+        officialResetAt,
+      }),
     });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     expect(resp!.status).toBe(200);
@@ -109,10 +116,34 @@ describe("Codex account pool strategy management API", () => {
       accountPoolStrategy: "fill-first",
       accountPoolStickyLimit: 7,
       accountMaxConcurrentTurns: 12,
+      accountPoolOfficialResetAt: officialResetAt,
     });
     expect(config.accountPoolStrategy).toBe("fill-first");
     expect(config.accountPoolStickyLimit).toBe(7);
     expect(config.accountMaxConcurrentTurns).toBe(12);
+    expect(config.accountPoolOfficialResetAt).toBe(officialResetAt);
+  });
+
+  test("PUT validates and clears the official operations reset", async () => {
+    const config = makeCodexConfig({ accountPoolOfficialResetAt: Date.now() + 86_400_000 });
+    for (const bad of [Date.now() - 1, "tomorrow", 0]) {
+      const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ officialResetAt: bad }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(400);
+    }
+    const clear = new Request("http://localhost/api/codex-auth/pool-strategy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ officialResetAt: null }),
+    });
+    const resp = await handleCodexAuthAPI(clear, new URL(clear.url), config);
+    expect(resp!.status).toBe(200);
+    expect(config.accountPoolOfficialResetAt).toBeUndefined();
+    expect(await resp!.json()).toMatchObject({ accountPoolOfficialResetAt: null });
   });
 
   test("PATCH /api/codex-auth/pool-strategy accepts round-robin", async () => {

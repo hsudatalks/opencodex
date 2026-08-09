@@ -336,6 +336,7 @@ export function computeCodexCapacityPressure(
   quota: StoredAccountQuota | null,
   plan?: string | null,
   now = Date.now(),
+  officialResetAt?: number,
 ): number | null {
   if (!quota) return null;
   const monthlyPlan = ["go", "free"].includes(plan?.trim().toLowerCase() ?? "");
@@ -346,7 +347,7 @@ export function computeCodexCapacityPressure(
   const manualDeadline = quota.resetCredits && quota.resetCredits > 0
     ? epochMs(quota.resetCreditExpiresAt)
     : undefined;
-  const deadlines = [scheduledReset, manualDeadline]
+  const deadlines = [scheduledReset, manualDeadline, epochMs(officialResetAt)]
     .filter((deadline): deadline is number => deadline !== undefined && deadline > now);
   if (deadlines.length === 0) return null;
 
@@ -360,6 +361,7 @@ export function computeCodexQuotaUrgency(
   quota: StoredAccountQuota | null,
   plan?: string | null,
   now = Date.now(),
+  officialResetAt?: number,
 ): number | null {
   if (!quota) return null;
   const monthlyPlan = ["go", "free"].includes(plan?.trim().toLowerCase() ?? "");
@@ -370,7 +372,7 @@ export function computeCodexQuotaUrgency(
   const manualDeadline = quota.resetCredits && quota.resetCredits > 0
     ? epochMs(quota.resetCreditExpiresAt)
     : undefined;
-  const deadlines = [scheduledReset, manualDeadline]
+  const deadlines = [scheduledReset, manualDeadline, epochMs(officialResetAt)]
     .filter((deadline): deadline is number => deadline !== undefined && deadline > now);
   if (deadlines.length === 0) return null;
 
@@ -387,6 +389,7 @@ function quotaUrgencyBucket(
     getAccountQuota(accountId),
     getPoolAccountPlan(config, accountId),
     now,
+    config.accountPoolOfficialResetAt,
   );
   return urgency === null
     ? null
@@ -399,6 +402,7 @@ function compareQuotaCandidates(
   rightQuota: StoredAccountQuota | null,
   rightPlan: string | null | undefined,
   now: number,
+  officialResetAt?: number,
 ): number {
   const leftUsage = computeCodexUsageScore(leftQuota, leftPlan);
   const rightUsage = computeCodexUsageScore(rightQuota, rightPlan);
@@ -407,8 +411,8 @@ function compareQuotaCandidates(
   if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
   if (!leftKnown) return 0;
 
-  const leftPressure = computeCodexQuotaUrgency(leftQuota, leftPlan, now);
-  const rightPressure = computeCodexQuotaUrgency(rightQuota, rightPlan, now);
+  const leftPressure = computeCodexQuotaUrgency(leftQuota, leftPlan, now, officialResetAt);
+  const rightPressure = computeCodexQuotaUrgency(rightQuota, rightPlan, now, officialResetAt);
   if (leftPressure !== null && rightPressure !== null && leftPressure !== rightPressure) {
     return rightPressure - leftPressure;
   }
@@ -988,15 +992,18 @@ function bindThreadAffinity(
 }
 
 /**
- * Turn capacity is an admission concern, not session routing state. Existing
- * affinity and quota cohort selection must stay stable while a short burst is
- * in flight; the auth layer may still reject the turn without rebinding it.
+ * Existing affinity must stay stable while a short burst is in flight. New
+ * requests may still use transient capacity to spread work before admission.
  */
 function withoutTransientAccountCapacity(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): CodexAccountUsabilityOptions | undefined {
-  if (!selectionOptions?.canClaimAccount) return selectionOptions;
-  const { canClaimAccount: _ignored, ...stableOptions } = selectionOptions;
+  if (!selectionOptions?.canClaimAccount && !selectionOptions?.accountTurnCount) return selectionOptions;
+  const {
+    canClaimAccount: _ignored,
+    accountTurnCount: _ignoredTurnCount,
+    ...stableOptions
+  } = selectionOptions;
   return stableOptions;
 }
 
@@ -1018,8 +1025,7 @@ function quotaAccountWorkingSet(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): readonly string[] {
-  const stableOptions = withoutTransientAccountCapacity(selectionOptions);
-  const eligible = [...getEligiblePoolAccounts(config, undefined, now, quotaScope, stableOptions)];
+  const eligible = [...getEligiblePoolAccounts(config, undefined, now, quotaScope, selectionOptions)];
   const withHeadroom = eligible.filter(accountId => hasCodexQuotaHeadroom(config, accountId));
   const candidates = withHeadroom.length > 0 ? withHeadroom : eligible;
   candidates.sort((left, right) => compareQuotaCandidates(
@@ -1028,14 +1034,17 @@ function quotaAccountWorkingSet(
     getAccountQuota(right),
     getPoolAccountPlan(config, right),
     now,
+    config.accountPoolOfficialResetAt,
   ) || left.localeCompare(right));
   const highestBucket = candidates.length > 0
     ? quotaUrgencyBucket(config, candidates[0]!, now)
     : null;
-  const workingSet = candidates.filter(accountId => (
+  const highestBucketSet = candidates.filter(accountId => (
     quotaUrgencyBucket(config, accountId, now) === highestBucket
   ));
-  return workingSet;
+  // Keep enough independent accounts hot to absorb bursts without making every
+  // request churn credentials. The urgency bucket can naturally contain more.
+  return candidates.slice(0, Math.max(3, highestBucketSet.length));
 }
 
 export type CodexQuotaRoutingAccountSnapshot = {
@@ -1065,6 +1074,7 @@ export function getCodexQuotaRoutingSnapshot(
       getAccountQuota(accountId),
       getPoolAccountPlan(config, accountId),
       now,
+      config.accountPoolOfficialResetAt,
     ),
     urgencyBucket: quotaUrgencyBucket(config, accountId, now),
     affinityCount: loads.get(accountId) ?? 0,
@@ -1311,6 +1321,7 @@ function pickLowestUsageAmong(config: OcxConfig, ids: readonly string[], now = D
       getAccountQuota(best),
       getPoolAccountPlan(config, best),
       now,
+      config.accountPoolOfficialResetAt,
     ) < 0) {
       best = id;
     }
@@ -1511,7 +1522,6 @@ function pickQuotaAccountForUnbound(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string {
-  const stableOptions = withoutTransientAccountCapacity(selectionOptions);
   const activeUsage = computeCodexUsageScore(
     getAccountQuota(active),
     getPoolAccountPlan(config, active),
@@ -1519,7 +1529,7 @@ function pickQuotaAccountForUnbound(
   if (isUnknownUsage(activeUsage)) return active;
   if (pinnedCodexAccountId(config) === active && hasCodexQuotaHeadroom(config, active)) return active;
   if (quotaUrgencyBucket(config, active, now) === null) {
-    const best = pickLowestUsageCodexAccount(config, undefined, now, quotaScope, stableOptions);
+    const best = pickLowestUsageCodexAccount(config, undefined, now, quotaScope, selectionOptions);
     if (!best || best === active) return active;
     return compareQuotaCandidates(
       getAccountQuota(best),
@@ -1527,14 +1537,23 @@ function pickQuotaAccountForUnbound(
       getAccountQuota(active),
       getPoolAccountPlan(config, active),
       now,
+      config.accountPoolOfficialResetAt,
     ) < 0 ? best : active;
   }
-  const workingSet = quotaAccountWorkingSet(config, now, quotaScope, stableOptions);
+  const workingSet = quotaAccountWorkingSet(config, now, quotaScope, selectionOptions);
   if (workingSet.length === 0) return active;
   const loads = quotaAffinityLoads(now, quotaScope);
   let selected = workingSet[0]!;
   for (const candidate of workingSet.slice(1)) {
-    if ((loads.get(candidate) ?? 0) < (loads.get(selected) ?? 0)) selected = candidate;
+    const candidateTurns = selectionOptions?.accountTurnCount?.(candidate) ?? 0;
+    const selectedTurns = selectionOptions?.accountTurnCount?.(selected) ?? 0;
+    if (
+      candidateTurns < selectedTurns
+      || (
+        candidateTurns === selectedTurns
+        && (loads.get(candidate) ?? 0) < (loads.get(selected) ?? 0)
+      )
+    ) selected = candidate;
   }
   return selected;
 }
@@ -1594,9 +1613,7 @@ export function previewCodexAccountForRequest(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
-  const quotaRoutingOptions = normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
-    ? withoutTransientAccountCapacity(selectionOptions)
-    : selectionOptions;
+  const quotaRoutingOptions = selectionOptions;
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
     const stableOptions = withoutTransientAccountCapacity(selectionOptions);
@@ -1689,9 +1706,9 @@ export function resolveCodexAccountForThreadDetailed(
   const strategyPick = pickUnboundStrategyAccount(config, threadId, now, true, quotaScope, selectionOptions);
   if (strategyPick) return { status: "selected", accountId: strategyPick };
 
-  const quotaRoutingOptions = normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
-    ? withoutTransientAccountCapacity(selectionOptions)
-    : selectionOptions;
+  // No affinity remains here: transient admission load is valid input for assigning
+  // this new task. Existing bindings returned above deliberately ignore it.
+  const quotaRoutingOptions = selectionOptions;
 
   let active = getEffectiveActiveCodexAccountId(config);
   if (!active) {

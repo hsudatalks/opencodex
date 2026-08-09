@@ -1073,6 +1073,9 @@ const configSchema = z.object({
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // An expired deadline is harmless (routing ignores it), while malformed hand edits
+  // must not discard the rest of the account pool configuration.
+  accountPoolOfficialResetAt: z.number().finite().positive().optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
   // map degrades to "no ordering" rather than failing the parse, so a hand-edited

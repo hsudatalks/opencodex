@@ -267,6 +267,7 @@ export interface ResolveCodexAuthContextOptions {
 export interface CodexAccountSelectionAdmission {
   readonly mainProfileDraining: boolean;
   canClaimAccount(accountId: string, limit: number): boolean;
+  accountTurnCount(accountId: string): number;
   claimAccount(accountId: string, limit: number, onTurnSettled?: () => void): boolean;
   claimMainProfile(): boolean;
   release(): void;
@@ -303,6 +304,9 @@ export async function resolveCodexAuthContext(
     isMainAccountTokenLive: options.isMainAccountTokenLive,
     canClaimAccount: selectionAdmission
       ? (candidateId: string) => selectionAdmission.canClaimAccount(candidateId, maxConcurrentTurns)
+      : undefined,
+    accountTurnCount: selectionAdmission
+      ? (candidateId: string) => selectionAdmission.accountTurnCount(candidateId)
       : undefined,
   };
   let accountId: string;
