@@ -739,6 +739,10 @@ export function startUsagePostgresIngestion(): boolean {
   return true;
 }
 
+export function usagePostgresClient(): SQL | null {
+  return sqlClient;
+}
+
 export async function stopUsagePostgresIngestion(): Promise<void> {
   workerStopped = true;
   if (workerTimer) clearTimeout(workerTimer);

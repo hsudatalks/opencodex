@@ -7,6 +7,7 @@ import {
   effectiveServiceTier,
   normalizeCostTokens,
   resolveMatchedPrice,
+  sqlCostRule,
   tokensPerSecond,
 } from "../src/usage/cost";
 import {
@@ -681,5 +682,22 @@ describe("long-context pricing tiers (#908)", () => {
       expect(tier.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(tier.thresholdInputTokens).toBeGreaterThan(0);
     }
+  });
+
+  test("L12. SQL aggregate rule preserves canonical price, long tier, and Fast policy", () => {
+    const sol = sqlCostRule("openai", "gpt-5.6-sol");
+    expect(sol).not.toBeNull();
+    expect(sol!.longThreshold).toBe(272_000);
+    expect(sol!.longInclusive).toBe(false);
+    expect(sol!.longInputMultiplier).toBe(2);
+    expect(sol!.longOutputMultiplier).toBe(1.5);
+    expect(sol!.priorityMultiplier).toBe(2);
+
+    const routed = sqlCostRule("openrouter", "gpt-5.6-sol");
+    if (routed) {
+      expect(routed.longThreshold).toBeNull();
+      expect(routed.priorityMultiplier).toBe(1);
+    }
+    expect(sqlCostRule("no-such-provider", "no-such-model")).toBeNull();
   });
 });

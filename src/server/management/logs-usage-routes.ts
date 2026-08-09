@@ -55,6 +55,8 @@ import {
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { usagePostgresClient } from "../../usage/postgres-ingest";
+import { cachedUsageSummaryFromPostgres } from "../../usage/postgres-summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -189,6 +191,21 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const now = Date.now();
     try {
+      const postgres = usagePostgresClient();
+      if (postgres) {
+        try {
+          return jsonResponse({
+            ...await cachedUsageSummaryFromPostgres(postgres, range, now, surface),
+            historyTruncated: false,
+            truncatedPrefixBytes: 0,
+            entriesTruncated: false,
+            entriesDropped: 0,
+          });
+        } catch (error) {
+          console.warn("[usage-postgres] summary unavailable; falling back to JSONL:",
+            error instanceof Error ? error.message : error);
+        }
+      }
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
