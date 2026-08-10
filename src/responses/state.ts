@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
+import { getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import type { OcxProviderContinuationState } from "../types";
 import {
@@ -13,6 +13,16 @@ import {
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
+import {
+  applyResponseStateMutations,
+  clearResponseStateStoreForTests,
+  closeResponseStateStore,
+  importLegacyResponseStates,
+  loadResponseStateStore,
+  responseStateStoreStats,
+  type PersistedResponseStateRow,
+  type ResponseStateMutation,
+} from "./state-store";
 
 /** Replay grace for response ids that have already been advanced by a child. */
 const SUPERSEDED_RESPONSE_TTL_MS = 60 * 60 * 1_000;
@@ -27,9 +37,6 @@ const SNAPSHOT_DEBOUNCE_MS = 2_000;
  * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
  * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
 export const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
-/** Legacy snapshot selection only. Spill demotion is governed solely by the RAM cap above. */
-const SNAPSHOT_ENTRY_MAX_BYTES = 2 * 1024 * 1024;
-const SNAPSHOT_TOTAL_MAX_BYTES = 24 * 1024 * 1024;
 /** Refuse-to-parse ceiling for an existing snapshot file (above the 24 MiB write
  * bound, so anything we wrote ourselves always loads; guards against externally
  * planted or pre-cap unbounded files being parsed whole). */
@@ -38,7 +45,7 @@ const STALE_TEMP_GRACE_MS = 15 * 60 * 1_000;
 const STALE_TEMP_MAX_ENTRIES = 4_096;
 const STALE_TEMP_MAX_CLEANUPS = 512;
 const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp$/;
-const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
+const MAX_INCREMENTAL_COMMIT_ATTEMPTS = 8;
 
 interface ResidentResponseState {
   kind: "resident";
@@ -80,6 +87,15 @@ let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
 let stateRevision = 0;
+let mutationRevision = 0;
+let hydrating = false;
+interface PendingStateMutation {
+  responseId: string;
+  state: StoredResponseState | null;
+  revision: number;
+}
+const pendingStateMutations = new Map<string, PendingStateMutation>();
+let incrementalStoreConfigDir: string | null = null;
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
 const retentionCounters = {
   headTtlEvictions: 0,
@@ -101,17 +117,11 @@ const admissionCounters = { directSpills: 0, oversizedDrops: 0, snapshotOversize
 export function responseAdmissionCountersForTests(): Readonly<typeof admissionCounters> {
   return admissionCounters;
 }
-// Superseded spill generations awaiting a durable snapshot before unlink
-// (review C1-1: unlinking at swap time races a crash against the debounced
-// snapshot — the reloaded OLD stub would point at a deleted file).
-const pendingSpillUnlinks: ResponseSpillRef[] = [];
-// The queue itself must stay bounded (review C2-2: repeated replacements with
-// a persistently failing snapshot write would otherwise grow it without
-// limit). Beyond the cap the OLDEST superseded generation is unlinked
-// immediately: the accepted worst case is that a crash inside that window
-// reloads a stub whose file is gone, which fails replay with the explicit
-// structured 400 — bounded-loss, never silent corruption or unbounded disk.
-const PENDING_SPILL_UNLINKS_MAX = 128;
+// Superseded spill generations awaiting a committed metadata mutation. A crash
+// before the SQLite transaction leaves the old row and old payload intact; a
+// crash after commit leaves at worst an orphan reclaimed by startup GC.
+const committedSpillRefs = new Map<string, ResponseSpillRef>();
+const pendingSpillUnlinks = new Map<string, ResponseSpillRef>();
 
 function byteCap(): number {
   return byteCapOverride ?? MAX_STORED_RESPONSE_BYTES;
@@ -134,6 +144,39 @@ function serializedBytes(value: unknown): number | null {
   } catch {
     return null;
   }
+}
+
+function persistedStateJson(entry: StoredResponseState): string {
+  if (entry.kind === "resident") {
+    const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = entry;
+    return JSON.stringify(resident);
+  }
+  const { sizeBytes: _sizeBytes, ...smallState } = entry;
+  return JSON.stringify(smallState);
+}
+
+function noteStateMutation(id: string, entry: StoredResponseState | null): void {
+  if (hydrating) return;
+  const mutation: PendingStateMutation = {
+    responseId: id,
+    state: entry,
+    revision: ++mutationRevision,
+  };
+  // Reinsert so Map iteration preserves the order of the latest mutation,
+  // matching the in-memory map's delete+set ordering for capacity eviction.
+  pendingStateMutations.delete(id);
+  pendingStateMutations.set(id, mutation);
+}
+
+function deferSpillUnlink(id: string, ref: ResponseSpillRef): void {
+  if (committedSpillRefs.get(id)?.fileName === ref.fileName) {
+    // At most one generation per response id can be referenced by SQLite.
+    pendingSpillUnlinks.set(id, ref);
+    return;
+  }
+  // This generation never became authoritative. It cannot be recovered after
+  // a crash and can be reclaimed immediately without risking the committed row.
+  deleteResponseSpill(ref);
 }
 
 function measureResidentEntry(id: string, entry: ResidentInput): ResidentResponseState | null {
@@ -179,6 +222,7 @@ function replaceMapEntry(id: string, next: StoredResponseState, expected?: Store
     oldestResidentAt = next.createdAt;
   }
   stateRevision += 1;
+  noteStateMutation(id, next);
   return true;
 }
 
@@ -212,13 +256,14 @@ function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void 
   states.delete(id);
   if (oldestResidentId === id) recomputeOldestResident();
   stateRevision += 1;
-  if (options.deleteSpill !== false) deleteOwnedSpills(existing);
+  noteStateMutation(id, null);
+  if (options.deleteSpill !== false && existing.kind === "spill") deferSpillUnlink(id, existing.spill);
 }
 
 function replaceWithSpillFailure(
   id: string,
   expected?: StoredResponseState,
-  options: { deferSpillUnlink?: boolean } = {},
+  _options: { deferSpillUnlink?: boolean } = {},
 ): void {
   const existing = states.get(id);
   if (expected && existing !== expected) return;
@@ -229,17 +274,7 @@ function replaceWithSpillFailure(
   );
   if (replaceMapEntry(id, failed, expected)) {
     if (existing) {
-      if (options.deferSpillUnlink && existing.kind === "spill") {
-        // Crash consistency (same rule as replaceSpillEntryAtomically): the old
-        // durable snapshot still references this generation until the tombstone
-        // itself is durable — queue the unlink for the next stable persist.
-        pendingSpillUnlinks.push(existing.spill);
-        while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-          deleteResponseSpill(pendingSpillUnlinks.shift()!);
-        }
-      } else {
-        deleteOwnedSpills(existing);
-      }
+      if (existing.kind === "spill") deferSpillUnlink(id, existing.spill);
     }
   }
 }
@@ -285,18 +320,13 @@ function replaceSpillEntryAtomically(
     }
     spillCounters.writes += 1;
     noteStubSwapForTest();
-    // The old generation is NOT unlinked here (review C1-1): the new stub is
-    // only durable once the debounced snapshot flushes — a crash before that
-    // reloads the OLD stub, which must still find its file. Queue the unlink;
-    // persistNow() drains the queue only after the snapshot write succeeds.
-    pendingSpillUnlinks.push(expected.spill);
-    while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-      deleteResponseSpill(pendingSpillUnlinks.shift()!);
-    }
+    // The new stub is durable only after its SQLite transaction commits. A
+    // crash before that reloads the old row, which must retain its payload.
+    deferSpillUnlink(id, expected.spill);
   } catch {
     spillCounters.writeFailures += 1;
-    // deferSpillUnlink: the durable snapshot may still reference the old
-    // generation; deleting it now would strand the old stub after a crash.
+    // The durable row may still reference the old generation; deleting it now
+    // would strand that row after a crash.
     replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
   }
 }
@@ -406,13 +436,9 @@ function admitOversizedCandidate(
     if (forceDurable || candidate.sizeBytes > byteCap()) admissionCounters.directSpills += 1;
     noteStubSwapForTest();
     if (expected?.kind === "spill") {
-      // Same deferred-unlink rule as replaceSpillEntryAtomically: the new stub
-      // is durable only after the debounced snapshot, so the old generation
-      // stays until a stable persist drains the queue.
-      pendingSpillUnlinks.push(expected.spill);
-      while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-        deleteResponseSpill(pendingSpillUnlinks.shift()!);
-      }
+      // Same deferred-unlink rule as replaceSpillEntryAtomically: retain the
+      // old generation until the replacement metadata transaction commits.
+      deferSpillUnlink(id, expected.spill);
     }
   } catch {
     spillCounters.writeFailures += 1;
@@ -619,16 +645,85 @@ export function recoverStaleResponseStateTemps(
   return result;
 }
 
+function hydratePersistedRows(rows: readonly PersistedResponseStateRow[]): void {
+  for (const row of rows) {
+    try {
+      loadSnapshotEntry(row.responseId, JSON.parse(row.stateJson) as unknown);
+    } catch {
+      // A corrupt row is isolated to its response id; valid continuation rows
+      // remain available and a later mutation can overwrite the bad row.
+    }
+  }
+}
+
+function legacySnapshotRows(path: string): PersistedResponseStateRow[] {
+  if (!existsSync(path)) return [];
+  const stat = statSync(path);
+  if (!stat.isFile()) return [];
+  if (stat.size > SNAPSHOT_FILE_MAX_BYTES) {
+    admissionCounters.snapshotOversizedRefusals += 1;
+    return [];
+  }
+  const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
+  if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.states)) return [];
+  const rows: PersistedResponseStateRow[] = [];
+  for (const entry of raw.states) {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+    try {
+      rows.push({ responseId: entry[0], stateJson: JSON.stringify(entry[1]) });
+    } catch { /* one invalid legacy row must not block the migration */ }
+  }
+  return rows;
+}
+
+function refreshCommittedSpillRefsFromMemory(): void {
+  committedSpillRefs.clear();
+  for (const [id, state] of states) {
+    if (state.kind === "spill") committedSpillRefs.set(id, state.spill);
+  }
+}
+
+function noteCommittedMutation(mutation: ResponseStateMutation): void {
+  if (mutation.stateJson === null) {
+    committedSpillRefs.delete(mutation.responseId);
+    return;
+  }
+  try {
+    const value = JSON.parse(mutation.stateJson) as { kind?: unknown; spill?: unknown };
+    if (value.kind === "spill" && isSpillRef(value.spill)) {
+      committedSpillRefs.set(mutation.responseId, value.spill);
+    } else {
+      committedSpillRefs.delete(mutation.responseId);
+    }
+  } catch {
+    committedSpillRefs.delete(mutation.responseId);
+  }
+}
+
+function ensureIncrementalStoreReady(configDir: string): void {
+  if (incrementalStoreConfigDir === configDir) return;
+  const persisted = loadResponseStateStore(configDir);
+  if (!persisted.legacyImported) {
+    // This also repairs a transient first-load SQLite failure: import the
+    // current normalized in-memory state before accepting row-level writes.
+    importLegacyResponseStates(
+      [...states].map(([responseId, state]) => ({ responseId, stateJson: persistedStateJson(state) })),
+      configDir,
+    );
+  }
+  incrementalStoreConfigDir = configDir;
+  refreshCommittedSpillRefsFromMemory();
+}
+
 /**
- * Best-effort disk snapshot so previous_response_id chains survive a proxy restart (the
- * dominant expansion-miss cause: an in-memory-only store dies with the process, and the next
- * chained turn then reaches the upstream as a naked delta). Load is lazy on first store access;
- * persistence is debounced + unref'd so the hot path never blocks and the process can exit.
- * Every disk failure is swallowed — the snapshot is a cache, not a source of truth.
+ * Load the incremental SQLite store lazily. A v1/v2 JSON snapshot is imported
+ * exactly once when the database is first created, then left untouched as a
+ * migration audit artifact. Runtime persistence is row-level and never rewrites it.
  */
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
+  hydrating = true;
   const path = snapshotPath();
   // Atomic writes place their temp beside the RESOLVED target, so a symlinked
   // snapshot (dotfiles-managed config dir) strands temps in the link's real
@@ -648,30 +743,34 @@ function ensureLoaded(): void {
       /* best-effort cleanup only; snapshot loading must remain independent */
     }
   }
+  const configDir = getConfigDir();
+  let storeAvailable = false;
   try {
-    if (existsSync(path)) {
-      // Bound the read BEFORE parse: the 24 MiB write cap constrains snapshots
-      // this process wrote, not a pre-existing oversized file. statSync follows
-      // symlinks deliberately — readFileSync below follows them too, so the
-      // size gate must measure the same target the read would.
-      const stat = statSync(path);
-      if (!stat.isFile()) {
-        // Symlink to a FIFO/device (e.g. /dev/zero): reading would block or
-        // return unbounded input. Only regular files are ever parsed.
-      } else if (stat.size > SNAPSHOT_FILE_MAX_BYTES) {
-        admissionCounters.snapshotOversizedRefusals += 1;
-      } else {
-        const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-        if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
-          for (const entry of raw.states) {
-            if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
-            loadSnapshotEntry(entry[0], entry[1]);
-          }
-        }
-      }
+    const persisted = loadResponseStateStore(configDir);
+    storeAvailable = true;
+    if (persisted.legacyImported) {
+      hydratePersistedRows(persisted.rows);
+    } else {
+      const rows = legacySnapshotRows(path);
+      hydratePersistedRows(rows);
+      // Serialize normalized rows so v1 Cursor fields become provider-keyed
+      // state in the canonical store during the same migration transaction.
+      importLegacyResponseStates(
+        [...states].map(([responseId, state]) => ({ responseId, stateJson: persistedStateJson(state) })),
+        configDir,
+      );
     }
+    incrementalStoreConfigDir = configDir;
+    refreshCommittedSpillRefsFromMemory();
   } catch {
-    /* missing/corrupt snapshot: start empty */
+    // If SQLite cannot open, retain the previous best-effort behavior and load
+    // the bounded legacy snapshot. A later mutation may recover persistence.
+    try { hydratePersistedRows(legacySnapshotRows(path)); } catch { /* corrupt legacy snapshot */ }
+    // Treat fallback rows conservatively as durable until SQLite can be
+    // reopened; this prevents deleting a payload referenced by either store.
+    refreshCommittedSpillRefsFromMemory();
+  } finally {
+    hydrating = false;
   }
   const referenced = new Set<string>();
   for (const state of states.values()) {
@@ -679,102 +778,86 @@ function ensureLoaded(): void {
   }
   try { recoverOrphanedResponseSpills(referenced); } catch { /* best effort */ }
   pruneResponses();
+  if (storeAvailable && pendingStateMutations.size > 0) schedulePersist();
 }
 
-type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
+type IncrementalCommitOutcome = "stable" | "unstable" | "failed";
 
-async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome> {
-  // Serialize writers so concurrent flush + debounce cannot race on temps / ACL (#612).
+async function commitPendingMutations(configDir: string): Promise<IncrementalCommitOutcome> {
+  // Serialize writers so concurrent flush + debounce cannot race on mutation
+  // acknowledgement or superseded-spill cleanup.
   const previous = persistGate;
   let release!: () => void;
   persistGate = new Promise<void>(resolve => { release = resolve; });
   await previous;
   try {
-    for (let attempt = 0; attempt < MAX_SNAPSHOT_REWRITE_ATTEMPTS; attempt += 1) {
-      const revision = stateRevision;
-      const entries: Array<[string, unknown]> = [];
-      let total = 0;
-      // Chain heads are authoritative. Persist them before superseded replay history,
-      // then newest-first inside each class. Durable stubs are tiny, so a busy fleet
-      // no longer loses live heads behind a few large resident entries.
-      const ordered = [...states].reverse().sort(([, left], [, right]) => {
-        return Number(left.supersededAt !== undefined) - Number(right.supersededAt !== undefined);
-      });
-      for (const [id, state] of ordered) {
-        let persistable: unknown;
-        if (state.kind === "resident") {
-          const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
-          persistable = resident;
-        } else {
-          const { sizeBytes: _sizeBytes, ...smallState } = state;
-          persistable = smallState;
-        }
-        const persistEntry: [string, unknown] = [id, persistable];
-        // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
-        // past both snapshot caps at up to 2x the intended size.
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) continue;
-        total += size;
-        entries.push(persistEntry);
-      }
-      entries.reverse();
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-      await atomicWriteFileAsync(path, JSON.stringify({ version: 2, states: entries }));
-      persistAttemptHookForTests?.();
-      if (revision === stateRevision) return "stable";
+    const batch = [...pendingStateMutations.values()];
+    if (batch.length === 0) return "stable";
+    const serializedBatch: ResponseStateMutation[] = batch.map(mutation => ({
+      responseId: mutation.responseId,
+      stateJson: mutation.state ? persistedStateJson(mutation.state) : null,
+    }));
+    try {
+      ensureIncrementalStoreReady(configDir);
+      applyResponseStateMutations(serializedBatch, configDir);
+    } catch {
+      return "failed";
     }
-    return "unstable";
-  } catch {
-    return "failed";
+    for (const mutation of serializedBatch) noteCommittedMutation(mutation);
+    for (const mutation of batch) {
+      if (pendingStateMutations.get(mutation.responseId)?.revision === mutation.revision) {
+        pendingStateMutations.delete(mutation.responseId);
+      }
+    }
+    drainPendingSpillUnlinks();
+    persistAttemptHookForTests?.();
+    return pendingStateMutations.size === 0 ? "stable" : "unstable";
   } finally {
     release();
   }
 }
 
 function drainPendingSpillUnlinks(): void {
-  while (pendingSpillUnlinks.length > 0) {
-    const ref = pendingSpillUnlinks.shift()!;
+  for (const [id, ref] of pendingSpillUnlinks) {
+    if (committedSpillRefs.get(id)?.fileName === ref.fileName) continue;
     deleteResponseSpill(ref);
+    pendingSpillUnlinks.delete(id);
   }
 }
 
-function schedulePersistAt(path: string, replace = false): void {
+function schedulePersistAt(configDir: string, replace = false): void {
   if (persistTimer && !replace) return;
   if (persistTimer) clearTimeout(persistTimer);
-  pendingPersistPath = path;
-  persistTimer = setTimeout(() => { void persistNow(path); }, SNAPSHOT_DEBOUNCE_MS);
+  pendingPersistPath = configDir;
+  persistTimer = setTimeout(() => { void persistNow(configDir); }, SNAPSHOT_DEBOUNCE_MS);
   (persistTimer as { unref?: () => void }).unref?.();
 }
 
-async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
+async function persistNow(configDir: string, awaitFollowUp = false): Promise<void> {
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
   pendingPersistPath = null;
-  let outcome = await writeBoundedSnapshot(path);
-  if (outcome === "unstable" && awaitFollowUp) {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = null;
-    pendingPersistPath = null;
-    outcome = await writeBoundedSnapshot(path);
+  let outcome: IncrementalCommitOutcome = "stable";
+  const maxAttempts = awaitFollowUp ? MAX_INCREMENTAL_COMMIT_ATTEMPTS : 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    outcome = await commitPendingMutations(configDir);
+    if (outcome !== "unstable") break;
   }
-  if (outcome === "stable") drainPendingSpillUnlinks();
-  else if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
+  if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(configDir, true);
 }
 
 function schedulePersist(): void {
   // Resolve the target path NOW: tests (and anything else) may swap OPENCODEX_HOME before the
   // debounce fires, and a late write must land in the home that owned the recorded state.
-  schedulePersistAt(snapshotPath());
+  schedulePersistAt(getConfigDir());
 }
 
-/** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
+/** Flush pending incremental mutations (graceful shutdown / deterministic tests). */
 export async function flushResponseState(): Promise<void> {
   if (persistTimer) {
-    await persistNow(pendingPersistPath ?? snapshotPath(), true);
+    await persistNow(pendingPersistPath ?? getConfigDir(), true);
     return;
   }
   // No pending timer: still await any in-flight write so shutdown does not race (#612).
@@ -782,7 +865,8 @@ export async function flushResponseState(): Promise<void> {
   // A bounded background pass may have scheduled its same-path follow-up while
   // this flush was waiting on the single-flight gate. Shutdown owns one awaited
   // bounded follow-up rather than returning behind that unref'd timer.
-  if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
+  if (persistTimer) await persistNow(pendingPersistPath ?? getConfigDir(), true);
+  else if (pendingStateMutations.size > 0) await persistNow(getConfigDir(), true);
 }
 
 function inputItems(input: unknown): unknown[] {
@@ -996,6 +1080,16 @@ export interface ResponseStateMetrics {
   supersededCapacityEvictions: number;
   emergencyHeadEvictions: number;
   replayMisses: number;
+  persistenceBackend: "sqlite-incremental";
+  persistencePendingMutations: number;
+  persistenceRows: number;
+  persistenceCommits: number;
+  persistenceRowsWritten: number;
+  persistencePayloadBytes: number;
+  persistenceLogicalPayloadBytes: number;
+  persistenceFailures: number;
+  persistenceDbBytes: number;
+  persistenceWalBytes: number;
 }
 
 /**
@@ -1017,6 +1111,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
   let spillPayloadBytes = 0;
   let headCount = 0;
   let supersededCount = 0;
+  const persistence = responseStateStoreStats();
   for (const state of states.values()) {
     const bytes = state.sizeBytes;
     if (bytes > largestBytes) largestBytes = bytes;
@@ -1045,6 +1140,16 @@ export function responseStateMetrics(): ResponseStateMetrics {
     headCount,
     supersededCount,
     ...retentionCounters,
+    persistenceBackend: "sqlite-incremental",
+    persistencePendingMutations: pendingStateMutations.size,
+    persistenceRows: persistence.rowCount,
+    persistenceCommits: persistence.commits,
+    persistenceRowsWritten: persistence.rowsWritten,
+    persistencePayloadBytes: persistence.payloadBytes,
+    persistenceLogicalPayloadBytes: persistence.logicalPayloadBytes,
+    persistenceFailures: persistence.failures,
+    persistenceDbBytes: persistence.dbBytes,
+    persistenceWalBytes: persistence.walBytes,
   };
 }
 
@@ -1110,7 +1215,7 @@ export function rememberResponseState(
   schedulePersist();
 }
 
-/** Test-only persistence churn hook; invoked after each atomic snapshot rewrite. */
+/** Test-only persistence churn hook; invoked after each committed mutation batch. */
 export function setResponseStatePersistAttemptHookForTests(hook: (() => void) | null): void {
   persistAttemptHookForTests = hook;
 }
@@ -1118,7 +1223,7 @@ export function setResponseStatePersistAttemptHookForTests(hook: (() => void) | 
 /** Test-only: deterministically run the pending background debounce pass. */
 export async function runPendingResponseStatePersistForTests(): Promise<void> {
   if (!persistTimer) return;
-  await persistNow(pendingPersistPath ?? snapshotPath());
+  await persistNow(pendingPersistPath ?? getConfigDir());
 }
 
 /** Test-only: observe whether a debounce/follow-up pass is pending. */
@@ -1126,20 +1231,26 @@ export function responseStatePersistPendingForTests(): boolean {
   return persistTimer !== null;
 }
 
-/** Memory-only reset (simulates a process restart: the snapshot file survives). */
+/** Memory-only reset (simulates a process restart: durable state survives). */
 export function clearResponseStateMemoryForTests(): void {
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
   pendingPersistPath = null;
+  closeResponseStateStore();
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;
   oldestResidentId = undefined;
   oldestResidentAt = null;
   stateRevision = 0;
-  pendingSpillUnlinks.length = 0;
+  mutationRevision = 0;
+  hydrating = false;
+  incrementalStoreConfigDir = null;
+  pendingStateMutations.clear();
+  committedSpillRefs.clear();
+  pendingSpillUnlinks.clear();
   spillCounters.writes = 0;
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
@@ -1160,5 +1271,6 @@ export function clearResponseStateForTests(): void {
   } catch {
     /* no snapshot on disk */
   }
+  clearResponseStateStoreForTests();
   try { rmSync(responseSpillDirectory(), { recursive: true, force: true }); } catch { /* no spill directory */ }
 }

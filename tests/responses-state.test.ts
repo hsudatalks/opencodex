@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { BULK_DURABLE_IO_BUDGET_MS } from "./helpers/test-budget";
 import {
   closeSync,
@@ -17,6 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { buildResponseJSON } from "../src/bridge";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { createCursorContextUsageTracker } from "../src/adapters/cursor/protobuf-events";
@@ -43,6 +45,7 @@ import {
   setResponseStatePersistAttemptHookForTests,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
+import { responseStateStorePath } from "../src/responses/state-store";
 import {
   readResponseSpill,
   deleteResponseSpill,
@@ -101,6 +104,26 @@ function rememberLarge(id: string, text: string, providers?: Parameters<typeof r
     providers,
     { force: true },
   );
+}
+
+function persistedStateRow(home: string, responseId: string): Record<string, unknown> | undefined {
+  const database = new Database(responseStateStorePath(home), { readonly: true });
+  try {
+    const row = database.query(
+      "SELECT encoding, state_payload AS statePayload FROM response_states WHERE response_id = ?",
+    ).get(responseId) as { encoding: string; statePayload: Uint8Array } | undefined;
+    if (!row) return undefined;
+    const payload = Buffer.from(row.statePayload);
+    const decoded = row.encoding === "raw"
+      ? payload
+      : row.encoding === "zstd"
+        ? Buffer.from(zstdDecompressSync(payload))
+        : null;
+    if (!decoded) throw new Error(`Unknown response state encoding: ${row.encoding}`);
+    return JSON.parse(decoded.toString("utf8")) as Record<string, unknown>;
+  } finally {
+    database.close();
+  }
 }
 
 describe("Responses previous_response_id state", () => {
@@ -790,12 +813,13 @@ describe("Responses previous_response_id state", () => {
     expect(responseStateMetrics()).toMatchObject({ residentCount: 0, tombstoneCount: 1, spillWriteFailures: 1 });
   });
 
-  test("replacing a response id deletes its previous dedicated spill file after the snapshot flush", async () => {
+  test("replacing a response id deletes its previous dedicated spill file after the metadata commit", async () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_replace_spill", "a".repeat(8_000));
+    await flushResponseState();
     const old = spillFileNames(home)[0]!;
     rememberLarge("resp_replace_spill", "b".repeat(8_000));
-    // The superseded generation survives until the debounced snapshot is
+    // The superseded generation survives until the debounced metadata row is
     // durable (crash safety: a pre-flush reload must find the OLD file).
     expect(existsSync(join(responseSpillDirectory(home), old))).toBe(true);
     await flushResponseState();
@@ -871,18 +895,16 @@ describe("Responses previous_response_id state", () => {
     rememberLarge("resp_during_flush", "d".repeat(8_000));
     await flushing;
     await flushResponseState();
-    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { states: [string, Record<string, unknown>][] };
-    const row = snapshot.states.find(([id]) => id === "resp_during_flush")?.[1];
+    const row = persistedStateRow(home, "resp_during_flush");
     expect(row).toMatchObject({ kind: "spill" });
     expect(row?.items).toBeUndefined();
   });
 
-  test("small entries retain the legacy v2 debounced snapshot representation", async () => {
+  test("small entries persist incrementally without creating a legacy JSON snapshot", async () => {
     rememberLarge("resp_legacy_small", "small");
     await flushResponseState();
-    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { version: number; states: [string, Record<string, unknown>][] };
-    expect(snapshot.version).toBe(2);
-    const row = snapshot.states.find(([id]) => id === "resp_legacy_small")?.[1];
+    expect(existsSync(join(home, "responses-state.json"))).toBe(false);
+    const row = persistedStateRow(home, "resp_legacy_small");
     expect(row).toMatchObject({ items: expect.any(Array) });
     expect(row?.kind).toBeUndefined();
     expect(row?.sizeBytes).toBeUndefined();
@@ -1050,25 +1072,21 @@ describe("Responses previous_response_id state", () => {
     expect(metrics.tombstoneCount).toBe(0);
   });
 
-  test("pending spill-unlink deferral is bounded at 128 superseded generations (C2-2)", () => {
-    // Persistently failing snapshot writes mean persistNow() never drains the
-    // deferral queue. 140 same-id replacements must leave at most current +
-    // 128 pending files on disk — the overflow unlinks oldest-first instead
-    // of growing without limit.
-    setSpillIoForTest({ write: undefined }); // default write; only block snapshots below
+  test("uncommitted same-id spill churn retains only the current generation", () => {
+    // Only a generation referenced by committed metadata needs crash protection.
+    // Intermediate generations are never recoverable and are reclaimed directly.
+    setSpillIoForTest({ write: undefined });
     setResponseStateByteCapForTests(1_024);
     const dir = responseSpillDirectory(home);
     for (let i = 0; i < 140; i++) {
       rememberLarge("resp_unlink_bound", `payload-${i}-${"x".repeat(4_000)}`);
     }
     const files = spillFileNames(home);
-    // 1 current generation + at most 128 deferred superseded generations.
-    expect(files.length).toBeLessThanOrEqual(129);
-    expect(files.length).toBeGreaterThan(1); // deferral is real, not immediate unlink
+    expect(files).toHaveLength(1);
     void dir;
   }, BULK_DURABLE_IO_BUDGET_MS); // 140 fsync'd durable writes ARE the assertion; Windows CI measured ~18s.
 
-  test("persistNow settles within the bounded rewrite attempts under revision churn", async () => {
+  test("persistNow settles within bounded incremental commits under revision churn", async () => {
     rememberLarge("resp_churn_seed", "seed");
     let attempts = 0;
     setResponseStatePersistAttemptHookForTests(() => {
@@ -1103,14 +1121,14 @@ describe("Responses previous_response_id state", () => {
 
     await runPendingResponseStatePersistForTests();
 
-    expect(attempts).toBe(4);
+    expect(attempts).toBe(1);
     expect(responseStatePersistPendingForTests()).toBe(true);
     setResponseStatePersistAttemptHookForTests(null);
     await runPendingResponseStatePersistForTests();
     expect(responseStatePersistPendingForTests()).toBe(false);
   });
 
-  test("unstable final snapshot defers spill unlinks until a stable snapshot", async () => {
+  test("a committed replacement reclaims its old spill despite unrelated mutation churn", async () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_unstable_unlink", "old".repeat(3_000));
     await flushResponseState();
@@ -1124,7 +1142,7 @@ describe("Responses previous_response_id state", () => {
     });
     await flushResponseState();
     expect(attempts).toBe(8);
-    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(true);
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
     setResponseStatePersistAttemptHookForTests(null);
     await flushResponseState();
     expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
@@ -1288,7 +1306,10 @@ describe("Responses previous_response_id state", () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_private_metric_id", "secret-content".repeat(1_000));
     const metrics = responseStateMetrics();
-    expect(Object.values(metrics).every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    expect(metrics.persistenceBackend).toBe("sqlite-incremental");
+    expect(Object.entries(metrics)
+      .filter(([key]) => key !== "persistenceBackend")
+      .every(([, value]) => typeof value === "number" && Number.isFinite(value))).toBe(true);
     const serialized = JSON.stringify(metrics);
     expect(serialized).not.toContain("resp_private_metric_id");
     expect(serialized).not.toContain("secret-content");
@@ -1432,7 +1453,7 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
-  test("snapshot survives a simulated restart (memory clear + disk load)", async () => {
+  test("incremental state survives a simulated restart (memory clear + disk load)", async () => {
     const firstBody = { model: "gpt-5.5", input: "hello" };
     const first = buildResponseJSON([
       { type: "text_delta", text: "hi" },
@@ -1590,6 +1611,65 @@ describe("Responses previous_response_id state", () => {
     expect(previousResponseConversationId("resp_v1")).toBe("cursor_v1");
   });
 
+  test("migrates 3500 legacy rows once and subsequent commits write only changed rows", async () => {
+    const legacyStates = Array.from({ length: 3_500 }, (_, index) => [
+      `resp_legacy_${index}`,
+      {
+        createdAt: Date.now(),
+        items: [{ role: "user", content: `turn-${index}` }],
+        providers: { cursor: { conversationId: `conv-${index}` } },
+      },
+    ]);
+    const legacyPath = join(home, "responses-state.json");
+    const legacyRaw = JSON.stringify({ version: 2, states: legacyStates });
+    writeFileSync(legacyPath, legacyRaw);
+    const legacyMtime = statSync(legacyPath).mtimeMs;
+
+    expect(previousResponseConversationId("resp_legacy_3499")).toBe("conv-3499");
+    const migrated = responseStateMetrics();
+    expect(migrated).toMatchObject({
+      count: 3_500,
+      persistenceRows: 3_500,
+      persistenceRowsWritten: 3_500,
+      persistencePendingMutations: 0,
+    });
+    const storeBytesBefore = migrated.persistenceDbBytes + migrated.persistenceWalBytes;
+
+    rememberLarge("resp_after_migration", "one incremental row");
+    await flushResponseState();
+    const committed = responseStateMetrics();
+    expect(committed.persistenceRows).toBe(3_501);
+    expect(committed.persistenceRowsWritten - migrated.persistenceRowsWritten).toBe(1);
+    expect(committed.persistencePayloadBytes - migrated.persistencePayloadBytes).toBeLessThan(4 * 1024);
+    expect(committed.persistenceDbBytes + committed.persistenceWalBytes - storeBytesBefore).toBeLessThan(256 * 1024);
+    expect(readFileSync(legacyPath, "utf8")).toBe(legacyRaw);
+    expect(statSync(legacyPath).mtimeMs).toBe(legacyMtime);
+
+    clearResponseStateMemoryForTests();
+    expect(previousResponseConversationId("resp_legacy_0")).toBe("conv-0");
+    expect(expandPreviousResponseInput({ previous_response_id: "resp_after_migration", input: "next" }))
+      .not.toEqual({ previous_response_id: "resp_after_migration", input: "next" });
+  }, BULK_DURABLE_IO_BUDGET_MS);
+
+  test("isolates a corrupt compressed row while recovering valid rows", async () => {
+    rememberLarge("resp_valid_row", "valid state");
+    rememberLarge("resp_corrupt_row", "corrupt state");
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    const database = new Database(responseStateStorePath(home));
+    database.query(
+      "UPDATE response_states SET encoding = 'zstd', state_payload = ? WHERE response_id = ?",
+    ).run(Buffer.from([0x00, 0x01, 0x02]), "resp_corrupt_row");
+    database.close();
+
+    expect(expandPreviousResponseInput({ previous_response_id: "resp_valid_row", input: "next" }))
+      .not.toEqual({ previous_response_id: "resp_valid_row", input: "next" });
+    const missing = { previous_response_id: "resp_corrupt_row", input: "next" };
+    expect(expandPreviousResponseInput(missing)).toBe(missing);
+    expect(responseStateMetrics().persistenceFailures).toBeGreaterThan(0);
+  });
+
   test("persists provider-keyed Cursor and Kiro continuation state across restart", async () => {
     const first = buildResponseJSON([
       { type: "text_delta", text: "answer", phase: "final_answer" },
@@ -1610,33 +1690,27 @@ describe("Responses previous_response_id state", () => {
       cursor: { conversationId: "cursor_conv_2", checkpointUsable: true },
       kiro: { conversationId: "kiro_conv_2" },
     });
-    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { version: number };
-    expect(snapshot.version).toBe(2);
+    expect(persistedStateRow(home, first.id as string)).toMatchObject({ providers: expect.any(Object) });
   });
 
-  test("stale snapshot entries are pruned on load", async () => {
-    const first = buildResponseJSON([
-      { type: "text_delta", text: "old" },
-      { type: "done" },
-    ], "gpt-5.5");
-    rememberResponseState({ model: "gpt-5.5", input: "old turn" }, first);
-    await flushResponseState();
-    clearResponseStateMemoryForTests();
-
-    // Rewrite the snapshot with an expired chain-head timestamp (>24h TTL).
-    const path = join(home, "responses-state.json");
-    const snapshot = JSON.parse(readFileSync(path, "utf-8")) as {
-      states: [string, { createdAt: number }][];
-    };
-    for (const [, state] of snapshot.states) state.createdAt = Date.now() - 25 * 60 * 60 * 1_000;
-    writeFileSync(path, JSON.stringify(snapshot));
+  test("stale legacy snapshot entries are pruned during migration", async () => {
+    const responseId = "resp_expired_legacy";
+    writeFileSync(join(home, "responses-state.json"), JSON.stringify({
+      version: 2,
+      states: [[responseId, {
+        createdAt: Date.now() - 25 * 60 * 60 * 1_000,
+        items: [{ role: "assistant", content: "old" }],
+      }]],
+    }));
 
     const second = {
       model: "gpt-5.5",
-      previous_response_id: first.id,
+      previous_response_id: responseId,
       input: "next",
     };
     expect(expandPreviousResponseInput(second)).toEqual(second);
+    await flushResponseState();
+    expect(persistedStateRow(home, responseId)).toBeUndefined();
   });
 
   test("corrupt snapshot file is ignored", () => {
@@ -1664,7 +1738,7 @@ describe("Responses previous_response_id state", () => {
     expect(expanded.input).toHaveLength(3);
   });
 
-  test("oversized entries replay from dedicated spill across restart while small entries use snapshot", async () => {
+  test("oversized spill and small SQLite rows both replay across restart", async () => {
     setResponseStateByteCapForTests(128 * 1024);
     try {
     const big = "x".repeat(3 * 1024 * 1024); // > 2MiB per-entry cap
@@ -1795,6 +1869,16 @@ describe("Responses previous_response_id state", () => {
         supersededCapacityEvictions: 0,
         emergencyHeadEvictions: 0,
         replayMisses: 0,
+        persistenceBackend: "sqlite-incremental",
+        persistencePendingMutations: 0,
+        persistenceRows: 0,
+        persistenceCommits: 0,
+        persistenceRowsWritten: 0,
+        persistencePayloadBytes: 0,
+        persistenceLogicalPayloadBytes: 0,
+        persistenceFailures: 0,
+        persistenceDbBytes: 0,
+        persistenceWalBytes: 0,
       });
     });
 
@@ -1836,11 +1920,13 @@ describe("Responses previous_response_id state", () => {
       const first = buildResponseJSON([{ type: "text_delta", text: "persisted" }, { type: "done" }], "gpt-5.5");
       rememberResponseState({ model: "gpt-5.5", input: "persisted turn" }, first);
       await flushResponseState();
-      // Simulated restart: memory wiped, snapshot on disk, `loaded` reset to false.
+      // Simulated restart: memory wiped, SQLite state on disk, `loaded` reset to false.
       clearResponseStateMemoryForTests();
 
-      // A probe must NOT trigger the lazy disk load — the store still reads empty.
-      expect(responseStateMetrics()).toEqual({
+      // A probe must NOT trigger the lazy disk load — runtime state stays empty,
+      // while file-size/cumulative persistence counters remain observable.
+      const beforeProbe = responseStateMetrics();
+      expect(beforeProbe).toMatchObject({
         count: 0,
         residentCount: 0,
         spillStubCount: 0,
@@ -1859,7 +1945,12 @@ describe("Responses previous_response_id state", () => {
         supersededCapacityEvictions: 0,
         emergencyHeadEvictions: 0,
         replayMisses: 0,
+        persistenceBackend: "sqlite-incremental",
+        persistencePendingMutations: 0,
+        persistenceRows: 0,
       });
+      expect(beforeProbe.persistenceDbBytes).toBeGreaterThan(0);
+      expect(responseStateMetrics()).toEqual(beforeProbe);
 
       // The real request path DOES load; the probe then reflects the loaded entry.
       expandPreviousResponseInput({ model: "gpt-5.5", previous_response_id: first.id, input: "next" });
@@ -2004,10 +2095,11 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
   test("over-ceiling same-ID tombstone defers the old generation until durable", async () => {
     setResponseStateByteCapForTests(1024);
     rememberResponseState({ model: "m", input: "v1" }, completedResponse("resp_tc", "a".repeat(4096)));
+    await flushResponseState();
     const dir = responseSpillDirectory();
     expect(readdirSync(dir).length).toBe(1);
     // Over the tightened ceiling: tombstone — but the old generation must NOT be
-    // deleted immediately (a crash would strand the durable old snapshot).
+    // deleted immediately (a crash would strand the durable old row).
     setResponseSpillPayloadCapForTests(2048);
     rememberResponseState({ model: "m", input: "v2" }, completedResponse("resp_tc", "b".repeat(4096)));
     expect(readdirSync(dir).length).toBe(1);
@@ -2019,6 +2111,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
   test("same-ID oversized replacement of a spilled entry keeps crash ordering", async () => {
     setResponseStateByteCapForTests(4096);
     rememberResponseState({ model: "m", input: "v1" }, completedResponse("resp_ss", "a".repeat(6 * 1024)));
+    await flushResponseState();
     const dir = responseSpillDirectory();
     const gen1 = readdirSync(dir);
     expect(gen1.length).toBe(1);
@@ -2100,12 +2193,18 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     expect(JSON.stringify(expanded.input)).toContain("n".repeat(64));
   });
 
-  test("snapshot selection uses UTF-8 bytes, not UTF-16 length", async () => {
-    // 600k 💡 = 1.2M UTF-16 code units (< 2 MiB length cap) but 2.4M UTF-8 bytes (> 2 MiB byte cap).
+  test("large multibyte continuation rows are compressed and survive restart", async () => {
     const bulbs = "💡".repeat(600_000);
     rememberResponseState({ model: "m", input: "multi" }, completedResponse("resp_multibyte", bulbs));
     await flushResponseState();
-    const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
-    expect(raw).not.toContain("resp_multibyte");
+    const database = new Database(responseStateStorePath(home), { readonly: true });
+    const stored = database.query(
+      "SELECT encoding, length(state_payload) AS bytes FROM response_states WHERE response_id = ?",
+    ).get("resp_multibyte") as { encoding: string; bytes: number };
+    database.close();
+    expect(stored.encoding).toBe("zstd");
+    expect(stored.bytes).toBeLessThan(64 * 1024);
+    clearResponseStateMemoryForTests();
+    expect(JSON.stringify(expandChained("resp_multibyte"))).toContain("💡💡💡");
   });
 });
