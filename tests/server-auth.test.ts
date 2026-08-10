@@ -192,6 +192,7 @@ async function startPoolRetryHarness(
     websockets?: boolean;
     forwardApiKey?: string;
     pausedAccountIds?: string[];
+    fastModeAccountIds?: string[];
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
   } = {},
@@ -247,6 +248,9 @@ async function startPoolRetryHarness(
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
+    ...(options.fastModeAccountIds
+      ? { codexAccountFastModeEnabled: Object.fromEntries(options.fastModeAccountIds.map(id => [id, true])) }
+      : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
@@ -2273,6 +2277,41 @@ describe("server local API auth", () => {
       expect(getCodexUpstreamHealth("pool-a")).toMatchObject({ cooldownUntil: expect.any(Number) });
       // Server persists the rotated active account; the harness snapshot may be stale.
       expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("account Fast mode is re-evaluated when a 429 rotates to another account", async () => {
+    const attempts: Array<{ accountId: string; tier: unknown; hint: string | null }> = [];
+    const harness = await startPoolRetryHarness(async (accountId, request) => {
+      const body = await request.json() as { service_tier?: unknown };
+      attempts.push({
+        accountId,
+        tier: body.service_tier,
+        hint: request.headers.get("x-codex-routing-hint"),
+      });
+      return accountId === "acct-pool-a"
+        ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "60" },
+        })
+        : Response.json({ id: "standard-failover-success", status: "completed", output: [] });
+    }, { fastModeAccountIds: ["pool-a"] });
+    try {
+      expect((await harness.request()).status).toBe(200);
+      expect(attempts).toEqual([
+        {
+          accountId: "acct-pool-a",
+          tier: "priority",
+          hint: `model=${POOL_RETRY_MODEL};tier=priority`,
+        },
+        {
+          accountId: "acct-pool-b",
+          tier: undefined,
+          hint: `model=${POOL_RETRY_MODEL}`,
+        },
+      ]);
     } finally {
       await stopPoolRetryHarness(harness);
     }

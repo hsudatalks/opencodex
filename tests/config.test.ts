@@ -242,6 +242,25 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("config candidates validate per-account Fast policies", () => {
+    const base = getDefaultConfig();
+    expect(validateConfigCandidate({
+      ...base,
+      codexAccountFastModeEnabled: { work: true, __main__: false },
+    })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({ codexAccountFastModeEnabled: { work: true, __main__: false } }),
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      codexAccountFastModeEnabled: { work: "true" },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("codexAccountFastModeEnabled") });
+    expect(validateConfigCandidate({
+      ...base,
+      codexAccountFastModeEnabled: { "bad id!": true },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("codexAccountFastModeEnabled") });
+  });
+
   test("config candidates validate Claude Code subagent effort levels", () => {
     const base = getDefaultConfig();
     for (const subagentEffort of ["low", "medium", "high", "xhigh", "max"]) {

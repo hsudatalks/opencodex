@@ -50,6 +50,23 @@ export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccoun
   );
 }
 
+export function CodexUrgencyBadge({ account, t }: { account: CodexAccountEntry; t: TFn }) {
+  const urgency = account.quotaRouting?.urgency;
+  const value = typeof urgency === "number" && Number.isFinite(urgency)
+    ? String(Math.round(urgency))
+    : "—";
+  const label = t("codexAuth.urgency", { value });
+  return (
+    <span
+      className={`badge ${account.quotaRouting?.candidate ? "badge-primary" : "badge-muted"}`}
+      title={t("codexAuth.urgencyHint")}
+      aria-label={`${label}. ${t("codexAuth.urgencyHint")}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /** Equal-width Pause / Resume / Saving label so the button does not grow on toggle. */
 export function CodexPauseToggleLabel({
   t,

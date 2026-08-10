@@ -5,7 +5,7 @@ import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityC
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
-import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
+import { CodexPauseToggleLabel, CodexTicketBadge, CodexUrgencyBadge } from "./codex-account-pool-helpers";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -15,6 +15,7 @@ import {
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../oauth-health-display";
+import { CodexAccountFastModeControl } from "./CodexAccountFastModeControl";
 
 export function CodexAccountPoolCards({
   pool,
@@ -29,6 +30,8 @@ export function CodexAccountPoolCards({
   pauseBusy,
   onPriorityChange,
   priorityUpdatingId,
+  onFastModeChange,
+  fastModeUpdatingId,
   switchingId,
   pinnedId = null,
   onReauth,
@@ -49,6 +52,8 @@ export function CodexAccountPoolCards({
   pauseBusy: boolean;
   onPriorityChange: (account: CodexAccountEntry, priority: number) => void;
   priorityUpdatingId: string | null;
+  onFastModeChange: (account: CodexAccountEntry, enabled: boolean) => void;
+  fastModeUpdatingId: string | null;
   /** In-flight manual switch, which writes the same pin an order write clears. */
   switchingId: string | null;
   /**
@@ -76,7 +81,7 @@ export function CodexAccountPoolCards({
         const healthLabel = formatOAuthHealthLabel(t, a.health);
         const healthSummary = formatOAuthHealthSummary(t, "codex", a.id, a.health);
         return (
-        <div key={a.id} className={`card ${isNext(a) ? "card-active" : ""}`} style={{ marginBottom: 8 }}>
+        <div key={a.id} className={`card codex-account-card ${isNext(a) ? "card-active" : ""}`} style={{ marginBottom: 8 }}>
           <div className="card-head">
             <span className={`dot ${showReauth ? "dot-amber" : isNext(a) ? "dot-blue" : "dot-muted"}`} />
             <strong>{a.alias ?? a.email}</strong>
@@ -88,6 +93,7 @@ export function CodexAccountPoolCards({
                 </span>
               )}
               <AccountPriorityBadge value={a.priority} />
+              <CodexUrgencyBadge account={a} t={t} />
               {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
@@ -161,6 +167,13 @@ export function CodexAccountPoolCards({
             // controller refuses to overlap them, and that refusal is equally silent.
             disabled={priorityUpdatingId !== null || switchingId !== null}
             onChange={(priority) => onPriorityChange(a, priority)}
+          />
+          <CodexAccountFastModeControl
+            t={t}
+            enabled={a.fastModeEnabled}
+            updating={fastModeUpdatingId === a.id}
+            disabled={fastModeUpdatingId !== null}
+            onChange={(enabled) => onFastModeChange(a, enabled)}
           />
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>

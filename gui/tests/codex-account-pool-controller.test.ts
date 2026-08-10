@@ -109,6 +109,26 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(pool).toContain("orderBusy={priorityUpdatingId !== null}");
 });
 
+test("mobile account cards keep controls while trimming redundant quota copy", async () => {
+  const styles = await read("../src/styles.css");
+  const cards = await read("../src/components/codex-account-pool-cards.tsx");
+  const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");
+
+  expect(styles).toContain(".codex-account-card .codex-account-priority { display: none; }");
+  expect(styles).toContain(".codex-account-card .quota-row--weekly .quota-label");
+  expect(styles).toContain(".codex-account-card .quota-reset-label");
+  for (const card of [cards, mainCard]) {
+    expect(card).toContain("<CodexUrgencyBadge");
+    expect(card).toContain("<CodexAccountFastModeControl");
+    expect(card).toContain("onTogglePause");
+    expect(card).toContain("onSwitch");
+  }
+  expect(cards).toContain("onReauth");
+  expect(cards).toContain("onEditAlias");
+  expect(cards).toContain("onRemove");
+  expect(styles).not.toMatch(/\.codex-account-card\s+\.(?:card-head|codex-account-switch|codex-auth-action-btn|btn-icon)[^{]*\{[^}]*display:\s*none/);
+});
+
 test("the pool header exposes one bulk action backed by the atomic endpoint", async () => {
   const pool = await read("../src/components/CodexAccountPool.tsx");
   const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");

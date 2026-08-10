@@ -98,6 +98,16 @@ beforeEach(() => {
         if (body.paused && activePinnedAccountId === body.id) activePinnedAccountId = null;
         return { ok: true, json: async () => ({ activeCodexAccountId: pauseResponseActiveId }) } as unknown as Response;
       }
+      if (path === "codex-auth/accounts/fast-mode") {
+        const body = JSON.parse(String(init?.body)) as { id: string; enabled: boolean };
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account
+            && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
+            ? { ...account, fastModeEnabled: body.enabled }
+            : account
+        ));
+        return { ok: true, json: async () => ({ ok: true, fastModeEnabled: body.enabled }) } as unknown as Response;
+      }
       if (path === "codex-auth/accounts/pause-exhausted") {
         const pausedIds = new Set(bulkPausedAccountIds);
         accounts = accounts.map(account => (
@@ -215,6 +225,18 @@ test("pausing an account writes the persisted endpoint and updates shared state"
   expect(calls).toContain("PUT codex-auth/accounts/pause");
   expect(seen.current!.accounts[0]?.paused).toBe(true);
   expect(seen.current!.activeId).toBeNull();
+});
+
+test("central Fast mode defaults off and updates the selected account immediately", async () => {
+  const seen = await mountController();
+  expect(seen.current!.accounts[0]?.fastModeEnabled).toBe(false);
+
+  await act(async () => {
+    expect(await seen.current!.setAccountFastModeEnabled("__main__", true)).toEqual({ ok: true });
+  });
+
+  expect(calls).toContain("PUT codex-auth/accounts/fast-mode");
+  expect(seen.current!.accounts[0]?.fastModeEnabled).toBe(true);
 });
 
 test("pausing the main sentinel updates its distinct account row before reload", async () => {

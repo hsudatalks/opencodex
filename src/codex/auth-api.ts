@@ -24,6 +24,11 @@ import {
   setCodexAccountPriority,
 } from "./account-priority";
 import {
+  isCodexAccountFastModeEnabled,
+  isCodexAccountFastModeKey,
+  setCodexAccountFastModeEnabled,
+} from "./account-fast-mode";
+import {
   claimDueCodexQuotaRecoveryProbes,
   clearCodexAccountCooldown,
   clearThreadAccountMapForAccount,
@@ -209,7 +214,8 @@ function poolAccountDto(
   hasCredential: boolean,
   paused: boolean,
   priority: number,
-): CodexAuthAccountDto {
+  fastModeEnabled: boolean,
+): Omit<CodexAuthAccountDto, "quotaRouting"> {
   const quota = quotaForPlan(quotaResult.quota, account.plan);
   const needsReauth = !hasCredential || quotaResult.needsReauth || isAccountNeedsReauth(account.id);
   const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
@@ -222,6 +228,7 @@ function poolAccountDto(
     isMain: false,
     paused,
     priority,
+    fastModeEnabled,
     quota: quota ? { ...quota } : null,
     needsReauth,
     hasCredential,
@@ -716,6 +723,15 @@ export interface CodexAuthAccountDto {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Whether every Codex request routed to this account is forced through Fast. */
+  fastModeEnabled: boolean;
+  /** Current server-owned quota-routing state used by the account selector. */
+  quotaRouting: {
+    urgency: number | null;
+    urgencyBucket: number | null;
+    affinityCount: number;
+    candidate: boolean;
+  };
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
   hasCredential: boolean;
@@ -1098,6 +1114,7 @@ export async function listCodexAuthAccountsSnapshot(
         false,
         isCodexAccountPaused(runtimeConfig, accountId),
         getCodexAccountPriority(runtimeConfig, accountId),
+        isCodexAccountFastModeEnabled(runtimeConfig, accountId),
       )];
     }
     const resultGeneration = quotaResult.credentialGeneration ?? quotaResult.freshCredentialGeneration;
@@ -1117,6 +1134,7 @@ export async function listCodexAuthAccountsSnapshot(
       true,
       isCodexAccountPaused(runtimeConfig, accountId),
       getCodexAccountPriority(runtimeConfig, accountId),
+      isCodexAccountFastModeEnabled(runtimeConfig, accountId),
     )];
   });
   const fetchedMainGeneration = mainResult.identityGeneration ?? captureMainAccountIdentityGeneration();
@@ -1131,13 +1149,14 @@ export async function listCodexAuthAccountsSnapshot(
     accountId: MAIN_CODEX_ACCOUNT_ID,
     needsReauth: mainNeedsReauth,
   });
-  const main: CodexAuthAccountDto = {
+  const main: Omit<CodexAuthAccountDto, "quotaRouting"> = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: maskEmail(mainInfo.email) ?? "Codex App login",
     plan: mainInfo.plan,
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+    fastModeEnabled: isCodexAccountFastModeEnabled(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
     quota: mainInfo.quota ? {
@@ -1148,8 +1167,21 @@ export async function listCodexAuthAccountsSnapshot(
     } : null,
     ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
   };
+  const quotaRoutingByAccount = new Map(
+    getCodexQuotaRoutingSnapshot(runtimeConfig, Date.now(), "shared")
+      .map(({ accountId, ...routing }) => [accountId, routing] as const),
+  );
+  const accounts = [main, ...withQuota].map(account => ({
+    ...account,
+    quotaRouting: quotaRoutingByAccount.get(account.id) ?? {
+      urgency: null,
+      urgencyBucket: null,
+      affinityCount: 0,
+      candidate: false,
+    },
+  }));
   return {
-    accounts: [main, ...withQuota],
+    accounts,
     mainIdentityGeneration: mainSnapshotLive
       ? fetchedMainGeneration
       : captureMainAccountIdentityGeneration(),
@@ -1378,6 +1410,26 @@ export async function handleCodexAuthAPI(
       activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
       appliesImmediately: true,
     });
+  }
+
+  if (url.pathname === "/api/codex-auth/accounts/fast-mode" && req.method === "PUT") {
+    const body = await req.json().catch(() => ({})) as { id?: unknown; enabled?: unknown };
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (!isCodexAccountFastModeKey(id)) {
+      return jsonResponse({ error: "Invalid account id format" }, 400);
+    }
+    if (typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    }
+
+    const runtimeConfig = getRuntimeConfig(config);
+    const exists = id === MAIN_CODEX_ACCOUNT_ID
+      || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
+    if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+
+    setCodexAccountFastModeEnabled(runtimeConfig, id, body.enabled);
+    saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({ ok: true, id, fastModeEnabled: body.enabled, appliesImmediately: true });
   }
 
   // Deliberately a route of its own rather than a field on the alias PATCH: aliases

@@ -28,6 +28,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { isCodexAccountFastModeKey } from "./codex/account-fast-mode";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -980,6 +981,23 @@ const codexAccountPrioritiesSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), z.number().int()));
 
+const codexAccountFastModeEnabledSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: "codexAccountFastModeEnabled must be a plain object mapping Codex account ids to booleans" },
+).superRefine((accounts, ctx) => {
+  for (const [accountId, enabled] of Object.entries(accounts)) {
+    if (!isCodexAccountFastModeKey(accountId)) {
+      ctx.addIssue({ code: "custom", path: [accountId], message: "Fast-mode keys must be valid Codex account ids" });
+    }
+    if (typeof enabled !== "boolean") {
+      ctx.addIssue({ code: "custom", path: [accountId], message: "Fast-mode values must be booleans" });
+    }
+  }
+}).pipe(z.record(z.string(), z.boolean()));
+
 /**
  * Deliberately permissive. A user's config is not ours to invalidate: a strict
  * entry fails the whole parse, and loadConfig's fallback then backs the file up
@@ -1082,6 +1100,9 @@ const configSchema = z.object({
   // typo cannot trip the backup-and-defaults repair path and wipe providers or
   // pool accounts. Warning emitted in loadConfig.
   codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  // Fast mode is an account-level cost/speed policy. Invalid hand edits disable every
+  // account rather than invalidating the rest of the gateway configuration.
+  codexAccountFastModeEnabled: codexAccountFastModeEnabledSchema.optional().catch(undefined),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -1573,6 +1594,10 @@ function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validated: Ocx
   if (raw !== undefined && validated.codexAccountPriorities === undefined) {
     warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
   }
+  const rawFastMode = record?.codexAccountFastModeEnabled;
+  if (rawFastMode !== undefined && validated.codexAccountFastModeEnabled === undefined) {
+    warnings.push("codexAccountFastModeEnabled is invalid (expected account ids mapped to booleans) — Fast mode is disabled for every account");
+  }
   return warnings;
 }
 
@@ -1991,6 +2016,12 @@ function codexAccountPrioritiesError(value: unknown): string | null {
     const parsed = codexAccountPrioritiesSchema.safeParse(raw.codexAccountPriorities);
     if (!parsed.success) {
       return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
+    }
+  }
+  if (raw.codexAccountFastModeEnabled !== undefined) {
+    const parsed = codexAccountFastModeEnabledSchema.safeParse(raw.codexAccountFastModeEnabled);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountFastModeEnabled.");
     }
   }
   // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a

@@ -27,6 +27,15 @@ export interface CodexAccountEntry {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Central account policy; true forces every routed Codex request through Fast. */
+  fastModeEnabled: boolean;
+  /** Server-owned routing snapshot. Optional while talking to an older gateway. */
+  quotaRouting?: {
+    urgency: number | null;
+    urgencyBucket: number | null;
+    affinityCount: number;
+    candidate: boolean;
+  };
   hasCredential: boolean;
   quota: AccountQuota | null;
   needsReauth?: boolean;
@@ -71,6 +80,7 @@ export interface CodexAccountPoolController {
   switchingId: string | null;
   pauseUpdatingId: string | null;
   priorityUpdatingId: string | null;
+  fastModeUpdatingId: string | null;
   pausingExhausted: boolean;
   activeNeedsReauth: boolean;
   /**
@@ -85,6 +95,7 @@ export interface CodexAccountPoolController {
   setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   /** `null` resets the account to the default order. Accepts the `__main__` sentinel. */
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
+  setAccountFastModeEnabled(id: string, enabled: boolean): Promise<CodexAccountActionResult>;
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult>;
@@ -112,6 +123,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState<string | null>(null);
+  const [fastModeUpdatingId, setFastModeUpdatingId] = useState<string | null>(null);
   const [pausingExhausted, setPausingExhausted] = useState(false);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
   // A counter, not a boolean: the initial load, the 30s poll, quota-fill retries and explicit
@@ -148,6 +160,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // Its own gate, deliberately not the pause one: re-ordering one account and pausing
   // another are independent writes, and a shared ref would make either reject the other.
   const priorityMutationRef = useRef<{ accountId: string } | null>(null);
+  const fastModeMutationRef = useRef<{ accountId: string } | null>(null);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -195,6 +208,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             nextAccounts = ((payload.accounts ?? []) as CodexAccountEntry[]).map(account => ({
               ...account,
               priority: normalizeAccountPriority(account.priority),
+              fastModeEnabled: account.fastModeEnabled === true,
             }));
             setAccounts(nextAccounts);
             hasAccountsRef.current = nextAccounts.length > 0;
@@ -448,6 +462,31 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
+  const setAccountFastModeEnabled = useCallback(async (id: string, enabled: boolean) => {
+    if (fastModeMutationRef.current) return { ok: false, reason: "busy" } as const;
+    fastModeMutationRef.current = { accountId: id };
+    setFastModeUpdatingId(id);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/accounts/fast-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, enabled }),
+      });
+      if (!response.ok) return { ok: false, reason: "request" } as const;
+      setAccounts(current => current.map(account => (
+        account.id === id || (id === "__main__" && account.isMain)
+          ? { ...account, fastModeEnabled: enabled }
+          : account
+      )));
+      return { ok: true } as const;
+    } catch {
+      return { ok: false, reason: "request" } as const;
+    } finally {
+      fastModeMutationRef.current = null;
+      setFastModeUpdatingId(null);
+    }
+  }, [apiBase]);
+
   const pauseExhaustedAccounts = useCallback(async () => {
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
@@ -521,6 +560,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     switchingId,
     pauseUpdatingId,
     priorityUpdatingId,
+    fastModeUpdatingId,
     pausingExhausted,
     activeNeedsReauth,
     activePinnedId,
@@ -528,6 +568,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     switchAccount,
     setAccountPaused,
     setAccountPriority,
+    setAccountFastModeEnabled,
     pauseExhaustedAccounts,
     saveAlias,
     removeAccount,

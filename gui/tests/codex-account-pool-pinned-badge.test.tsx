@@ -30,6 +30,7 @@ const account: CodexAccountEntry = {
   isMain: false,
   paused: false,
   priority: 0,
+  fastModeEnabled: false,
   hasCredential: true,
   quota: null,
 };
@@ -40,6 +41,7 @@ const mainAccount: CodexAccountEntry = {
   isMain: true,
   paused: false,
   priority: 0,
+  fastModeEnabled: false,
   hasCredential: true,
   quota: null,
 };
@@ -52,6 +54,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    fastModeUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -59,6 +62,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountFastModeEnabled: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: true }),
@@ -198,4 +202,26 @@ test("a paused account is never shown as pinned", async () => {
 
   expect(hasPinnedBadge(host)).toBe(false);
   expect(hasPinnedHint(host)).toBe(false);
+});
+
+test("cards render the server-owned routing urgency without recomputing quota", async () => {
+  await mountPool(makeController({
+    accounts: [
+      mainAccount,
+      {
+        ...account,
+        quotaRouting: {
+          urgency: 84.6,
+          urgencyBucket: 80,
+          affinityCount: 3,
+          candidate: true,
+        },
+      },
+    ],
+  }));
+
+  const badge = [...cardFor("pool@example.test").querySelectorAll(".badge")]
+    .find((element) => (element.textContent ?? "").includes("Urgency"));
+  expect(badge?.textContent?.trim()).toBe("Urgency 85%");
+  expect(badge?.classList.contains("badge-primary")).toBe(true);
 });

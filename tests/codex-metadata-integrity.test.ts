@@ -160,4 +160,37 @@ describe("Codex metadata integrity", () => {
     expect(sync.headers.session_id).toBe("sess-real-2");
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
   });
+
+  test("canonical ChatGPT forward mode derives the native Codex routing hint from the final body", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+    };
+    const parsed = minimalParsed();
+    parsed._rawBody = { model: "gpt-5.4", input: [], service_tier: "priority" };
+    parsed.options.serviceTier = "priority";
+
+    const request = createResponsesPassthroughAdapter(provider).buildRequest(parsed, {
+      headers: new Headers({
+        authorization: "Bearer caller-token",
+        "x-codex-routing-hint": "model=stale;tier=default",
+      }),
+    }) as { headers: Record<string, string> };
+
+    expect(request.headers["x-codex-routing-hint"]).toBe("model=gpt-5.4;tier=priority");
+  });
+
+  test("canonical ChatGPT forward mode sends a model-only routing hint for Standard requests", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest(minimalParsed(), {
+      headers: new Headers({ authorization: "Bearer caller-token" }),
+    }) as { headers: Record<string, string> };
+
+    expect(request.headers["x-codex-routing-hint"]).toBe("model=gpt-5.4");
+  });
 });

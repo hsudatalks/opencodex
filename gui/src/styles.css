@@ -1734,6 +1734,21 @@ dialog.modal-overlay::backdrop {
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 
+@media (max-width: 640px) {
+  /* Mobile cards retain all account actions, but omit the low-frequency ordering row. */
+  .codex-account-card .codex-account-priority { display: none; }
+  /* "Week" is redundant on the standard row; keep labels on 5h/30d/custom rows. */
+  .codex-account-card .quota-row--weekly .quota-label,
+  .codex-account-card .quota-reset-label,
+  .codex-account-card .quota-row--skeleton .quota-skel--reset { display: none; }
+  .codex-account-card .quota-row {
+    grid-template-columns: minmax(34px, max-content) minmax(34px, 44px) minmax(38px, 42px) minmax(58px, 1fr) minmax(30px, max-content);
+  }
+  .codex-account-card .quota-row--weekly {
+    grid-template-columns: minmax(34px, 44px) minmax(38px, 42px) minmax(58px, 1fr) minmax(30px, max-content);
+  }
+}
+
 .startup-page-sub { margin-bottom: 0; }
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .startup-runtime-notice-slot {

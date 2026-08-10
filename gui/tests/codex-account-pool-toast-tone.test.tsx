@@ -25,6 +25,7 @@ const account: CodexAccountEntry = {
   isMain: false,
   paused: false,
   priority: 0,
+  fastModeEnabled: false,
   hasCredential: true,
   quota: { resetCredits: 2, updatedAt: 1 },
 };
@@ -32,7 +33,7 @@ const account: CodexAccountEntry = {
 function makeController(overrides: Partial<CodexAccountPoolController> = {}): CodexAccountPoolController {
   return {
     accounts: [
-      { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+      { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, fastModeEnabled: false, hasCredential: true, quota: null },
       account,
     ],
     activeId: null,
@@ -40,6 +41,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    fastModeUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -47,6 +49,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountFastModeEnabled: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: false, reason: "request" }),

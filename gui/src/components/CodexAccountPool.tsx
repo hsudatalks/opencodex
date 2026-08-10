@@ -59,7 +59,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
-  const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
+  const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, fastModeUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -197,6 +197,16 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }), !result.ok);
   };
 
+  const changeFastMode = async (account: CodexAccountEntry, enabled: boolean) => {
+    const result = await controller.setAccountFastModeEnabled(account.id, enabled);
+    if (!result.ok && result.reason === "busy") return;
+    showActionFeedback(t(result.ok
+      ? enabled ? "codexAuth.fastModeEnabled" : "codexAuth.fastModeDisabled"
+      : "codexAuth.fastModeUpdateFailed", {
+      email: account.alias ?? account.email,
+    }), !result.ok);
+  };
+
   const remove = async (id: string) => {
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!window.confirm(t("codexAuth.removeConfirm", { id: label }))) return;
@@ -310,6 +320,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             pauseBusy={pauseBusy}
             onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
             priorityUpdatingId={priorityUpdatingId}
+            onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
+            fastModeUpdatingId={fastModeUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onOpenReset={openResetPopup}
@@ -344,6 +356,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             pauseBusy={pauseBusy}
             onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
             priorityUpdatingId={priorityUpdatingId}
+            onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
+            fastModeUpdatingId={fastModeUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onReauth={openReauth}

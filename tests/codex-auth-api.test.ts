@@ -926,6 +926,12 @@ describe("codex-auth API", () => {
       logLabel: "work",
       isMain: false,
       hasCredential: true,
+      quotaRouting: {
+        urgency: null,
+        urgencyBucket: null,
+        affinityCount: 0,
+        candidate: true,
+      },
     });
     expect(pool).not.toHaveProperty("chatgptAccountId");
     expect(JSON.stringify(pool)).not.toContain("acct-config-secret");
@@ -2606,6 +2612,39 @@ describe("codex-auth API", () => {
     });
     return (await handleCodexAuthAPI(req, new URL(req.url), config))!;
   }
+
+  async function putFastMode(config: OcxConfig, body: unknown): Promise<Response> {
+    const req = new Request("http://localhost/api/codex-auth/accounts/fast-mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return (await handleCodexAuthAPI(req, new URL(req.url), config))!;
+  }
+
+  test("PUT /api/codex-auth/accounts/fast-mode opts a pool account in and out", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+
+    const enabled = await putFastMode(config, { id: "work", enabled: true });
+    expect(enabled.status).toBe(200);
+    expect(await enabled.json()).toMatchObject({ id: "work", fastModeEnabled: true, appliesImmediately: true });
+    expect(config.codexAccountFastModeEnabled).toEqual({ work: true });
+
+    const disabled = await putFastMode(config, { id: "work", enabled: false });
+    expect(disabled.status).toBe(200);
+    expect(config.codexAccountFastModeEnabled).toBeUndefined();
+  });
+
+  test("PUT /api/codex-auth/accounts/fast-mode validates account and boolean", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+
+    expect((await putFastMode(config, { id: "missing", enabled: true })).status).toBe(404);
+    expect((await putFastMode(config, { id: "work", enabled: "true" })).status).toBe(400);
+    expect((await putFastMode(config, { id: "__proto__", enabled: true })).status).toBe(400);
+    expect(config.codexAccountFastModeEnabled).toBeUndefined();
+  });
 
   test("PUT /api/codex-auth/accounts/priority persists a pool account's selection order", async () => {
     const config = makeConfig();

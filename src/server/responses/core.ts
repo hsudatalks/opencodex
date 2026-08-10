@@ -86,6 +86,11 @@ import {
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
+  applyCodexAccountFastModePolicy,
+  isCodexAccountFastModeEnabled,
+} from "../../codex/account-fast-mode";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
+import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
@@ -468,6 +473,15 @@ async function retryCodexPoolOnAlternateAccount(
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
+  );
+  applyCodexAccountFastModePolicy(config, retryAuthCtx.accountId, parsed);
+  logCtx.configuredServiceTier = isCodexAccountFastModeEnabled(config, retryAuthCtx.accountId)
+    ? "priority"
+    : undefined;
+  logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+  logCtx.modelSupportsServiceTier = catalogModelSupportsServiceTier(
+    route.modelId,
+    logCtx.configuredServiceTier,
   );
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
@@ -1645,6 +1659,25 @@ async function handleResponsesInner(
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
     selectedForwardHeaders = finalAuth.headers;
+  }
+
+  // Account policy is evaluated after selection so the centrally configured tier
+  // is authoritative for the account that will actually pay for this request.
+  if (route.codexAccountMode === "pool") {
+    const selectedAccountId = codexLogAccountId(authCtx) ?? MAIN_CODEX_ACCOUNT_ID;
+    applyCodexAccountFastModePolicy(
+      config,
+      selectedAccountId,
+      parsed,
+    );
+    logCtx.configuredServiceTier = isCodexAccountFastModeEnabled(config, selectedAccountId)
+      ? "priority"
+      : undefined;
+    logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+    logCtx.modelSupportsServiceTier = catalogModelSupportsServiceTier(
+      route.modelId,
+      logCtx.configuredServiceTier,
+    );
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);

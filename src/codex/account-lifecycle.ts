@@ -15,6 +15,7 @@ import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
+import { forgetCodexAccountFastMode } from "./account-fast-mode";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
@@ -135,6 +136,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       .filter(account => account.isMain || account.id !== accountId);
     forgetCodexAccountPause(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
+    forgetCodexAccountFastMode(runtimeConfig, accountId);
     clearCodexAccountPin(runtimeConfig, accountId);
     if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
 

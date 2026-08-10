@@ -33,6 +33,20 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
+const CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint";
+const ROUTING_HINT_VALUE = /^[a-zA-Z0-9._:/-]+$/;
+
+/** Match the routing hint emitted by native Codex after every final body rewrite. */
+function codexRoutingHint(body: unknown): string | undefined {
+  if (!isPlainObject(body) || typeof body.model !== "string" || !ROUTING_HINT_VALUE.test(body.model)) {
+    return undefined;
+  }
+  const tier = typeof body.service_tier === "string" && ROUTING_HINT_VALUE.test(body.service_tier)
+    ? body.service_tier
+    : undefined;
+  return `model=${body.model}${tier ? `;tier=${tier}` : ""}`;
+}
+
 export function sanitizeReasoningInputContent(
   body: unknown,
   opts?: { preserveRawReasoningContent?: boolean },
@@ -1184,11 +1198,21 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = buildRoutedCompactionBody(outBody);
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
-      const body = JSON.stringify(stripDisabledReasoningSummaries(
+      const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
         parsed.modelId,
-      ));
+      );
+      if (forward && isCanonicalOpenAiForwardProvider(provider)) {
+        // Do not relay a stale caller hint: routing and account policy may have
+        // rewritten the model or tier. Native Codex derives this from its final body.
+        for (const name of Object.keys(headers)) {
+          if (name.toLowerCase() === CODEX_ROUTING_HINT_HEADER) delete headers[name];
+        }
+        const hint = codexRoutingHint(finalBody);
+        if (hint) headers[CODEX_ROUTING_HINT_HEADER] = hint;
+      }
+      const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,

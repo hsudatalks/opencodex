@@ -251,6 +251,7 @@ export default function QuotaBars({
       {rows.map(row => (
         <QuotaRow
           key={row.label}
+          windowKey={row.windowKey}
           label={row.label}
           percent={row.percent}
           resetAt={row.resetAt}
@@ -263,7 +264,8 @@ export default function QuotaBars({
   );
 }
 
-function QuotaRow({ label, percent, resetAt, threshold, t, locale }: {
+function QuotaRow({ windowKey, label, percent, resetAt, threshold, t, locale }: {
+  windowKey?: QuotaWindowKey;
   label: string;
   percent: number;
   resetAt?: number;
@@ -276,7 +278,7 @@ function QuotaRow({ label, percent, resetAt, threshold, t, locale }: {
   const color = quotaBarTone(percent, threshold);
   const reset = formatResetAt(resetAt, t, locale);
   return (
-    <div className={`quota-row${warn ? " quota-row--warn" : ""}${exhausted ? " quota-row--exhausted" : ""}`}>
+    <div className={`quota-row${windowKey ? ` quota-row--${windowKey}` : ""}${warn ? " quota-row--warn" : ""}${exhausted ? " quota-row--exhausted" : ""}`}>
       <span className="quota-label">{label}</span>
       <span className="quota-reset-label">{t("codexAuth.resets")}</span>
       <span className="quota-reset-day">{reset.day}</span>

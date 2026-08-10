@@ -819,6 +819,11 @@ export interface OcxConfig {
    */
   codexAccountPriorities?: Record<string, number>;
   /**
+   * Centrally controlled ChatGPT account speed. Missing accounts force Standard;
+   * true forces every request routed to that account through Codex Fast.
+   */
+  codexAccountFastModeEnabled?: Record<string, boolean>;
+  /**
    * Account id the operator last selected by hand. Suppresses upward priority
    * preemption until that account crosses the auto-switch threshold. Stores the
    * id (not a flag) so a stale pin cannot outlive the selection it described.
