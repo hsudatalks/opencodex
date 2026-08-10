@@ -1323,7 +1323,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.fastModeForAccount": "このアカウントで Fast モードを強制",
   "codexAuth.fastModeHint": "このアカウントにルーティングされたすべての Codex リクエストで Fast を強制します。Workbench の設定は無視され、クレジット消費が速くなる場合があります。",
   "codexAuth.fastModeEnabled": "{email} で Fast モードを有効にしました",
-  "codexAuth.fastModeDisabled": "{email} で Fast モードを無効にしました",
+  "codexAuth.fastModeDisabled": "{email} の Fast 強制を無効にし、クライアント設定を保持します",
   "codexAuth.fastModeUpdateFailed": "{email} の Fast モードを更新できませんでした。",
   "codexAuth.urgency": "緊急度 {value}%",
   "codexAuth.urgencyHint": "最も近いリセットまでの時間で正規化した残りの主要クォータです。",

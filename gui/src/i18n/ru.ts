@@ -1365,7 +1365,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.fastModeForAccount": "Принудительно включить Fast для этой учетной записи",
   "codexAuth.fastModeHint": "Принудительно включает Fast для каждого запроса Codex к этой учетной записи. Настройки Workbench игнорируются, а кредиты могут расходоваться быстрее.",
   "codexAuth.fastModeEnabled": "Fast-режим включен для {email}",
-  "codexAuth.fastModeDisabled": "Fast-режим выключен для {email}",
+  "codexAuth.fastModeDisabled": "Принудительный Fast выключен для {email}; настройка клиента сохранена",
   "codexAuth.fastModeUpdateFailed": "Не удалось обновить Fast-режим для {email}.",
   "codexAuth.urgency": "Срочность {value}%",
   "codexAuth.urgencyHint": "Оставшаяся основная квота, нормализованная по времени до ближайшего сброса.",

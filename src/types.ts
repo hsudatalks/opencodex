@@ -819,8 +819,8 @@ export interface OcxConfig {
    */
   codexAccountPriorities?: Record<string, number>;
   /**
-   * Centrally controlled ChatGPT account speed. Missing accounts force Standard;
-   * true forces every request routed to that account through Codex Fast.
+   * Centrally forced ChatGPT account speed. True forces every request routed to
+   * that account through Codex Fast; missing accounts preserve the client tier.
    */
   codexAccountFastModeEnabled?: Record<string, boolean>;
   /**

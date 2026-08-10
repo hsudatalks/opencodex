@@ -17,7 +17,6 @@ export function CodexAccountFastModeControl({
     <div className="setting-row codex-account-fast-mode">
       <div className="setting-label">
         <span className="title">{t("codexAuth.fastMode")}</span>
-        <span className="desc">{t("codexAuth.fastModeHint")}</span>
       </div>
       <button
         type="button"

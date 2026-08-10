@@ -156,6 +156,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    serviceTier?: string;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -293,13 +294,19 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      serviceTier,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
       },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
+      body: JSON.stringify({
+        model,
+        input: path.endsWith("/compact") ? [] : "hello",
+        stream,
+        ...(serviceTier ? { service_tier: serviceTier } : {}),
+      }),
       signal,
     }),
   };
@@ -2310,6 +2317,41 @@ describe("server local API auth", () => {
           accountId: "acct-pool-b",
           tier: undefined,
           hint: `model=${POOL_RETRY_MODEL}`,
+        },
+      ]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("client Fast survives a 429 rotation when neither account forces a tier", async () => {
+    const attempts: Array<{ accountId: string; tier: unknown; hint: string | null }> = [];
+    const harness = await startPoolRetryHarness(async (accountId, request) => {
+      const body = await request.json() as { service_tier?: unknown };
+      attempts.push({
+        accountId,
+        tier: body.service_tier,
+        hint: request.headers.get("x-codex-routing-hint"),
+      });
+      return accountId === "acct-pool-a"
+        ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "60" },
+        })
+        : Response.json({ id: "client-fast-failover-success", status: "completed", output: [] });
+    });
+    try {
+      expect((await harness.request({ serviceTier: "priority" })).status).toBe(200);
+      expect(attempts).toEqual([
+        {
+          accountId: "acct-pool-a",
+          tier: "priority",
+          hint: `model=${POOL_RETRY_MODEL};tier=priority`,
+        },
+        {
+          accountId: "acct-pool-b",
+          tier: "priority",
+          hint: `model=${POOL_RETRY_MODEL};tier=priority`,
         },
       ]);
     } finally {

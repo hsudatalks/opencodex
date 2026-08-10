@@ -43,6 +43,12 @@ being selectable, or affinity expiry. The stable `__main__` alias carries an ord
 added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
 reproduces the prior selection sequence exactly.
 
+`codexAccountFastModeEnabled` is a one-way per-account override. `true` forces
+`service_tier: "priority"` after account selection. Missing or `false` preserves the tier the caller
+sent; it does not force Standard. The caller tier is captured before account policy and reused for
+every retry, so a 429 rotation from a forced account to a non-forced account cannot leak the first
+account's Fast mutation. The final native OpenAI routing hint is derived only after this policy runs.
+
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
 because the scopes track separate native quota groups and a scoped request has no standing to move

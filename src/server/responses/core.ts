@@ -358,6 +358,7 @@ interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  passthroughServiceTier?: string;
 }
 
 type CodexPoolAccountRetryResult =
@@ -410,6 +411,7 @@ async function retryCodexPoolOnAlternateAccount(
   const {
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    passthroughServiceTier,
   } = args;
   // Defense in depth: exact account selectors must never reach alternate-account resolution,
   // even if a future caller forgets to guard this helper.
@@ -474,7 +476,12 @@ async function retryCodexPoolOnAlternateAccount(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
   );
-  applyCodexAccountFastModePolicy(config, retryAuthCtx.accountId, parsed);
+  applyCodexAccountFastModePolicy(
+    config,
+    retryAuthCtx.accountId,
+    parsed,
+    passthroughServiceTier,
+  );
   logCtx.configuredServiceTier = isCodexAccountFastModeEnabled(config, retryAuthCtx.accountId)
     ? "priority"
     : undefined;
@@ -945,7 +952,7 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
-}): Promise<void> {
+}): Promise<string | undefined> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
@@ -1006,6 +1013,10 @@ async function applyFinalRouteRequestNormalization(args: {
     parsed.options.serviceTier = tier;
   }
   applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
+  // Account selection can retry on another credential. Preserve the effective
+  // client/global tier once so every account policy is computed from the same
+  // baseline instead of inheriting a previous account's rewrite.
+  const accountFastModePassthroughServiceTier = parsed.options.serviceTier;
 
   {
     const guidance = await multiAgentGuidanceText(parsed, {
@@ -1060,6 +1071,7 @@ async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
     logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
   );
+  return accountFastModePassthroughServiceTier;
 }
 
 
@@ -1626,7 +1638,7 @@ async function handleResponsesInner(
   // upstream for reliability (#875); the answer must then be reframed to SSE
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
-  await applyFinalRouteRequestNormalization({
+  const accountFastModePassthroughServiceTier = await applyFinalRouteRequestNormalization({
     parsed,
     route,
     config,
@@ -1669,6 +1681,7 @@ async function handleResponsesInner(
       config,
       selectedAccountId,
       parsed,
+      accountFastModePassthroughServiceTier,
     );
     logCtx.configuredServiceTier = isCodexAccountFastModeEnabled(config, selectedAccountId)
       ? "priority"
@@ -2139,6 +2152,7 @@ async function handleResponsesInner(
           connectMs,
           passthroughEstimate,
           stream: parsed.stream,
+          passthroughServiceTier: accountFastModePassthroughServiceTier,
         });
         if (retry.kind === "transport") {
           authCtx = retry.authCtx;

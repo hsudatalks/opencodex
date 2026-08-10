@@ -944,7 +944,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.fastModeForAccount": "이 계정에 Fast 모드 강제",
   "codexAuth.fastModeHint": "이 계정으로 라우팅되는 모든 Codex 요청에 Fast를 강제합니다. Workbench 설정은 무시되며 크레딧을 더 빨리 사용할 수 있습니다.",
   "codexAuth.fastModeEnabled": "{email}에 Fast 모드를 켰습니다",
-  "codexAuth.fastModeDisabled": "{email}의 Fast 모드를 껐습니다",
+  "codexAuth.fastModeDisabled": "{email}의 Fast 강제 적용을 끄고 클라이언트 설정을 유지합니다",
   "codexAuth.fastModeUpdateFailed": "{email}의 Fast 모드를 업데이트하지 못했습니다.",
   "codexAuth.urgency": "긴급도 {value}%",
   "codexAuth.urgencyHint": "가장 가까운 재설정까지의 시간으로 정규화한 남은 주요 할당량입니다.",

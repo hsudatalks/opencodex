@@ -937,7 +937,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.fastModeForAccount": "强制此账号使用 Fast 模式",
   "codexAuth.fastModeHint": "路由到此账号的所有 Codex 请求都会强制使用 Fast；Workbench 设置不再参与决定，额度消耗可能更快。",
   "codexAuth.fastModeEnabled": "已为 {email} 开启 Fast 模式",
-  "codexAuth.fastModeDisabled": "已为 {email} 关闭 Fast 模式",
+  "codexAuth.fastModeDisabled": "已为 {email} 关闭 Fast 强制覆盖，将保留客户端设置",
   "codexAuth.fastModeUpdateFailed": "无法更新 {email} 的 Fast 模式设置。",
   "codexAuth.urgency": "紧迫度 {value}%",
   "codexAuth.urgencyHint": "按距离最近重置的时间，对剩余主额度进行归一化。",

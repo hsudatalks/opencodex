@@ -920,7 +920,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.fastModeForAccount": "Fast-Modus für dieses Konto erzwingen",
   "codexAuth.fastModeHint": "Erzwingt Fast für jede Codex-Anfrage an dieses Konto. Workbench-Einstellungen werden ignoriert und Guthaben kann schneller verbraucht werden.",
   "codexAuth.fastModeEnabled": "Fast-Modus ist für {email} aktiviert",
-  "codexAuth.fastModeDisabled": "Fast-Modus ist für {email} deaktiviert",
+  "codexAuth.fastModeDisabled": "Fast-Erzwingung ist für {email} aus; die Client-Einstellung bleibt erhalten",
   "codexAuth.fastModeUpdateFailed": "Fast-Modus für {email} konnte nicht aktualisiert werden.",
   "codexAuth.urgency": "Dringlichkeit {value}%",
   "codexAuth.urgencyHint": "Verbleibendes Hauptkontingent, normalisiert auf die Zeit bis zum nächsten Zurücksetzen.",

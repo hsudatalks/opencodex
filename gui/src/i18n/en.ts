@@ -1375,7 +1375,7 @@ export const en = {
   "codexAuth.fastModeForAccount": "Force Fast mode for this account",
   "codexAuth.fastModeHint": "Forces every Codex request routed to this account through Fast. Workbench settings are ignored and credits may be consumed faster.",
   "codexAuth.fastModeEnabled": "Fast mode is on for {email}",
-  "codexAuth.fastModeDisabled": "Fast mode is off for {email}",
+  "codexAuth.fastModeDisabled": "Fast override is off for {email}; the client setting is preserved",
   "codexAuth.fastModeUpdateFailed": "Could not update Fast mode for {email}.",
   "codexAuth.urgency": "Urgency {value}%",
   "codexAuth.urgencyHint": "Remaining governing quota normalized to the time before its nearest reset.",

@@ -6,7 +6,7 @@ export function isCodexAccountFastModeKey(key: unknown): key is string {
   return key === MAIN_CODEX_ACCOUNT_ID || isValidCodexAccountId(key);
 }
 
-/** Fast mode is centrally controlled per ChatGPT account and defaults to off. */
+/** Fast mode can be centrally forced per ChatGPT account and defaults to passthrough. */
 export function isCodexAccountFastModeEnabled(config: OcxConfig, accountId: string): boolean {
   return config.codexAccountFastModeEnabled?.[accountId] === true;
 }
@@ -29,31 +29,35 @@ export function forgetCodexAccountFastMode(config: OcxConfig, accountId: string)
 }
 
 /**
- * Apply the selected account's authoritative tier after pool selection.
- * Enabled forces every request through Fast; disabled forces Standard.
+ * Apply the selected account's tier after pool selection. Enabled forces every
+ * request through Fast; disabled restores the immutable pre-selection tier.
+ *
+ * `passthroughServiceTier` must come from before any account policy was applied.
+ * That matters when a 429 rotates from a forced-Fast account to a passthrough
+ * account: the retry must recover the client's original choice, not inherit the
+ * first account's rewrite.
  */
 export function applyCodexAccountFastModePolicy(
   config: OcxConfig,
   accountId: string,
   parsed: Pick<OcxParsedRequest, "_rawBody" | "options">,
+  passthroughServiceTier: string | undefined,
 ): boolean {
   const enabled = isCodexAccountFastModeEnabled(config, accountId);
+  const effectiveServiceTier = enabled ? "priority" : passthroughServiceTier;
   let changed = false;
   if (parsed._rawBody && typeof parsed._rawBody === "object" && !Array.isArray(parsed._rawBody)) {
     const body = parsed._rawBody as Record<string, unknown>;
-    if (enabled && body.service_tier !== "priority") {
-      body.service_tier = "priority";
+    if (effectiveServiceTier !== undefined && body.service_tier !== effectiveServiceTier) {
+      body.service_tier = effectiveServiceTier;
       changed = true;
-    } else if (!enabled && Object.hasOwn(body, "service_tier")) {
+    } else if (effectiveServiceTier === undefined && Object.hasOwn(body, "service_tier")) {
       delete body.service_tier;
       changed = true;
     }
   }
-  if (enabled && parsed.options.serviceTier !== "priority") {
-    parsed.options.serviceTier = "priority";
-    changed = true;
-  } else if (!enabled && parsed.options.serviceTier !== undefined) {
-    parsed.options.serviceTier = undefined;
+  if (parsed.options.serviceTier !== effectiveServiceTier) {
+    parsed.options.serviceTier = effectiveServiceTier;
     changed = true;
   }
   return changed;
