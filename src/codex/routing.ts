@@ -109,7 +109,8 @@ export const CODEX_THREAD_AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
 /** Width of one normalized quota-urgency cohort. */
 export const CODEX_QUOTA_URGENCY_BUCKET_SIZE = 10;
-export const CODEX_QUOTA_AFFINITY_RELEASE_GAP = 50;
+/** One-shot priority for a freshly reset governing window with 100% remaining. */
+export const CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY = 10_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
@@ -375,6 +376,11 @@ export function computeCodexQuotaUrgency(
   const deadlines = [scheduledReset, manualDeadline, epochMs(officialResetAt)]
     .filter((deadline): deadline is number => deadline !== undefined && deadline > now);
   if (deadlines.length === 0) return null;
+
+  // A newly reset account needs one request before upstream quota reporting moves
+  // away from exactly 100% remaining. Put it above every ordinary urgency bucket
+  // for that bootstrap request; the normal formula resumes as soon as usage > 0.
+  if (usage === 0) return CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY;
 
   const hoursUntilReset = Math.max((Math.min(...deadlines) - now) / 3_600_000, 1);
   return Math.max(0, 100 - usage) * 144 / hoursUntilReset;
@@ -1080,37 +1086,6 @@ export function getCodexQuotaRoutingSnapshot(
     affinityCount: loads.get(accountId) ?? 0,
     candidate: candidates.has(accountId),
   }));
-}
-
-/**
- * Drop a completed session's binding only when its quota urgency is materially
- * behind the best current bucket. The next turn then performs a normal new-
- * session assignment; no in-flight request ever changes credentials.
- */
-export function releaseLaggingCodexThreadAffinityAfterTurn(
-  threadId: string,
-  accountId: string,
-  config: OcxConfig,
-  now = Date.now(),
-  quotaScope?: CodexQuotaScope,
-): boolean {
-  if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return false;
-  const entry = getThreadAffinity(threadId, quotaScope);
-  if (!entry || entry.accountId !== accountId) return false;
-
-  const workingSet = quotaAccountWorkingSet(config, now, quotaScope);
-  const highestBucket = workingSet.length > 0
-    ? quotaUrgencyBucket(config, workingSet[0]!, now)
-    : null;
-  const accountBucket = quotaUrgencyBucket(config, accountId, now);
-  if (
-    highestBucket === null
-    || accountBucket === null
-    || highestBucket - accountBucket <= CODEX_QUOTA_AFFINITY_RELEASE_GAP
-  ) return false;
-
-  deleteThreadAffinity(threadId, quotaScope);
-  return true;
 }
 
 function getEligiblePoolAccounts(

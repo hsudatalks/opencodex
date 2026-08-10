@@ -2,9 +2,9 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY,
   CODEX_FAILURE_WINDOW_MS,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
-  CODEX_QUOTA_AFFINITY_RELEASE_GAP,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_THREAD_AFFINITY_MAX_ENTRIES,
@@ -30,7 +30,6 @@ import {
   previewCodexAccountForRequest,
   reconcileCodexActiveAfterExclusion,
   recordCodexUpstreamOutcome,
-  releaseLaggingCodexThreadAffinityAfterTurn,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
@@ -315,6 +314,31 @@ describe("codex routing", () => {
     }, "plus", now, now + 48 * 60 * 60_000)).toBe(180);
   });
 
+  test("a freshly reset account bootstraps at 10000 urgency until it records usage", () => {
+    const now = 1_800_000_000_000;
+    const weeklyResetAt = now / 1000 + 144 * 60 * 60;
+
+    expect(CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY).toBe(10_000);
+    expect(computeCodexQuotaUrgency({
+      weeklyPercent: 0,
+      weeklyResetAt,
+    }, "plus", now)).toBe(10_000);
+    expect(computeCodexQuotaUrgency({
+      weeklyPercent: 1,
+      weeklyResetAt,
+    }, "plus", now)).toBe(99);
+  });
+
+  test("the fresh-account bootstrap follows the governing monthly window for Go", () => {
+    const now = 1_800_000_000_000;
+    expect(computeCodexQuotaUrgency({
+      weeklyPercent: 70,
+      weeklyResetAt: now / 1000 + 24 * 60 * 60,
+      monthlyPercent: 0,
+      monthlyResetAt: now / 1000 + 30 * 24 * 60 * 60,
+    }, "go", now)).toBe(10_000);
+  });
+
   test("quota routing keeps at least the three most urgent accounts in the candidate cohort", () => {
     const now = 1_800_000_000_000;
     const config = makeConfig({
@@ -332,7 +356,7 @@ describe("codex routing", () => {
     expect(snapshot.filter(row => row.candidate).map(row => row.accountId).sort()).toEqual(["a", "b", "c"]);
   });
 
-  test("completed turn may release a binding lagging the highest urgency bucket by over 50 points", () => {
+  test("urgency changes affect new tasks without releasing an existing task binding", () => {
     const now = 1_800_000_000_000;
     const config = makeConfig();
     setAccountQuotaFromParsed("a", {
@@ -353,9 +377,8 @@ describe("codex routing", () => {
       weeklyPercent: 0,
       weeklyResetAt: now / 1000 + 144 * 60 * 60,
     });
-    expect(CODEX_QUOTA_AFFINITY_RELEASE_GAP).toBe(50);
-    expect(releaseLaggingCodexThreadAffinityAfterTurn("settled-session", "a", config, now + 1)).toBe(true);
-    expect(resolveCodexAccountForThread("settled-session", config, now + 2)).toBe("b");
+    expect(resolveCodexAccountForThread("settled-session", config, now + 1)).toBe("a");
+    expect(resolveCodexAccountForThread("new-session", config, now + 2)).toBe("b");
   });
 
   test("zero migration threshold still deadline-schedules new quota tasks", () => {
