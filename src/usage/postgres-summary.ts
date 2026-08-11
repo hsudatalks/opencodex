@@ -100,10 +100,10 @@ function totalsFromRow(row: SqlRow | undefined): UsageSummaryTotals {
     reasoningOutputTokens: numeric(row.reasoning_output_tokens),
     totalTokens: numeric(row.total_tokens),
     coverageRatio: 0,
-    estimatedCostUsd: 0,
-    pricedRequests: 0,
-    unpricedRequests: 0,
-    unmeteredRequests: 0,
+    estimatedCostUsd: numeric(row.estimated_cost_usd),
+    pricedRequests: numeric(row.priced_requests),
+    unpricedRequests: numeric(row.unpriced_requests),
+    unmeteredRequests: numeric(row.unmetered_requests),
   };
   totals.coverageRatio = totals.requests === 0 ? 0 : totals.measuredRequests / totals.requests;
   return totals;
@@ -132,6 +132,20 @@ function cappedModels(rows: UsageModel[], totalTokens: number): UsageModel[] {
   });
   other.shareRatio = totalTokens === 0 ? 0 : other.totalTokens / totalTokens;
   return [...kept, other];
+}
+
+function capDayModels(day: UsageDay): void {
+  day.models.sort((a, b) => b.requests - a.requests);
+  if (day.models.length <= MAX_BREAKDOWN_ROWS) return;
+  const kept = day.models.slice(0, MAX_BREAKDOWN_ROWS - 1);
+  const overflow = day.models.slice(MAX_BREAKDOWN_ROWS - 1);
+  kept.push(overflow.reduce<UsageDayModel>((out, row) => ({
+    ...out,
+    requests: out.requests + row.requests,
+    attemptCount: out.attemptCount + row.attemptCount,
+    totalTokens: out.totalTokens + row.totalTokens,
+  }), { provider: "other", model: "other", requests: 0, attemptCount: 0, totalTokens: 0 }));
+  day.models = kept;
 }
 
 function dayGrid(range: UsageRange, now: number, oldest: number | undefined, rows: SqlRow[], modelRows: SqlRow[]): UsageDay[] {
@@ -167,18 +181,7 @@ function dayGrid(range: UsageRange, now: number, oldest: number | undefined, row
     });
   }
   for (const day of byDate.values()) {
-    day.models.sort((a, b) => b.requests - a.requests);
-    if (day.models.length > MAX_BREAKDOWN_ROWS) {
-      const kept = day.models.slice(0, MAX_BREAKDOWN_ROWS - 1);
-      const overflow = day.models.slice(MAX_BREAKDOWN_ROWS - 1);
-      kept.push(overflow.reduce<UsageDayModel>((out, row) => ({
-        ...out,
-        requests: out.requests + row.requests,
-        attemptCount: out.attemptCount + row.attemptCount,
-        totalTokens: out.totalTokens + row.totalTokens,
-      }), { provider: "other", model: "other", requests: 0, attemptCount: 0, totalTokens: 0 }));
-      day.models = kept;
-    }
+    capDayModels(day);
   }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -489,16 +492,18 @@ async function applyCosts(
   }
 }
 
-export async function summarizeUsageFromPostgres(
-  sql: SQL,
+async function summarizeRawInTransaction(
+  tx: SQL,
   range: UsageRange,
   now: number,
   surface: UsageSurface,
+  sinceOverride?: number | null,
+  throughOverride?: number,
 ): Promise<UsageSummary> {
-  const sinceMs = sinceForRange(range, now);
+  const sinceMs = sinceOverride === undefined ? sinceForRange(range, now) : sinceOverride;
   const since = sinceMs === null ? null : new Date(sinceMs).toISOString();
-  const through = new Date(now).toISOString();
-  return sql.begin("read only", async tx => {
+  const throughMs = throughOverride ?? now;
+  const through = new Date(throughMs).toISOString();
     const aggregateStartedAt = performance.now();
     const rows = await readAggregateRows(tx, since, surfaceMode(surface), through);
     const aggregateMs = performance.now() - aggregateStartedAt;
@@ -546,7 +551,266 @@ export async function summarizeUsageFromPostgres(
       models: cappedModels(models, totals.totalTokens),
       providers,
     };
-  });
+}
+
+export async function summarizeUsageRawFromPostgres(
+  sql: SQL,
+  range: UsageRange,
+  now: number,
+  surface: UsageSurface,
+): Promise<UsageSummary> {
+  return sql.begin("read only", tx => summarizeRawInTransaction(tx, range, now, surface));
+}
+
+const DASHBOARD_FILTER = `
+  ($1::timestamptz IS NULL OR h.hour >= $1::timestamptz)
+  AND h.hour <= $3::timestamptz
+  AND (
+    $2::smallint = 0
+    OR ($2::smallint = 1 AND h.surface_code = 0)
+    OR ($2::smallint = 2 AND h.surface_code IN (1, 2))
+    OR ($2::smallint = 3 AND h.surface_code = 3)
+  )
+`;
+
+function mergeSummaries(
+  range: UsageRange,
+  surface: UsageSurface,
+  now: number,
+  left: UsageSummary,
+  right: UsageSummary,
+): UsageSummary {
+  const totals = zeroTotals();
+  const totalKeys: Array<keyof Omit<UsageSummaryTotals, "coverageRatio">> = [
+    "requests", "attemptCount", "measuredRequests", "reportedRequests",
+    "unreportedRequests", "unsupportedRequests", "estimatedRequests", "inputTokens",
+    "outputTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
+    "reasoningOutputTokens", "totalTokens", "estimatedCostUsd", "pricedRequests",
+    "unpricedRequests", "unmeteredRequests",
+  ];
+  for (const key of totalKeys) totals[key] = left.summary[key] + right.summary[key];
+  totals.coverageRatio = totals.requests === 0 ? 0 : totals.measuredRequests / totals.requests;
+
+  const dayMap = new Map<string, UsageDay>();
+  for (const source of [left, right]) {
+    for (const day of source.days) {
+      let target = dayMap.get(day.date);
+      if (!target) {
+        target = { date: day.date, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] };
+        dayMap.set(day.date, target);
+      }
+      target.requests += day.requests;
+      target.measuredRequests += day.measuredRequests;
+      target.reportedRequests += day.reportedRequests;
+      target.totalTokens += day.totalTokens;
+      const models = new Map(target.models.map(model => [`${model.provider}\0${model.model}`, model]));
+      for (const model of day.models) {
+        const key = `${model.provider}\0${model.model}`;
+        const existing = models.get(key);
+        if (existing) {
+          existing.requests += model.requests;
+          existing.attemptCount += model.attemptCount;
+          existing.totalTokens += model.totalTokens;
+        } else {
+          const copy = { ...model };
+          target.models.push(copy);
+          models.set(key, copy);
+        }
+      }
+    }
+  }
+  for (const day of dayMap.values()) capDayModels(day);
+
+  const modelMap = new Map<string, UsageModel>();
+  for (const source of [left, right]) {
+    for (const model of source.models) {
+      const key = `${model.provider}\0${model.model}`;
+      let target = modelMap.get(key);
+      if (!target) {
+        target = { ...model, shareRatio: 0 };
+        modelMap.set(key, target);
+        continue;
+      }
+      target.requests += model.requests;
+      target.attemptCount += model.attemptCount;
+      target.measuredRequests += model.measuredRequests;
+      target.reportedRequests += model.reportedRequests;
+      target.estimatedRequests += model.estimatedRequests;
+      target.totalTokens += model.totalTokens;
+      target.inputTokens += model.inputTokens;
+      target.outputTokens += model.outputTokens;
+      if (model.estimatedCostUsd !== undefined) {
+        target.estimatedCostUsd = (target.estimatedCostUsd ?? 0) + model.estimatedCostUsd;
+      }
+    }
+  }
+  const models = [...modelMap.values()].sort((a, b) => b.requests - a.requests);
+  for (const model of models) model.shareRatio = totals.totalTokens === 0 ? 0 : model.totalTokens / totals.totalTokens;
+
+  const providerMap = new Map<string, UsageProvider>();
+  for (const source of [left, right]) {
+    for (const provider of source.providers) {
+      let target = providerMap.get(provider.provider);
+      if (!target) {
+        target = { ...provider, shareRatio: 0 };
+        providerMap.set(provider.provider, target);
+        continue;
+      }
+      target.requests += provider.requests;
+      target.attemptCount += provider.attemptCount;
+      target.measuredRequests += provider.measuredRequests;
+      target.reportedRequests += provider.reportedRequests;
+      target.estimatedRequests += provider.estimatedRequests;
+      target.totalTokens += provider.totalTokens;
+      if (provider.estimatedCostUsd !== undefined) {
+        target.estimatedCostUsd = (target.estimatedCostUsd ?? 0) + provider.estimatedCostUsd;
+      }
+    }
+  }
+  const providers = [...providerMap.values()].sort((a, b) => b.requests - a.requests);
+  for (const provider of providers) provider.shareRatio = totals.totalTokens === 0 ? 0 : provider.totalTokens / totals.totalTokens;
+
+  return {
+    range,
+    surface,
+    since: sinceForRange(range, now),
+    generatedAt: now,
+    summary: totals,
+    days: [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    models: cappedModels(models, totals.totalTokens),
+    providers,
+  };
+}
+
+async function summarizeDashboardRollupsInTransaction(
+  tx: SQL,
+  range: UsageRange,
+  now: number,
+  surface: UsageSurface,
+  sinceMs: number | null,
+): Promise<UsageSummary> {
+  const since = sinceMs === null ? null : new Date(sinceMs).toISOString();
+  const through = new Date(now).toISOString();
+  const params = [since, surfaceMode(surface), through];
+  const totals = await tx.unsafe<SqlRow[]>(`
+    SELECT sum(h.request_count) requests, min(h.oldest_occurred_at) oldest_occurred_at,
+      sum(h.attempt_count) attempt_count,
+      sum(h.measured_request_count) measured_requests,
+      sum(h.reported_request_count) reported_requests,
+      sum(h.unreported_request_count) unreported_requests,
+      sum(h.unsupported_request_count) unsupported_requests,
+      sum(h.estimated_request_count) estimated_requests,
+      sum(h.input_tokens) input_tokens, sum(h.output_tokens) output_tokens,
+      sum(h.cache_read_input_tokens) cache_read_input_tokens,
+      sum(h.cache_creation_input_tokens) cache_creation_input_tokens,
+      sum(h.reasoning_output_tokens) reasoning_output_tokens,
+      sum(h.total_tokens) total_tokens, sum(h.estimated_cost_usd) estimated_cost_usd,
+      sum(h.priced_request_count) priced_requests,
+      sum(h.unpriced_request_count) unpriced_requests,
+      sum(h.unmetered_request_count) unmetered_requests
+    FROM opencodex_usage.dashboard_request_hourly h WHERE ${DASHBOARD_FILTER}
+  `, params);
+  const days = await tx.unsafe<SqlRow[]>(`
+    SELECT to_char(h.hour AT TIME ZONE 'Asia/Singapore', 'YYYY-MM-DD') date,
+      sum(h.request_count) requests,
+      sum(h.measured_request_count) measured_requests,
+      sum(h.reported_request_count) reported_requests,
+      sum(h.total_tokens) total_tokens
+    FROM opencodex_usage.dashboard_request_hourly h WHERE ${DASHBOARD_FILTER}
+    GROUP BY 1 ORDER BY 1
+  `, params);
+  const dayModels = await tx.unsafe<SqlRow[]>(`
+    SELECT to_char(h.hour AT TIME ZONE 'Asia/Singapore', 'YYYY-MM-DD') date,
+      provider.value provider, model.value model,
+      sum(h.request_count) requests, sum(h.attempt_count) attempt_count,
+      sum(h.total_tokens) total_tokens
+    FROM opencodex_usage.dashboard_model_hourly h
+    JOIN opencodex_usage.dimensions provider ON provider.id = h.provider_id
+    JOIN opencodex_usage.dimensions model ON model.id = h.model_id
+    WHERE ${DASHBOARD_FILTER}
+    GROUP BY 1, 2, 3 ORDER BY 1, requests DESC
+  `, params);
+  const modelRows = await tx.unsafe<SqlRow[]>(`
+    SELECT provider.value provider, model.value model,
+      sum(h.request_count) requests, sum(h.attempt_count) attempt_count,
+      sum(h.measured_request_count) measured_requests,
+      sum(h.reported_request_count) reported_requests,
+      sum(h.estimated_request_count) estimated_requests,
+      sum(h.total_tokens) total_tokens, sum(h.input_tokens) input_tokens,
+      sum(h.output_tokens) output_tokens, sum(h.estimated_cost_usd) estimated_cost_usd,
+      sum(h.priced_attribution_count) priced_attribution_count
+    FROM opencodex_usage.dashboard_model_hourly h
+    JOIN opencodex_usage.dimensions provider ON provider.id = h.provider_id
+    JOIN opencodex_usage.dimensions model ON model.id = h.model_id
+    WHERE ${DASHBOARD_FILTER}
+    GROUP BY 1, 2 ORDER BY requests DESC
+  `, params);
+  const providerRows = await tx.unsafe<SqlRow[]>(`
+    SELECT provider.value provider, sum(h.request_count) requests,
+      sum(h.attempt_count) attempt_count,
+      sum(h.measured_request_count) measured_requests,
+      sum(h.reported_request_count) reported_requests,
+      sum(h.estimated_request_count) estimated_requests,
+      sum(h.total_tokens) total_tokens, sum(h.estimated_cost_usd) estimated_cost_usd,
+      sum(h.priced_attribution_count) priced_attribution_count
+    FROM opencodex_usage.dashboard_provider_hourly h
+    JOIN opencodex_usage.dimensions provider ON provider.id = h.provider_id
+    WHERE ${DASHBOARD_FILTER}
+    GROUP BY 1 ORDER BY requests DESC
+  `, params);
+  const summaryTotals = totalsFromRow(totals[0]);
+  const models = modelRows.map<UsageModel>(row => ({
+    provider: String(row.provider), model: String(row.model),
+    requests: numeric(row.requests), attemptCount: numeric(row.attempt_count),
+    measuredRequests: numeric(row.measured_requests), reportedRequests: numeric(row.reported_requests),
+    estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens),
+    inputTokens: numeric(row.input_tokens), outputTokens: numeric(row.output_tokens), shareRatio: 0,
+    ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
+  }));
+  const providers = providerRows.map<UsageProvider>(row => ({
+    provider: String(row.provider), requests: numeric(row.requests), attemptCount: numeric(row.attempt_count),
+    measuredRequests: numeric(row.measured_requests), reportedRequests: numeric(row.reported_requests),
+    estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens), shareRatio: 0,
+    ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
+  }));
+  for (const model of models) model.shareRatio = summaryTotals.totalTokens === 0 ? 0 : model.totalTokens / summaryTotals.totalTokens;
+  for (const provider of providers) provider.shareRatio = summaryTotals.totalTokens === 0 ? 0 : provider.totalTokens / summaryTotals.totalTokens;
+  return {
+    range, surface, since: sinceForRange(range, now), generatedAt: now, summary: summaryTotals,
+    days: dayGrid(range, now, timestampMs(totals[0]?.oldest_occurred_at), days, dayModels),
+    models: cappedModels(models, summaryTotals.totalTokens), providers,
+  };
+}
+
+export async function summarizeUsageFromPostgres(
+  sql: SQL,
+  range: UsageRange,
+  now: number,
+  surface: UsageSurface,
+): Promise<UsageSummary> {
+  try {
+    return await sql.begin("read only", async tx => {
+      const state = await tx.unsafe<SqlRow[]>(`
+        SELECT ready FROM opencodex_usage.dashboard_read_model_state WHERE singleton = true
+      `);
+      if (state[0]?.ready !== true) return summarizeRawInTransaction(tx, range, now, surface);
+      const since = sinceForRange(range, now);
+      if (since === null) return summarizeDashboardRollupsInTransaction(tx, range, now, surface, null);
+      const completeHourStart = Math.ceil(since / 3_600_000) * 3_600_000;
+      if (completeHourStart >= now) return summarizeRawInTransaction(tx, range, now, surface);
+      const boundary = completeHourStart > since
+        ? await summarizeRawInTransaction(tx, range, now, surface, since, completeHourStart - 1)
+        : { range, surface, since, generatedAt: now, summary: zeroTotals(), days: [], models: [], providers: [] };
+      const rollups = await summarizeDashboardRollupsInTransaction(tx, range, now, surface, completeHourStart);
+      return mergeSummaries(range, surface, now, boundary, rollups);
+    });
+  } catch (error) {
+    if (process.env.OPENCODEX_USAGE_POSTGRES_DIAGNOSTICS === "1") {
+      console.warn("[usage-postgres] Dashboard read model unavailable; using normalized facts:",
+        error instanceof Error ? error.message : error);
+    }
+    return summarizeUsageRawFromPostgres(sql, range, now, surface);
+  }
 }
 
 /** Coalesce identical Dashboard reads and serve a recent snapshot while one background

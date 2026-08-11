@@ -255,9 +255,11 @@ network failures as a visible warning instead of silently looking idle again.
 
 ## Usage accounting
 
-`src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
-`src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
-grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
+`src/usage/log.ts` writes append-only JSONL usage ledgers with file mode `0o600`.
+`src/usage/summary.ts` owns the `/api/usage` accounting contract — totals, daily zero-filled grid,
+model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
+PostgreSQL deployments ingest the same records into normalized audit facts and Dashboard projections;
+JSONL-only deployments summarize the ledgers directly.
 A missing `usage.jsonl` returns a zeroed summary with 200, not an error: a fresh install has no
 usage and must not render as a failure. What the shape must never do is present an unmeasured
 request as a measured zero — that is what the `measured / reported / unreported / unsupported /
@@ -265,20 +267,26 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
-The management API caches only the compact summary for an exact file revision and query; it never
-retains normalized per-request rows after a response. The cache invalidates on any identity, size, or
-timestamp change and at the next range expiry or local-day boundary. Rebuilds parse in bounded
-batches and yield between them, so unrelated management requests remain serviceable even for a large
-existing log. The Dashboard polls its 30-day usage summary independently once per minute, so usage
-work cannot delay health/provider/settings state or run every five seconds.
+When `OPENCODEX_USAGE_DATABASE_URL` is configured, JSONL is the recoverable ingestion WAL and
+normalized PostgreSQL request/attempt rows are the audit facts. The Dashboard reads three exact
+hourly projections: request totals, model attribution, and provider attribution. Keeping those grains
+separate prevents retries from duplicating logical request totals or same-provider requests. A 7d/30d
+query reads normalized facts only for its partial starting hour and reads the projections for every
+complete hour; `all` reads projections only. The projection has an explicit readiness row, so a new
+migration or interrupted backfill falls back to normalized facts instead of serving partial totals.
+
+The management API still caches only the compact summary. JSONL-only installations retain the
+revision-keyed, bounded, cooperatively parsed fallback. The Dashboard polls its 30-day usage summary
+independently once per minute, so usage work cannot delay health/provider/settings state or run every
+five seconds.
 
 [Decision Log]
 - 목적과 의도: Keep dashboard and management requests responsive as `usage.jsonl` grows.
-- 기존 구현 및 제약 조건: The JSONL file remains the durable source of truth and may be truncated, replaced, or hand-edited.
-- 검토한 주요 대안: Retain normalized rows, maintain a second database, or cache only revision-keyed summaries and cooperatively rebuild them.
-- 선택한 방식: Keep only bounded summary results, share full reads by exact file identity, yield during parsing, and poll usage separately at a slower cadence.
-- 다른 대안 대신 이 방식을 선택한 이유: It bounds resident heap and avoids a second persistence format while keeping unrelated endpoints responsive.
-- 장점, 단점 및 영향: Unchanged queries are cheap and memory stays bounded; a changed large log still consumes rebuild CPU, but cooperatively and at most once per observed revision/query.
+- 기존 구현 및 제약 조건: Recomputing 7d/30d summaries repeatedly scanned normalized requests and attempts, including the cost-attribution query; production refreshes grew to seconds as history accumulated.
+- 검토한 주요 대안: Longer caches, parallel fact scans, range snapshots, one mixed-grain hourly table, or exact projections maintained by ingestion.
+- 선택한 방식: Keep normalized facts authoritative and maintain separate request/model/provider hourly projections with application-owned attribution and cost semantics.
+- 다른 대안 대신 이 방식을 선택한 이유: It makes read cost proportional to hours and active dimensions rather than requests while preserving logical-request de-duplication and bounded exact boundary reads.
+- 장점, 단점 및 영향: Manual refreshes remain authoritative without a long synchronous fact scan; pricing-rule changes require rebuilding the projection, and an unready projection intentionally degrades to normalized facts.
 
 For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on` (or set
 `OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized

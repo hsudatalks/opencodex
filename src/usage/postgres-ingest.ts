@@ -12,6 +12,7 @@ import {
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
 } from "./log";
+import { summarizeUsage } from "./summary";
 
 const DEFAULT_BATCH_ENTRIES = 500;
 const DEFAULT_POLL_MS = 1_000;
@@ -72,6 +73,11 @@ type UsageCursor = {
   source_device: number | string | bigint;
   source_inode: number | string | bigint;
   byte_offset: number | string | bigint;
+};
+
+type InsertedRequestRow = {
+  occurred_at: Date | string;
+  request_id: string;
 };
 
 export interface UsageLedgerBatch {
@@ -367,6 +373,157 @@ function requestRows(entries: PersistedUsageEntry[], dimensions: Map<string, num
   }));
 }
 
+function dashboardHour(timestamp: number): string {
+  return new Date(Math.floor(timestamp / 3_600_000) * 3_600_000).toISOString();
+}
+
+function dashboardSurfaceCode(entry: PersistedUsageEntry): number {
+  return entry.surface ? SURFACE_CODES[entry.surface] : 0;
+}
+
+function addNumber(row: Record<string, unknown>, key: string, value: number | undefined): void {
+  row[key] = Number(row[key] ?? 0) + (value ?? 0);
+}
+
+export function dashboardRollupRowsForTest(
+  entries: PersistedUsageEntry[],
+  dimensions: Map<string, number>,
+): {
+  requests: Array<Record<string, unknown>>;
+  models: Array<Record<string, unknown>>;
+  providers: Array<Record<string, unknown>>;
+} {
+  const requestRowsByKey = new Map<string, Record<string, unknown>>();
+  const modelRowsByKey = new Map<string, Record<string, unknown>>();
+  const providerRowsByKey = new Map<string, Record<string, unknown>>();
+
+  for (const entry of entries) {
+    const hour = dashboardHour(entry.timestamp);
+    const surfaceCode = dashboardSurfaceCode(entry);
+    const summary = summarizeUsage([entry], "all", entry.timestamp, "all");
+    const totals = summary.summary;
+    const requestKey = `${hour}\0${surfaceCode}`;
+    let request = requestRowsByKey.get(requestKey);
+    if (!request) {
+      request = {
+        hour,
+        surface_code: surfaceCode,
+        oldest_occurred_at: occurredAt(entry),
+        request_count: 0,
+        attempt_count: 0,
+        measured_request_count: 0,
+        reported_request_count: 0,
+        unreported_request_count: 0,
+        unsupported_request_count: 0,
+        estimated_request_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_usd: 0,
+        priced_request_count: 0,
+        unpriced_request_count: 0,
+        unmetered_request_count: 0,
+      };
+      requestRowsByKey.set(requestKey, request);
+    }
+    if (occurredAt(entry) < String(request.oldest_occurred_at)) request.oldest_occurred_at = occurredAt(entry);
+    addNumber(request, "request_count", totals.requests);
+    addNumber(request, "attempt_count", totals.attemptCount);
+    addNumber(request, "measured_request_count", totals.measuredRequests);
+    addNumber(request, "reported_request_count", totals.reportedRequests);
+    addNumber(request, "unreported_request_count", totals.unreportedRequests);
+    addNumber(request, "unsupported_request_count", totals.unsupportedRequests);
+    addNumber(request, "estimated_request_count", totals.estimatedRequests);
+    addNumber(request, "input_tokens", totals.inputTokens);
+    addNumber(request, "output_tokens", totals.outputTokens);
+    addNumber(request, "cache_read_input_tokens", totals.cacheReadInputTokens);
+    addNumber(request, "cache_creation_input_tokens", totals.cacheCreationInputTokens);
+    addNumber(request, "reasoning_output_tokens", totals.reasoningOutputTokens);
+    addNumber(request, "total_tokens", totals.totalTokens);
+    addNumber(request, "estimated_cost_usd", totals.estimatedCostUsd);
+    addNumber(request, "priced_request_count", totals.pricedRequests);
+    addNumber(request, "unpriced_request_count", totals.unpricedRequests);
+    addNumber(request, "unmetered_request_count", totals.unmeteredRequests);
+
+    for (const model of summary.models) {
+      const providerId = dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, model.provider);
+      const modelId = dimensionId(dimensions, USAGE_DIMENSION_KIND.model, model.model);
+      if (providerId === null || modelId === null) throw new Error("dashboard model dimension missing");
+      const key = `${requestKey}\0${providerId}\0${modelId}`;
+      let row = modelRowsByKey.get(key);
+      if (!row) {
+        row = {
+          hour,
+          surface_code: surfaceCode,
+          provider_id: providerId,
+          model_id: modelId,
+          request_count: 0,
+          attempt_count: 0,
+          measured_request_count: 0,
+          reported_request_count: 0,
+          estimated_request_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+          estimated_cost_usd: 0,
+          priced_attribution_count: 0,
+        };
+        modelRowsByKey.set(key, row);
+      }
+      addNumber(row, "request_count", model.requests);
+      addNumber(row, "attempt_count", model.attemptCount);
+      addNumber(row, "measured_request_count", model.measuredRequests);
+      addNumber(row, "reported_request_count", model.reportedRequests);
+      addNumber(row, "estimated_request_count", model.estimatedRequests);
+      addNumber(row, "input_tokens", model.inputTokens);
+      addNumber(row, "output_tokens", model.outputTokens);
+      addNumber(row, "total_tokens", model.totalTokens);
+      addNumber(row, "estimated_cost_usd", model.estimatedCostUsd);
+      addNumber(row, "priced_attribution_count", model.estimatedCostUsd === undefined ? 0 : 1);
+    }
+
+    for (const provider of summary.providers) {
+      const providerId = dimensionId(dimensions, USAGE_DIMENSION_KIND.provider, provider.provider);
+      if (providerId === null) throw new Error("dashboard provider dimension missing");
+      const key = `${requestKey}\0${providerId}`;
+      let row = providerRowsByKey.get(key);
+      if (!row) {
+        row = {
+          hour,
+          surface_code: surfaceCode,
+          provider_id: providerId,
+          request_count: 0,
+          attempt_count: 0,
+          measured_request_count: 0,
+          reported_request_count: 0,
+          estimated_request_count: 0,
+          total_tokens: 0,
+          estimated_cost_usd: 0,
+          priced_attribution_count: 0,
+        };
+        providerRowsByKey.set(key, row);
+      }
+      addNumber(row, "request_count", provider.requests);
+      addNumber(row, "attempt_count", provider.attemptCount);
+      addNumber(row, "measured_request_count", provider.measuredRequests);
+      addNumber(row, "reported_request_count", provider.reportedRequests);
+      addNumber(row, "estimated_request_count", provider.estimatedRequests);
+      addNumber(row, "total_tokens", provider.totalTokens);
+      addNumber(row, "estimated_cost_usd", provider.estimatedCostUsd);
+      addNumber(row, "priced_attribution_count", provider.estimatedCostUsd === undefined ? 0 : 1);
+    }
+  }
+
+  return {
+    requests: [...requestRowsByKey.values()],
+    models: [...modelRowsByKey.values()],
+    providers: [...providerRowsByKey.values()],
+  };
+}
+
 function attemptRows(entries: PersistedUsageEntry[], dimensions: Map<string, number>): Array<Record<string, unknown>> {
   return entries.flatMap(entry => (entry.attempts ?? []).map(attempt => ({
     occurred_at: occurredAt(entry),
@@ -517,8 +674,8 @@ const REQUEST_INSERT_SQL = `
     FROM input
     ON CONFLICT (occurred_at, request_id) DO NOTHING
     RETURNING *
-  )
-  INSERT INTO opencodex_usage.usage_hourly_rollups (
+  ), legacy_rollup AS (
+    INSERT INTO opencodex_usage.usage_hourly_rollups (
     hour, surface_code, provider_id, model_id, account_id,
     request_count, success_count, error_count, duration_ms_sum,
     first_output_ms_sum, first_output_count, input_tokens, output_tokens,
@@ -546,6 +703,9 @@ const REQUEST_INSERT_SQL = `
     cached_input_tokens = opencodex_usage.usage_hourly_rollups.cached_input_tokens + EXCLUDED.cached_input_tokens,
     reasoning_output_tokens = opencodex_usage.usage_hourly_rollups.reasoning_output_tokens + EXCLUDED.reasoning_output_tokens,
     total_tokens = opencodex_usage.usage_hourly_rollups.total_tokens + EXCLUDED.total_tokens
+  RETURNING 1
+  )
+  SELECT occurred_at, request_id FROM inserted ORDER BY occurred_at, request_id
 `;
 
 const ATTEMPT_INSERT_SQL = `
@@ -573,6 +733,107 @@ const ATTEMPT_INSERT_SQL = `
   ON CONFLICT (occurred_at, request_id, ordinal) DO NOTHING
 `;
 
+const DASHBOARD_REQUEST_UPSERT_SQL = `
+  INSERT INTO opencodex_usage.dashboard_request_hourly (
+    hour, surface_code, oldest_occurred_at, request_count, attempt_count,
+    measured_request_count, reported_request_count, unreported_request_count,
+    unsupported_request_count, estimated_request_count, input_tokens, output_tokens,
+    cache_read_input_tokens, cache_creation_input_tokens, reasoning_output_tokens,
+    total_tokens, estimated_cost_usd, priced_request_count, unpriced_request_count,
+    unmetered_request_count
+  )
+  SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
+    hour timestamptz, surface_code smallint, oldest_occurred_at timestamptz,
+    request_count bigint, attempt_count bigint, measured_request_count bigint,
+    reported_request_count bigint, unreported_request_count bigint,
+    unsupported_request_count bigint, estimated_request_count bigint,
+    input_tokens bigint, output_tokens bigint, cache_read_input_tokens bigint,
+    cache_creation_input_tokens bigint, reasoning_output_tokens bigint, total_tokens bigint,
+    estimated_cost_usd double precision, priced_request_count bigint,
+    unpriced_request_count bigint, unmetered_request_count bigint
+  )
+  ON CONFLICT (hour, surface_code) DO UPDATE SET
+    oldest_occurred_at = LEAST(opencodex_usage.dashboard_request_hourly.oldest_occurred_at, EXCLUDED.oldest_occurred_at),
+    request_count = opencodex_usage.dashboard_request_hourly.request_count + EXCLUDED.request_count,
+    attempt_count = opencodex_usage.dashboard_request_hourly.attempt_count + EXCLUDED.attempt_count,
+    measured_request_count = opencodex_usage.dashboard_request_hourly.measured_request_count + EXCLUDED.measured_request_count,
+    reported_request_count = opencodex_usage.dashboard_request_hourly.reported_request_count + EXCLUDED.reported_request_count,
+    unreported_request_count = opencodex_usage.dashboard_request_hourly.unreported_request_count + EXCLUDED.unreported_request_count,
+    unsupported_request_count = opencodex_usage.dashboard_request_hourly.unsupported_request_count + EXCLUDED.unsupported_request_count,
+    estimated_request_count = opencodex_usage.dashboard_request_hourly.estimated_request_count + EXCLUDED.estimated_request_count,
+    input_tokens = opencodex_usage.dashboard_request_hourly.input_tokens + EXCLUDED.input_tokens,
+    output_tokens = opencodex_usage.dashboard_request_hourly.output_tokens + EXCLUDED.output_tokens,
+    cache_read_input_tokens = opencodex_usage.dashboard_request_hourly.cache_read_input_tokens + EXCLUDED.cache_read_input_tokens,
+    cache_creation_input_tokens = opencodex_usage.dashboard_request_hourly.cache_creation_input_tokens + EXCLUDED.cache_creation_input_tokens,
+    reasoning_output_tokens = opencodex_usage.dashboard_request_hourly.reasoning_output_tokens + EXCLUDED.reasoning_output_tokens,
+    total_tokens = opencodex_usage.dashboard_request_hourly.total_tokens + EXCLUDED.total_tokens,
+    estimated_cost_usd = opencodex_usage.dashboard_request_hourly.estimated_cost_usd + EXCLUDED.estimated_cost_usd,
+    priced_request_count = opencodex_usage.dashboard_request_hourly.priced_request_count + EXCLUDED.priced_request_count,
+    unpriced_request_count = opencodex_usage.dashboard_request_hourly.unpriced_request_count + EXCLUDED.unpriced_request_count,
+    unmetered_request_count = opencodex_usage.dashboard_request_hourly.unmetered_request_count + EXCLUDED.unmetered_request_count
+`;
+
+const DASHBOARD_MODEL_UPSERT_SQL = `
+  INSERT INTO opencodex_usage.dashboard_model_hourly (
+    hour, surface_code, provider_id, model_id, request_count, attempt_count,
+    measured_request_count, reported_request_count, estimated_request_count,
+    input_tokens, output_tokens, total_tokens, estimated_cost_usd, priced_attribution_count
+  )
+  SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
+    hour timestamptz, surface_code smallint, provider_id bigint, model_id bigint,
+    request_count bigint, attempt_count bigint, measured_request_count bigint,
+    reported_request_count bigint, estimated_request_count bigint,
+    input_tokens bigint, output_tokens bigint, total_tokens bigint,
+    estimated_cost_usd double precision, priced_attribution_count bigint
+  )
+  ON CONFLICT (hour, surface_code, provider_id, model_id) DO UPDATE SET
+    request_count = opencodex_usage.dashboard_model_hourly.request_count + EXCLUDED.request_count,
+    attempt_count = opencodex_usage.dashboard_model_hourly.attempt_count + EXCLUDED.attempt_count,
+    measured_request_count = opencodex_usage.dashboard_model_hourly.measured_request_count + EXCLUDED.measured_request_count,
+    reported_request_count = opencodex_usage.dashboard_model_hourly.reported_request_count + EXCLUDED.reported_request_count,
+    estimated_request_count = opencodex_usage.dashboard_model_hourly.estimated_request_count + EXCLUDED.estimated_request_count,
+    input_tokens = opencodex_usage.dashboard_model_hourly.input_tokens + EXCLUDED.input_tokens,
+    output_tokens = opencodex_usage.dashboard_model_hourly.output_tokens + EXCLUDED.output_tokens,
+    total_tokens = opencodex_usage.dashboard_model_hourly.total_tokens + EXCLUDED.total_tokens,
+    estimated_cost_usd = opencodex_usage.dashboard_model_hourly.estimated_cost_usd + EXCLUDED.estimated_cost_usd,
+    priced_attribution_count = opencodex_usage.dashboard_model_hourly.priced_attribution_count + EXCLUDED.priced_attribution_count
+`;
+
+const DASHBOARD_PROVIDER_UPSERT_SQL = `
+  INSERT INTO opencodex_usage.dashboard_provider_hourly (
+    hour, surface_code, provider_id, request_count, attempt_count,
+    measured_request_count, reported_request_count, estimated_request_count,
+    total_tokens, estimated_cost_usd, priced_attribution_count
+  )
+  SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
+    hour timestamptz, surface_code smallint, provider_id bigint,
+    request_count bigint, attempt_count bigint, measured_request_count bigint,
+    reported_request_count bigint, estimated_request_count bigint, total_tokens bigint,
+    estimated_cost_usd double precision, priced_attribution_count bigint
+  )
+  ON CONFLICT (hour, surface_code, provider_id) DO UPDATE SET
+    request_count = opencodex_usage.dashboard_provider_hourly.request_count + EXCLUDED.request_count,
+    attempt_count = opencodex_usage.dashboard_provider_hourly.attempt_count + EXCLUDED.attempt_count,
+    measured_request_count = opencodex_usage.dashboard_provider_hourly.measured_request_count + EXCLUDED.measured_request_count,
+    reported_request_count = opencodex_usage.dashboard_provider_hourly.reported_request_count + EXCLUDED.reported_request_count,
+    estimated_request_count = opencodex_usage.dashboard_provider_hourly.estimated_request_count + EXCLUDED.estimated_request_count,
+    total_tokens = opencodex_usage.dashboard_provider_hourly.total_tokens + EXCLUDED.total_tokens,
+    estimated_cost_usd = opencodex_usage.dashboard_provider_hourly.estimated_cost_usd + EXCLUDED.estimated_cost_usd,
+    priced_attribution_count = opencodex_usage.dashboard_provider_hourly.priced_attribution_count + EXCLUDED.priced_attribution_count
+`;
+
+async function upsertDashboardRollups(
+  tx: SQL,
+  entries: PersistedUsageEntry[],
+  dimensions: Map<string, number>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const rows = dashboardRollupRowsForTest(entries, dimensions);
+  if (rows.requests.length > 0) await tx.unsafe(DASHBOARD_REQUEST_UPSERT_SQL, [JSON.stringify(rows.requests)]);
+  if (rows.models.length > 0) await tx.unsafe(DASHBOARD_MODEL_UPSERT_SQL, [JSON.stringify(rows.models)]);
+  if (rows.providers.length > 0) await tx.unsafe(DASHBOARD_PROVIDER_UPSERT_SQL, [JSON.stringify(rows.providers)]);
+}
+
 async function ingestBatch(
   sql: SQL,
   sourceId: string,
@@ -582,9 +843,18 @@ async function ingestBatch(
     if (batch.entries.length > 0) {
       await ensurePartitions(tx, batch.entries);
       const dimensions = await loadDimensions(tx, batch.entries);
-      await tx.unsafe(REQUEST_INSERT_SQL, [JSON.stringify(requestRows(batch.entries, dimensions))]);
+      const inserted = await tx.unsafe<InsertedRequestRow[]>(
+        REQUEST_INSERT_SQL,
+        [JSON.stringify(requestRows(batch.entries, dimensions))],
+      );
+      const insertedKeys = new Set(inserted.map(row => {
+        const timestamp = row.occurred_at instanceof Date ? row.occurred_at.toISOString() : new Date(row.occurred_at).toISOString();
+        return `${timestamp}\0${row.request_id}`;
+      }));
+      const insertedEntries = batch.entries.filter(entry => insertedKeys.has(`${occurredAt(entry)}\0${entry.requestId}`));
       const attempts = attemptRows(batch.entries, dimensions);
       if (attempts.length > 0) await tx.unsafe(ATTEMPT_INSERT_SQL, [JSON.stringify(attempts)]);
+      await upsertDashboardRollups(tx, insertedEntries, dimensions);
       const recoveries = recoveryRows(batch.entries);
       if (recoveries.length > 0) {
         await tx.unsafe(`
@@ -646,6 +916,39 @@ async function ingestBatch(
       batch.invalidLines,
       latest ? occurredAt(latest) : null,
     ]);
+  });
+}
+
+export async function clearUsageDashboardRollups(sql: SQL): Promise<void> {
+  await sql.unsafe(`
+    UPDATE opencodex_usage.dashboard_read_model_state
+    SET ready = false, rebuilt_at = NULL
+    WHERE singleton = true
+  `);
+  await sql.unsafe(`
+    TRUNCATE TABLE
+      opencodex_usage.dashboard_request_hourly,
+      opencodex_usage.dashboard_model_hourly,
+      opencodex_usage.dashboard_provider_hourly
+  `);
+}
+
+export async function markUsageDashboardRollupsReady(sql: SQL): Promise<void> {
+  await sql.unsafe(`
+    INSERT INTO opencodex_usage.dashboard_read_model_state (singleton, ready, rebuilt_at)
+    VALUES (true, true, now())
+    ON CONFLICT (singleton) DO UPDATE SET ready = true, rebuilt_at = EXCLUDED.rebuilt_at
+  `);
+}
+
+export async function appendUsageDashboardRollups(
+  sql: SQL,
+  entries: PersistedUsageEntry[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  await sql.begin(async tx => {
+    const dimensions = await loadDimensions(tx, entries);
+    await upsertDashboardRollups(tx, entries, dimensions);
   });
 }
 
