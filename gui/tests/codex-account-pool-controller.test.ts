@@ -50,20 +50,17 @@ test("main and added account cards expose the same persisted pause control", asy
   expect(addedCards).toContain("saving={pauseUpdatingId === a.id}");
 });
 
-test("both cards expose the selection-order control, and pin writes cannot overlap", async () => {
+test("account cards omit selection order while routing priority remains safe", async () => {
   const pool = await read("../src/components/CodexAccountPool.tsx");
   const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");
   const addedCards = await read("../src/components/codex-account-pool-cards.tsx");
   const hook = await read("../src/hooks/useCodexAccountPool.ts");
 
-  expect(pool).toContain("controller.setAccountPriority(account.id, priority)");
   for (const card of [mainCard, addedCards]) {
-    expect(card).toContain("<AccountPriorityControl");
-    expect(card).toContain("<AccountPriorityBadge");
+    expect(card).not.toContain("<AccountPriorityControl");
+    expect(card).not.toContain("<AccountPriorityBadge");
   }
-  // The main card's synthesized entry has to carry the order, or saving from that card
-  // would post the default over whatever the account currently has.
-  expect(mainCard).toContain("priority: main?.priority ?? 0");
+  expect(pool).not.toContain("changePriority");
 
   // A hand-picked account says so on its OWN card, not on whichever card routing landed
   // on: under round-robin the pin caps the tier while the cursor moves inside it, so an
@@ -100,33 +97,26 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   const switchMutation = hook.slice(switchStart, switchEnd);
   expect(switchMutation).toMatch(/if \(switchingRef\.current \|\| priorityMutationRef\.current\) return/);
 
-  // A refused mutation returns "busy", which both call sites drop without a toast, so
-  // each control must be unavailable while the other is in flight rather than silently
-  // ineffective.
-  for (const card of [mainCard, addedCards]) {
-    expect(card).toContain("disabled={priorityUpdatingId !== null || switchingId !== null}");
-  }
+  // The switch dialog still observes a programmatic priority mutation from the shared
+  // controller, even though account cards no longer expose that low-frequency control.
   expect(pool).toContain("orderBusy={priorityUpdatingId !== null}");
 });
 
-test("mobile account cards keep controls while trimming redundant quota copy", async () => {
-  const styles = await read("../src/styles.css");
+test("account cards keep actions, show active turns, and separate reset copy from quota bars", async () => {
   const cards = await read("../src/components/codex-account-pool-cards.tsx");
   const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");
 
-  expect(styles).toContain(".codex-account-card .codex-account-priority { display: none; }");
-  expect(styles).toContain(".codex-account-card .quota-row--weekly .quota-label");
-  expect(styles).toContain(".codex-account-card .quota-reset-label");
   for (const card of [cards, mainCard]) {
     expect(card).toContain("<CodexUrgencyBadge");
+    expect(card).toContain("<CodexActiveTurnsBadge");
     expect(card).toContain("<CodexAccountFastModeControl");
+    expect(card).toContain('layout="stacked"');
     expect(card).toContain("onTogglePause");
     expect(card).toContain("onSwitch");
   }
   expect(cards).toContain("onReauth");
   expect(cards).toContain("onEditAlias");
   expect(cards).toContain("onRemove");
-  expect(styles).not.toMatch(/\.codex-account-card\s+\.(?:card-head|codex-account-switch|codex-auth-action-btn|btn-icon)[^{]*\{[^}]*display:\s*none/);
 });
 
 test("the pool header exposes one bulk action backed by the atomic endpoint", async () => {

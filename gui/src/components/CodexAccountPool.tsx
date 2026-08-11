@@ -59,7 +59,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
-  const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, fastModeUpdatingId, pausingExhausted, activePinnedId, load } = controller;
+  const { accounts, activeId, activeTurnsByAccount, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, fastModeUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -181,22 +181,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }), !result.ok);
   };
 
-  const changePriority = async (account: CodexAccountEntry, priority: number) => {
-    // Same guard as the pool strategy control (CodexPoolStrategySetting.tsx), and here it is
-    // load-bearing rather than just thrift: `Select` calls onChange for the clicked option
-    // even when it was already selected, and commits the highlighted one on Tab-out. The
-    // route releases the pin on every accepted write — deliberately, since an explicit write
-    // is a newer statement of intent — so without this a mis-click would unpin the account
-    // the operator chose and still report success. Suppressing the no-op belongs here, at
-    // the widget, not at the route, where a same-value write really is a statement.
-    if (priority === account.priority) return;
-    const result = await controller.setAccountPriority(account.id, priority);
-    if (!result.ok && result.reason === "busy") return;
-    showActionFeedback(t(result.ok ? "accountPool.priorityUpdated" : "accountPool.priorityUpdateFailed", {
-      email: account.alias ?? account.email,
-    }), !result.ok);
-  };
-
   const changeFastMode = async (account: CodexAccountEntry, enabled: boolean) => {
     const result = await controller.setAccountFastModeEnabled(account.id, enabled);
     if (!result.ok && result.reason === "busy") return;
@@ -313,16 +297,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             isMainActive={isMainActive}
             accountModeState={accountModeState}
             threshold={autoSwitchThreshold}
+            activeTurns={activeTurnsByAccount.__main__ ?? 0}
             switchActionLabel={switchActionLabel}
             onSwitch={setConfirm}
             onTogglePause={togglePaused}
             pauseUpdatingId={pauseUpdatingId}
             pauseBusy={pauseBusy}
-            onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
-            priorityUpdatingId={priorityUpdatingId}
             onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
             fastModeUpdatingId={fastModeUpdatingId}
-            switchingId={switchingId}
             pinnedId={activePinnedId}
             onOpenReset={openResetPopup}
             onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
@@ -349,16 +331,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             accountModeState={accountModeState}
             switchActionLabel={switchActionLabel}
             threshold={autoSwitchThreshold}
+            activeTurnsByAccount={activeTurnsByAccount}
             onOpenReset={openResetPopup}
             onSwitch={setConfirm}
             onTogglePause={togglePaused}
             pauseUpdatingId={pauseUpdatingId}
             pauseBusy={pauseBusy}
-            onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
-            priorityUpdatingId={priorityUpdatingId}
             onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
             fastModeUpdatingId={fastModeUpdatingId}
-            switchingId={switchingId}
             pinnedId={activePinnedId}
             onReauth={openReauth}
             onEditAlias={editAlias}

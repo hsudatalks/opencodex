@@ -1369,6 +1369,8 @@ export const ru: Record<TKey, string> = {
   "codexAuth.fastModeUpdateFailed": "Не удалось обновить Fast-режим для {email}.",
   "codexAuth.urgency": "Срочность {value}%",
   "codexAuth.urgencyHint": "Оставшаяся основная квота, нормализованная по времени до ближайшего сброса.",
+  "codexAuth.activeTurns": "Активных задач: {count}",
+  "codexAuth.activeTurnsHint": "Количество задач, которые сейчас обрабатывает эта учетная запись.",
   "codexAuth.pinned": "ЗАКРЕПЛЁН",
   "codexAuth.pinnedHint": "Этот аккаунт выбран вручную, поэтому более высокий порядок выбора не обойдёт его. Закрепление действует, пока этот аккаунт не будет исчерпан, пока вы не выберете другой или пока вы не измените порядок выбора любого аккаунта.",
   "codexAuth.fiveHour": "5 ч",

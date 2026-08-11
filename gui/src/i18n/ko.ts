@@ -948,6 +948,8 @@ export const ko: Record<TKey, string> = {
   "codexAuth.fastModeUpdateFailed": "{email}의 Fast 모드를 업데이트하지 못했습니다.",
   "codexAuth.urgency": "긴급도 {value}%",
   "codexAuth.urgencyHint": "가장 가까운 재설정까지의 시간으로 정규화한 남은 주요 할당량입니다.",
+  "codexAuth.activeTurns": "턴 {count}개",
+  "codexAuth.activeTurnsHint": "이 계정에서 현재 처리 중인 턴 수입니다.",
   "codexAuth.pinned": "고정됨",
   "codexAuth.pinnedHint": "직접 선택한 계정이므로 더 높은 선택 순서가 이 계정을 앞지르지 않습니다. 고정은 이 계정이 소진되거나, 다른 계정을 선택하거나, 어떤 계정이든 선택 순서를 변경할 때까지 유지됩니다.",
   "codexAuth.fiveHour": "5시간",

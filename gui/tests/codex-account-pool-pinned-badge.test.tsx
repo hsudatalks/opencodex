@@ -50,6 +50,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
   return {
     accounts: [mainAccount, account],
     activeId: null,
+    activeTurnsByAccount: {},
     loadState: "ready",
     switchingId: null,
     pauseUpdatingId: null,
@@ -71,6 +72,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     resumeRefresh: () => {},
     subscribeLoadObserver: () => () => {},
     readLastThreshold: () => undefined,
+    readLastActive: () => undefined,
     ...overrides,
   };
 }
@@ -224,4 +226,15 @@ test("cards render the server-owned routing urgency without recomputing quota", 
     .find((element) => (element.textContent ?? "").includes("Urgency"));
   expect(badge?.textContent?.trim()).toBe("Urgency 85%");
   expect(badge?.classList.contains("badge-primary")).toBe(true);
+});
+
+test("each account card renders its current active turn count", async () => {
+  await mountPool(makeController({
+    activeTurnsByAccount: { __main__: 2, "pool-1": 4 },
+  }));
+
+  const mainBadge = cardFor("main@example.test").querySelector(".codex-active-turns-badge");
+  const poolBadge = cardFor("pool@example.test").querySelector(".codex-active-turns-badge");
+  expect(mainBadge?.textContent?.trim()).toBe("2 turns");
+  expect(poolBadge?.textContent?.trim()).toBe("4 turns");
 });

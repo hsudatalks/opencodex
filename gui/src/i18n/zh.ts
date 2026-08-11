@@ -941,6 +941,8 @@ export const zh: Record<TKey, string> = {
   "codexAuth.fastModeUpdateFailed": "无法更新 {email} 的 Fast 模式设置。",
   "codexAuth.urgency": "紧迫度 {value}%",
   "codexAuth.urgencyHint": "按距离最近重置的时间，对剩余主额度进行归一化。",
+  "codexAuth.activeTurns": "{count} 个 Turn",
+  "codexAuth.activeTurnsHint": "此账号当前正在处理的 Turn 数量。",
   "codexAuth.pinned": "已固定",
   "codexAuth.pinnedHint": "这是你手动选择的账号，因此更高的选择顺序不会越过它。该固定会一直生效，直到此账号用尽、你改选其他账号，或你修改任一选择顺序。",
   "codexAuth.fiveHour": "5 小时",

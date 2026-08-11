@@ -1327,6 +1327,8 @@ export const ja: Record<TKey, string> = {
   "codexAuth.fastModeUpdateFailed": "{email} の Fast モードを更新できませんでした。",
   "codexAuth.urgency": "緊急度 {value}%",
   "codexAuth.urgencyHint": "最も近いリセットまでの時間で正規化した残りの主要クォータです。",
+  "codexAuth.activeTurns": "{count} ターン",
+  "codexAuth.activeTurnsHint": "このアカウントが現在処理中のターン数です。",
   "codexAuth.pinned": "固定中",
   "codexAuth.pinnedHint": "手動で選択したアカウントなので、これより高い選択順序が先に使われることはありません。固定はこのアカウントを使い切るか、別のアカウントを選ぶか、いずれかの選択順序を変更するまで続きます。",
   "codexAuth.fiveHour": "5時間",

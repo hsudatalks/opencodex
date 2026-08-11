@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
-import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import QuotaBars from "./QuotaBars";
-import { CodexPauseToggleLabel, CodexTicketBadge, CodexUrgencyBadge } from "./codex-account-pool-helpers";
+import { CodexActiveTurnsBadge, CodexPauseToggleLabel, CodexTicketBadge, CodexUrgencyBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
@@ -23,16 +22,14 @@ export function CodexAccountPoolMainCard({
   isMainActive,
   accountModeState,
   threshold,
+  activeTurns,
   switchActionLabel,
   onSwitch,
   onTogglePause,
   pauseUpdatingId,
   pauseBusy,
-  onPriorityChange,
-  priorityUpdatingId,
   onFastModeChange,
   fastModeUpdatingId,
-  switchingId,
   pinnedId = null,
   onOpenReset,
   onCopyDoctor,
@@ -43,17 +40,14 @@ export function CodexAccountPoolMainCard({
   isMainActive: boolean;
   accountModeState: CodexAccountModeState | null;
   threshold: number;
+  activeTurns: number;
   switchActionLabel: string;
   onSwitch: (entry: CodexAccountEntry) => void;
   onTogglePause: (entry: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
   pauseBusy: boolean;
-  onPriorityChange: (entry: CodexAccountEntry, priority: number) => void;
-  priorityUpdatingId: string | null;
   onFastModeChange: (entry: CodexAccountEntry, enabled: boolean) => void;
   fastModeUpdatingId: string | null;
-  /** In-flight manual switch, which writes the same pin an order write clears. */
-  switchingId: string | null;
   /**
    * The account carrying the pin, which is not always the one routing is on: the pin caps
    * selection at its own tier, and under round-robin or fill-first the cursor still moves
@@ -97,8 +91,8 @@ export function CodexAccountPoolMainCard({
               {t("codexAuth.paused")}
             </span>
           )}
-          <AccountPriorityBadge value={mainSwitchEntry.priority} />
           <CodexUrgencyBadge account={mainSwitchEntry} t={t} />
+          <CodexActiveTurnsBadge count={activeTurns} t={t} />
           {pinnedId === "__main__" && !main?.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
@@ -149,30 +143,14 @@ export function CodexAccountPoolMainCard({
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
       )}
       {pinnedId === "__main__" && !main?.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
-      {/* Same rule as the pause button: without an app login there is no row to re-order. */}
       {main && (
-        <>
-          <AccountPriorityControl
-            value={mainSwitchEntry.priority}
-            // Derived from the synthesized id rather than hardcoded as "-main": a pool account
-            // may legitimately be named `main` (the id pattern allows it), and that account's
-            // control would then claim the same DOM id, pointing this label at its dropdown.
-            selectId={`codex-account-priority-${mainSwitchEntry.id}`}
-            // Any in-flight order write, not just this card's: order writes share one mutation
-            // ref, so a pick made during another card's write returns "busy" and is dropped
-            // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
-            // pin this clears, so the controller refuses to overlap them, just as silently.
-            disabled={priorityUpdatingId !== null || switchingId !== null}
-            onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
-          />
-          <CodexAccountFastModeControl
-            t={t}
-            enabled={mainSwitchEntry.fastModeEnabled}
-            updating={fastModeUpdatingId === "__main__"}
-            disabled={fastModeUpdatingId !== null}
-            onChange={(enabled) => onFastModeChange(mainSwitchEntry, enabled)}
-          />
-        </>
+        <CodexAccountFastModeControl
+          t={t}
+          enabled={mainSwitchEntry.fastModeEnabled}
+          updating={fastModeUpdatingId === "__main__"}
+          disabled={fastModeUpdatingId !== null}
+          onChange={(enabled) => onFastModeChange(mainSwitchEntry, enabled)}
+        />
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
@@ -182,6 +160,7 @@ export function CodexAccountPoolMainCard({
             plan={main?.plan}
             threshold={threshold}
             t={t}
+            layout="stacked"
             pending={main != null && main.quota == null}
           />
         )}

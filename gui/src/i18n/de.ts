@@ -924,6 +924,8 @@ export const de: Record<TKey, string> = {
   "codexAuth.fastModeUpdateFailed": "Fast-Modus für {email} konnte nicht aktualisiert werden.",
   "codexAuth.urgency": "Dringlichkeit {value}%",
   "codexAuth.urgencyHint": "Verbleibendes Hauptkontingent, normalisiert auf die Zeit bis zum nächsten Zurücksetzen.",
+  "codexAuth.activeTurns": "{count} Turns",
+  "codexAuth.activeTurnsHint": "Turns, die dieses Konto derzeit verarbeitet.",
   "codexAuth.pinned": "ANGEHEFTET",
   "codexAuth.pinnedHint": "Du hast dieses Konto von Hand ausgewählt, daher geht eine höhere Auswahlreihenfolge nicht daran vorbei. Die Fixierung gilt, bis dieses Konto aufgebraucht ist, du ein anderes auswählst oder du eine Auswahlreihenfolge änderst.",
   "codexAuth.fiveHour": "5 Std.",

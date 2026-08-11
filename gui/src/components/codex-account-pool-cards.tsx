@@ -1,11 +1,10 @@
 import { useT } from "../i18n/shared";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
 import { displayAccountId } from "../lib/privacy";
-import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
-import { CodexPauseToggleLabel, CodexTicketBadge, CodexUrgencyBadge } from "./codex-account-pool-helpers";
+import { CodexActiveTurnsBadge, CodexPauseToggleLabel, CodexTicketBadge, CodexUrgencyBadge } from "./codex-account-pool-helpers";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -23,16 +22,14 @@ export function CodexAccountPoolCards({
   accountModeState,
   switchActionLabel,
   threshold,
+  activeTurnsByAccount,
   onOpenReset,
   onSwitch,
   onTogglePause,
   pauseUpdatingId,
   pauseBusy,
-  onPriorityChange,
-  priorityUpdatingId,
   onFastModeChange,
   fastModeUpdatingId,
-  switchingId,
   pinnedId = null,
   onReauth,
   onEditAlias,
@@ -45,17 +42,14 @@ export function CodexAccountPoolCards({
   accountModeState: CodexAccountModeState | null;
   switchActionLabel: string;
   threshold: number;
+  activeTurnsByAccount: Readonly<Record<string, number>>;
   onOpenReset: (account: CodexAccountEntry) => void;
   onSwitch: (account: CodexAccountEntry) => void;
   onTogglePause: (account: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
   pauseBusy: boolean;
-  onPriorityChange: (account: CodexAccountEntry, priority: number) => void;
-  priorityUpdatingId: string | null;
   onFastModeChange: (account: CodexAccountEntry, enabled: boolean) => void;
   fastModeUpdatingId: string | null;
-  /** In-flight manual switch, which writes the same pin an order write clears. */
-  switchingId: string | null;
   /**
    * The account an operator pinned by hand, which is not always the selected one: under
    * round-robin and fill-first the pin caps selection at its own tier while the cursor
@@ -92,8 +86,8 @@ export function CodexAccountPoolCards({
                   {t("codexAuth.paused")}
                 </span>
               )}
-              <AccountPriorityBadge value={a.priority} />
               <CodexUrgencyBadge account={a} t={t} />
+              <CodexActiveTurnsBadge count={activeTurnsByAccount[a.id] ?? 0} t={t} />
               {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
@@ -157,17 +151,6 @@ export function CodexAccountPoolCards({
             <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
           )}
           {a.id === pinnedId && !a.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
-          <AccountPriorityControl
-            value={a.priority}
-            selectId={`codex-account-priority-${a.id}`}
-            // Every row, not just the one being written: the controller serializes order
-            // writes behind one mutation ref, so a second row's pick would come back "busy"
-            // and be dropped with no toast. Same global lock the pause button uses.
-            // A pending switch counts too — it writes the same pin this clears, so the
-            // controller refuses to overlap them, and that refusal is equally silent.
-            disabled={priorityUpdatingId !== null || switchingId !== null}
-            onChange={(priority) => onPriorityChange(a, priority)}
-          />
           <CodexAccountFastModeControl
             t={t}
             enabled={a.fastModeEnabled}
@@ -183,6 +166,7 @@ export function CodexAccountPoolCards({
                 plan={a.plan}
                 threshold={threshold}
                 t={t}
+                layout="stacked"
                 pending={a.quota == null}
               />
             )}

@@ -69,6 +69,8 @@ export type PauseToken = { readonly __brand: "codex-pool-pause" };
 export interface CodexAccountPoolController {
   accounts: CodexAccountEntry[];
   activeId: string | null;
+  /** Live in-flight turns keyed by the account that owns each turn. */
+  activeTurnsByAccount: Readonly<Record<string, number>>;
   loadState: CodexAccountLoadState;
   /**
    * True while any load is in flight, including the forced quota refresh. `loadState` stays
@@ -119,6 +121,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const seed = lastGoodByBase.get(apiBase);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
   const [activeId, setActiveId] = useState<string | null>(() => seed?.activeId ?? null);
+  const [activeTurnsByAccount, setActiveTurnsByAccount] = useState<Readonly<Record<string, number>>>({});
   const [loadState, setLoadState] = useState<CodexAccountLoadState>(() => (seed != null ? "ready" : "loading"));
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
@@ -239,6 +242,17 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             }
             lastActiveRef.current = { value: active };
             setActivePinnedId(typeof active.pinnedAccountId === "string" ? active.pinnedAccountId : null);
+            const rawTurnCounts = active.activeTurnsByAccount;
+            setActiveTurnsByAccount(
+              rawTurnCounts && typeof rawTurnCounts === "object" && !Array.isArray(rawTurnCounts)
+                ? Object.fromEntries(Object.entries(rawTurnCounts as Record<string, unknown>)
+                    .filter((entry): entry is [string, number] => (
+                      typeof entry[1] === "number"
+                      && Number.isInteger(entry[1])
+                      && entry[1] >= 0
+                    )))
+                : {},
+            );
             for (const observer of observers) {
               observer.acceptActiveRead(active, revisions.get(observer)!);
             }
@@ -554,6 +568,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   return {
     accounts,
     activeId,
+    activeTurnsByAccount,
     loadState,
     refreshing: inflightCount > 0,
     initialLoading: !firstAttemptSettled,

@@ -1,5 +1,5 @@
 import type { Locale, TFn } from "../i18n/shared";
-import { IconTicket } from "../icons";
+import { IconActivity, IconTicket } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { daysUntil, formatCreditDate, formatCreditDateTime } from "./codex-account-pool-utils";
 
@@ -62,6 +62,21 @@ export function CodexUrgencyBadge({ account, t }: { account: CodexAccountEntry; 
       title={t("codexAuth.urgencyHint")}
       aria-label={`${label}. ${t("codexAuth.urgencyHint")}`}
     >
+      {label}
+    </span>
+  );
+}
+
+export function CodexActiveTurnsBadge({ count, t }: { count: number; t: TFn }) {
+  const normalized = Number.isInteger(count) && count > 0 ? count : 0;
+  const label = t("codexAuth.activeTurns", { count: String(normalized) });
+  return (
+    <span
+      className={`badge ${normalized > 0 ? "badge-primary" : "badge-muted"} codex-active-turns-badge`}
+      title={t("codexAuth.activeTurnsHint")}
+      aria-label={`${label}. ${t("codexAuth.activeTurnsHint")}`}
+    >
+      <IconActivity width={12} height={12} aria-hidden="true" />
       {label}
     </span>
   );

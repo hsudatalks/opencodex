@@ -35,6 +35,7 @@ let activePinned = false;
 let activePinnedAccountId: string | null = null;
 let omitPinnedAccountId = false;
 let activeGetId: string | null = null;
+let activeTurnCounts: Record<string, number> = {};
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -62,6 +63,7 @@ beforeEach(() => {
   activePinnedAccountId = null;
   omitPinnedAccountId = false;
   activeGetId = null;
+  activeTurnCounts = {};
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -154,6 +156,7 @@ beforeEach(() => {
             pinned: activePinned,
             ...(omitPinnedAccountId ? {} : { pinnedAccountId: activePinnedAccountId }),
             autoSwitchThreshold: threshold,
+            activeTurnsByAccount: activeTurnCounts,
           }),
         } as unknown as Response;
       }
@@ -207,6 +210,13 @@ test("the controller loads once on mount", async () => {
   expect(calls.filter(c => c.includes("codex-auth/accounts")).length).toBe(1);
   expect(seen.current!.accounts.length).toBe(1);
   expect(seen.current!.loadState).toBe("ready");
+});
+
+test("the controller exposes validated active turn counts from the active snapshot", async () => {
+  activeTurnCounts = { __main__: 2, a1: 3, invalid: -1 };
+  const seen = await mountController();
+
+  expect(seen.current!.activeTurnsByAccount).toEqual({ __main__: 2, a1: 3 });
 });
 
 test("an inert controller issues no requests at all", async () => {
@@ -383,6 +393,7 @@ test("subscribing never fabricates a server read", async () => {
   await act(async () => { await seen.current!.load(); });
   expect(received).toEqual([{
     activeCodexAccountId: null,
+    activeTurnsByAccount: {},
     pinned: false,
     pinnedAccountId: null,
     autoSwitchThreshold: 80,

@@ -1379,6 +1379,8 @@ export const en = {
   "codexAuth.fastModeUpdateFailed": "Could not update Fast mode for {email}.",
   "codexAuth.urgency": "Urgency {value}%",
   "codexAuth.urgencyHint": "Remaining governing quota normalized to the time before its nearest reset.",
+  "codexAuth.activeTurns": "{count} turns",
+  "codexAuth.activeTurnsHint": "Turns currently being processed by this account.",
   "codexAuth.pinned": "PINNED",
   "codexAuth.pinnedHint": "You selected this account by hand, so a higher selection order will not move past it. The pin lasts until this account is drained, you select another, or you change any selection order.",
   "codexAuth.fiveHour": "5h",

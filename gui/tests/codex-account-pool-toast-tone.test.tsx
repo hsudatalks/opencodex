@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { formatAccountPriority } from "../src/account-priority";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import type { CodexAccountEntry, CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -37,6 +36,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
       account,
     ],
     activeId: null,
+    activeTurnsByAccount: {},
     loadState: "ready",
     switchingId: null,
     pauseUpdatingId: null,
@@ -58,6 +58,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     resumeRefresh: () => {},
     subscribeLoadObserver: () => () => {},
     readLastThreshold: () => undefined,
+    readLastActive: () => undefined,
     ...overrides,
   };
 }
@@ -126,84 +127,6 @@ async function mountPool(controller: CodexAccountPoolController) {
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 }
-
-async function chooseOrder(selectId: string, value: string): Promise<void> {
-  const trigger = host.querySelector(`#${selectId}`) as HTMLButtonElement | null;
-  expect(trigger).toBeTruthy();
-  await act(async () => { trigger!.click(); });
-
-  // The menu is portaled to document.body, so the options are not under the mount node.
-  // Every label ends in the signed number, which is what identifies the order being picked.
-  const wanted = `(${formatAccountPriority(Number(value))})`;
-  const option = [...win.document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    .find((candidate) => candidate.textContent?.endsWith(wanted));
-  expect(option).toBeTruthy();
-  await act(async () => {
-    option!.click();
-    await new Promise((r) => setTimeout(r, 0));
-  });
-}
-
-test("a saved selection order reports in the ok tone", async () => {
-  const saved: { id: string; priority: number | null }[] = [];
-  await mountPool(makeController({
-    setAccountPriority: async (id, priority) => {
-      saved.push({ id, priority });
-      return { ok: true };
-    },
-  }));
-
-  await chooseOrder("codex-account-priority-pool-1", "2");
-
-  expect(saved).toEqual([{ id: "pool-1", priority: 2 }]);
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")?.textContent).toContain("pool@example.test");
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
-});
-
-test("a rejected selection order reports in the error tone", async () => {
-  await mountPool(makeController({
-    setAccountPriority: async () => ({ ok: false, reason: "request" }),
-  }));
-
-  await chooseOrder("codex-account-priority-__main__", "-1");
-
-  const error = host.querySelector(".codex-auth-page-head__feedback.is-err");
-  expect(error).toBeTruthy();
-  expect(error?.textContent).toContain("main@example.test");
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeNull();
-});
-
-test("a busy selection order write shows no toast at all", async () => {
-  await mountPool(makeController({
-    setAccountPriority: async () => ({ ok: false, reason: "busy" }),
-  }));
-
-  await chooseOrder("codex-account-priority-pool-1", "-2");
-
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeNull();
-});
-
-test("picking the order an account already has writes nothing", async () => {
-  const saved: { id: string; priority: number | null }[] = [];
-  await mountPool(makeController({
-    setAccountPriority: async (id, priority) => {
-      saved.push({ id, priority });
-      return { ok: true };
-    },
-  }));
-
-  // pool-1 is already Normal (0). Select fires onChange for the clicked option whether or
-  // not it was the selected one, and commits the highlighted option on Tab-out of an open
-  // menu, so this is reachable by an ordinary mis-click. It must not reach the server: the
-  // route releases the pin on every accepted write, so a no-op order pick would silently
-  // unpin the account the operator chose, reporting success while doing it.
-  await chooseOrder("codex-account-priority-pool-1", "0");
-
-  expect(saved).toEqual([]);
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeNull();
-  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
-});
 
 test("successful redeem clears a stale error toast tone", async () => {
   await mountPool(makeController());
