@@ -134,8 +134,21 @@ function cappedModels(rows: UsageModel[], totalTokens: number): UsageModel[] {
   return [...kept, other];
 }
 
+function compareModels(
+  left: Pick<UsageModel, "requests" | "provider" | "model">,
+  right: Pick<UsageModel, "requests" | "provider" | "model">,
+): number {
+  return right.requests - left.requests
+    || left.provider.localeCompare(right.provider)
+    || left.model.localeCompare(right.model);
+}
+
+function compareProviders(left: UsageProvider, right: UsageProvider): number {
+  return right.requests - left.requests || left.provider.localeCompare(right.provider);
+}
+
 function capDayModels(day: UsageDay): void {
-  day.models.sort((a, b) => b.requests - a.requests);
+  day.models.sort(compareModels);
   if (day.models.length <= MAX_BREAKDOWN_ROWS) return;
   const kept = day.models.slice(0, MAX_BREAKDOWN_ROWS - 1);
   const overflow = day.models.slice(MAX_BREAKDOWN_ROWS - 1);
@@ -520,7 +533,7 @@ async function summarizeRawInTransaction(
       inputTokens: numeric(row.input_tokens),
       outputTokens: numeric(row.output_tokens),
       shareRatio: totals.totalTokens === 0 ? 0 : numeric(row.total_tokens) / totals.totalTokens,
-    }));
+    })).sort(compareModels);
     const providers = rows.providers.map<UsageProvider>(row => ({
       provider: String(row.provider),
       requests: numeric(row.requests),
@@ -530,7 +543,7 @@ async function summarizeRawInTransaction(
       estimatedRequests: numeric(row.estimated_requests),
       totalTokens: numeric(row.total_tokens),
       shareRatio: totals.totalTokens === 0 ? 0 : numeric(row.total_tokens) / totals.totalTokens,
-    }));
+    })).sort(compareProviders);
     const costStartedAt = performance.now();
     await applyCosts(tx, since, surfaceMode(surface), through, totals, models, providers);
     if (process.env.OPENCODEX_USAGE_POSTGRES_DIAGNOSTICS === "1") {
@@ -644,7 +657,7 @@ function mergeSummaries(
       }
     }
   }
-  const models = [...modelMap.values()].sort((a, b) => b.requests - a.requests);
+  const models = [...modelMap.values()].sort(compareModels);
   for (const model of models) model.shareRatio = totals.totalTokens === 0 ? 0 : model.totalTokens / totals.totalTokens;
 
   const providerMap = new Map<string, UsageProvider>();
@@ -667,7 +680,7 @@ function mergeSummaries(
       }
     }
   }
-  const providers = [...providerMap.values()].sort((a, b) => b.requests - a.requests);
+  const providers = [...providerMap.values()].sort(compareProviders);
   for (const provider of providers) provider.shareRatio = totals.totalTokens === 0 ? 0 : provider.totalTokens / totals.totalTokens;
 
   return {
@@ -767,13 +780,13 @@ async function summarizeDashboardRollupsInTransaction(
     estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens),
     inputTokens: numeric(row.input_tokens), outputTokens: numeric(row.output_tokens), shareRatio: 0,
     ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
-  }));
+  })).sort(compareModels);
   const providers = providerRows.map<UsageProvider>(row => ({
     provider: String(row.provider), requests: numeric(row.requests), attemptCount: numeric(row.attempt_count),
     measuredRequests: numeric(row.measured_requests), reportedRequests: numeric(row.reported_requests),
     estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens), shareRatio: 0,
     ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
-  }));
+  })).sort(compareProviders);
   for (const model of models) model.shareRatio = summaryTotals.totalTokens === 0 ? 0 : model.totalTokens / summaryTotals.totalTokens;
   for (const provider of providers) provider.shareRatio = summaryTotals.totalTokens === 0 ? 0 : provider.totalTokens / summaryTotals.totalTokens;
   return {
