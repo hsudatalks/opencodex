@@ -145,6 +145,7 @@ describe("eight-account quota allocation matrix", () => {
         expect(plan.admittedTurns, scenario.name).toBeLessThanOrEqual(plan.hardCapacity);
         for (const row of plan.rows) {
           expect(Number.isFinite(row.targetTurns), `${scenario.name}/${row.account.id}`).toBe(true);
+          expect(Number.isInteger(row.targetTurns), `${scenario.name}/${row.account.id}`).toBe(true);
           expect(row.targetTurns, `${scenario.name}/${row.account.id}`).toBeGreaterThanOrEqual(0);
           expect(row.targetTurns, `${scenario.name}/${row.account.id}`).toBeLessThanOrEqual(6);
           expect(
@@ -216,8 +217,8 @@ describe("eight-account quota allocation matrix", () => {
     expect(rows.d.deadline?.hoursRemaining).toBe(2);
     expect(rows.e.deadline).toBeNull();
     expect(rows.f.deadline).toBeNull();
-    expect(rows.a.targetTurns).toBeCloseTo(rows.b.targetTurns, 8);
-    expect(rows.b.targetTurns).toBeCloseTo(rows.c.targetTurns, 8);
+    expect(Math.max(rows.a.targetTurns, rows.b.targetTurns, rows.c.targetTurns)
+      - Math.min(rows.a.targetTurns, rows.b.targetTurns, rows.c.targetTurns)).toBeLessThanOrEqual(1);
   });
 
   test("preserves invariants across five thousand fixed-eight-account edge snapshots", () => {
@@ -267,6 +268,7 @@ describe("eight-account quota allocation matrix", () => {
       expect(plan.hardCapacity).toBe(plan.rows.length * 6);
       for (const row of plan.rows) {
         expect(Number.isFinite(row.targetTurns)).toBe(true);
+        expect(Number.isInteger(row.targetTurns)).toBe(true);
         expect(row.targetTurns).toBeGreaterThanOrEqual(0);
         expect(row.targetTurns).toBeLessThanOrEqual(6);
       }

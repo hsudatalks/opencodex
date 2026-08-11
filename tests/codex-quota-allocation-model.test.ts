@@ -147,9 +147,9 @@ describe("quota target allocation", () => {
     ], 12, NOW);
     const targets = Object.fromEntries(plan.rows.map(row => [row.account.id, row.targetTurns]));
 
-    expect(targets["80-left"]).toBeCloseTo(6, 8);
-    expect(targets["50-left"]).toBeCloseTo(30 / 7, 8);
-    expect(targets["20-left"]).toBeCloseTo(12 / 7, 8);
+    expect(targets["80-left"]).toBe(6);
+    expect(targets["50-left"]).toBe(4);
+    expect(targets["20-left"]).toBe(2);
   });
 
   test("redistributes demand after urgent accounts reach the hard cap", () => {
@@ -169,7 +169,7 @@ describe("quota target allocation", () => {
     expect(targets["weekly-144h"]).toBeCloseTo(3, 8);
   });
 
-  test("derives a sub-four target from demand and urgency without a soft cap", () => {
+  test("apportions integer targets from demand and urgency without a soft cap", () => {
     const accounts = [
       account("urgent-a", { usedPercent: 1, weeklyResetAt: NOW + 40 * HOUR, activeTurns: 4 }),
       account("urgent-b", { usedPercent: 1, weeklyResetAt: NOW + 40 * HOUR, activeTurns: 4 }),
@@ -183,10 +183,37 @@ describe("quota target allocation", () => {
     const plan = planCodexQuotaAllocation(accounts, 16, NOW);
     const target = new Map(plan.rows.map(row => [row.account.id, row.targetTurns]));
 
-    expect(target.get("urgent-a")).toBeCloseTo(3.8, 1);
-    expect(target.get("urgent-b")).toBeCloseTo(3.8, 1);
-    expect(target.get("urgent-c")).toBeCloseTo(3.8, 1);
-    expect(plan.rows.find(row => row.account.id === "urgent-a")!.deficitTurns).toBeLessThan(0);
+    expect(target.get("urgent-a")).toBe(4);
+    expect(target.get("urgent-b")).toBe(4);
+    expect(target.get("urgent-c")).toBe(3);
+    for (const id of ["d", "e", "f", "g", "h"]) expect(target.get(id)).toBe(1);
+    expect(plan.rows.every(row => Number.isInteger(row.targetTurns))).toBe(true);
+  });
+
+  test("advances eight equally urgent accounts together when demand permits", () => {
+    const accounts = Array.from({ length: 8 }, (_, index) => account(`a-${index}`));
+
+    expect(planCodexQuotaAllocation(accounts, 8, NOW).rows.map(row => row.targetTurns))
+      .toEqual(Array(8).fill(1));
+    expect(planCodexQuotaAllocation(accounts, 16, NOW).rows.map(row => row.targetTurns))
+      .toEqual(Array(8).fill(2));
+  });
+
+  test("keeps a production-shaped low load proportional without fractional turns", () => {
+    const accounts = [
+      account("urgent-a", { usedPercent: 5, weeklyResetAt: NOW + 38.1 * HOUR, activeTurns: 2 }),
+      account("urgent-b", { usedPercent: 7, weeklyResetAt: NOW + 38.1 * HOUR, activeTurns: 2 }),
+      account("urgent-c", { usedPercent: 8, weeklyResetAt: NOW + 38 * HOUR, activeTurns: 2 }),
+      ...["d", "e", "f", "g", "h"].map(id => account(id, {
+        usedPercent: 1,
+        weeklyResetAt: NOW + 164 * HOUR,
+      })),
+    ];
+
+    expect(planCodexQuotaAllocation(accounts, 6, NOW).rows.map(row => row.targetTurns))
+      .toEqual([2, 2, 2, 0, 0, 0, 0, 0]);
+    expect(planCodexQuotaAllocation(accounts, 7, NOW).rows.map(row => row.targetTurns))
+      .toEqual([2, 2, 2, 1, 0, 0, 0, 0]);
   });
 
   test("derives a greater-than-four target from demand without changing configuration", () => {
@@ -235,6 +262,7 @@ describe("quota target allocation", () => {
       expect(allocated).toBeCloseTo(plan.admittedTurns, 6);
       for (const row of plan.rows) {
         expect(Number.isFinite(row.targetTurns)).toBe(true);
+        expect(Number.isInteger(row.targetTurns)).toBe(true);
         expect(row.targetTurns).toBeGreaterThanOrEqual(0);
         expect(row.targetTurns).toBeLessThanOrEqual(row.account.hardCapacity ?? 6);
       }
@@ -259,8 +287,8 @@ describe("quota target allocation", () => {
 describe("quota route decision", () => {
   test("switches only when target deficit exceeds affinity migration cost", () => {
     const accounts = [
-      account("urgent", { usedPercent: 50, weeklyResetAt: NOW + 24 * HOUR, activeTurns: 4 }),
-      account("normal", { usedPercent: 50, weeklyResetAt: NOW + 72 * HOUR, activeTurns: 2 }),
+      account("urgent", { usedPercent: 50, weeklyResetAt: NOW + 24 * HOUR, activeTurns: 2 }),
+      account("normal", { usedPercent: 50, weeklyResetAt: NOW + 72 * HOUR, activeTurns: 3 }),
       account("relaxed", { usedPercent: 50, weeklyResetAt: NOW + 144 * HOUR, activeTurns: 1 }),
     ];
 

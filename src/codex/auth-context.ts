@@ -400,7 +400,7 @@ export async function resolveCodexAuthContext(
         maxConcurrentTurns,
         fixedAccountId === undefined
           && threadId
-          && codexQuotaAllocatorMode() !== "waterfill"
+          && codexQuotaAllocatorMode() !== "apportion"
           ? () => releaseLaggingCodexThreadAffinityAfterTurn(
               threadId,
               accountId,

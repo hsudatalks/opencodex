@@ -130,47 +130,50 @@ function allocationFacts(
   };
 }
 
-function weightedWaterFill(
+/**
+ * Apportion indivisible turns with the Sainte-Lague highest-averages method.
+ * Unlike a continuous water fill, every target is executable. Unlike largest
+ * remainder rounding, adding demand cannot take a turn away from an account.
+ * The odd divisors keep the integer allocation close to the required burn-rate
+ * proportions without introducing a configured active-account count.
+ */
+function apportionDiscreteTurns(
   facts: readonly ReturnType<typeof allocationFacts>[],
   capacities: readonly number[],
   requested: number,
 ): number[] {
   const targets = facts.map(() => 0);
-  let remaining = Math.max(0, requested);
-  let candidates = facts
-    .map((fact, index) => ({
-      index,
-      capacity: Math.max(0, capacities[index] ?? 0),
-      weight: Math.max(0, fact.requiredRate ?? 0),
-    }))
-    .filter(row => row.capacity > EPSILON);
+  const rows = facts.map((fact, index) => ({
+    index,
+    id: fact.account.id,
+    capacity: Math.max(0, capacities[index] ?? 0),
+    weight: Math.max(0, fact.requiredRate ?? 0),
+  }));
+  const seats = Math.max(0, Math.floor(requested));
 
-  while (remaining > EPSILON && candidates.length > 0) {
-    const positiveWeight = candidates.some(row => row.weight > EPSILON);
-    const totalWeight = candidates.reduce(
-      (sum, row) => sum + (positiveWeight ? row.weight : 1),
-      0,
-    );
-    if (totalWeight <= EPSILON) break;
-
-    const scale = remaining / totalWeight;
-    const saturated = candidates.filter(row => (
-      scale * (positiveWeight ? row.weight : 1) >= row.capacity - EPSILON
-    ));
-    if (saturated.length === 0) {
-      for (const row of candidates) {
-        targets[row.index] += scale * (positiveWeight ? row.weight : 1);
+  for (let seat = 0; seat < seats; seat += 1) {
+    const unsaturated = rows.filter(row => (targets[row.index] ?? 0) < row.capacity);
+    const hasKnownDemand = unsaturated.some(row => row.weight > EPSILON);
+    let selected: (typeof rows)[number] | undefined;
+    let selectedQuotient = Number.NEGATIVE_INFINITY;
+    for (const row of unsaturated) {
+      const weight = hasKnownDemand ? row.weight : 1;
+      if (weight <= EPSILON) continue;
+      const quotient = weight / (2 * (targets[row.index] ?? 0) + 1);
+      if (
+        quotient > selectedQuotient + EPSILON
+        || (
+          Math.abs(quotient - selectedQuotient) <= EPSILON
+          && selected !== undefined
+          && row.id.localeCompare(selected.id) < 0
+        )
+      ) {
+        selected = row;
+        selectedQuotient = quotient;
       }
-      remaining = 0;
-      break;
     }
-
-    const saturatedIndexes = new Set(saturated.map(row => row.index));
-    for (const row of saturated) {
-      targets[row.index] += row.capacity;
-      remaining -= row.capacity;
-    }
-    candidates = candidates.filter(row => !saturatedIndexes.has(row.index));
+    if (!selected) break;
+    targets[selected.index] = (targets[selected.index] ?? 0) + 1;
   }
 
   return targets;
@@ -188,8 +191,8 @@ export function planCodexQuotaAllocation(
     .map(account => allocationFacts(account, now, options));
   const hardCapacities = facts.map(({ account }) => positiveInteger(account.hardCapacity, defaultHardCapacity));
   const hardCapacity = hardCapacities.reduce((sum, value) => sum + value, 0);
-  const admittedTurns = Math.max(0, Math.min(desiredTurns, hardCapacity));
-  const targets = weightedWaterFill(facts, hardCapacities, admittedTurns);
+  const admittedTurns = Math.max(0, Math.min(Math.floor(desiredTurns), hardCapacity));
+  const targets = apportionDiscreteTurns(facts, hardCapacities, admittedTurns);
 
   return {
     desiredTurns,

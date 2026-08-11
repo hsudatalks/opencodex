@@ -590,7 +590,7 @@ describe("codex routing", () => {
       .toEqual({ status: "selected", accountId: "a" });
   });
 
-  test("shadow allocator records a different waterfill choice without changing legacy routing", () => {
+  test("shadow allocator records a different apportioned choice without changing legacy routing", () => {
     process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "shadow";
     const now = 1_800_000_000_000;
     const config = makeConfig({
@@ -620,12 +620,12 @@ describe("codex routing", () => {
       matches: 0,
       mismatches: 1,
       lastLegacyAccountId: "b",
-      lastWaterfillAccountId: "a",
+      lastApportionedAccountId: "a",
     });
   });
 
-  test("waterfill allocator routes new sessions by target deficit and preserves thread affinity", () => {
-    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+  test("apportion allocator routes new sessions by target deficit and preserves thread affinity", () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "apportion";
     const now = 1_800_000_000_000;
     const config = makeConfig({
       activeCodexAccountId: "b",
@@ -647,7 +647,7 @@ describe("codex routing", () => {
       accountTurnCount: (accountId: string) => accountId === "a" ? 1 : 0,
     };
 
-    expect(resolveCodexAccountForThreadDetailed("waterfill-affinity", config, now, undefined, loaded))
+    expect(resolveCodexAccountForThreadDetailed("apportion-affinity", config, now, undefined, loaded))
       .toEqual({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("b");
     const laterCapacity = {
@@ -655,7 +655,7 @@ describe("codex routing", () => {
       accountTurnCount: (accountId: string) => accountId === "a" ? 6 : 0,
     };
     expect(resolveCodexAccountForThreadDetailed(
-      "waterfill-affinity",
+      "apportion-affinity",
       config,
       now + 1,
       undefined,
@@ -663,8 +663,8 @@ describe("codex routing", () => {
     )).toEqual({ status: "selected", accountId: "a" });
   });
 
-  test("waterfill allocation snapshot exposes hard-cap targets without mutating routing", () => {
-    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+  test("apportion allocation snapshot exposes hard-cap targets without mutating routing", () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "apportion";
     const now = 1_800_000_000_000;
     const config = makeConfig({ accountMaxConcurrentTurns: 6 });
     for (const id of ["a", "b"]) {
@@ -675,7 +675,7 @@ describe("codex routing", () => {
     }
 
     const snapshot = getCodexQuotaAllocationSnapshot(config, { a: 6, b: 6 }, now);
-    expect(snapshot.mode).toBe("waterfill");
+    expect(snapshot.mode).toBe("apportion");
     expect(snapshot.desiredTurns).toBe(12);
     expect(snapshot.hardCapacity).toBe(12);
     expect(snapshot.rows.map(row => row.targetTurns)).toEqual([6, 6]);

@@ -122,7 +122,7 @@ export const CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY = 10_000;
 export const CODEX_QUOTA_AFFINITY_RELEASE_GAP = 1_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
 
-export type CodexQuotaAllocatorMode = "legacy" | "shadow" | "waterfill";
+export type CodexQuotaAllocatorMode = "legacy" | "shadow" | "apportion";
 
 export type CodexQuotaAllocatorMetrics = {
   evaluated: number;
@@ -130,7 +130,7 @@ export type CodexQuotaAllocatorMetrics = {
   mismatches: number;
   lastEvaluatedAt?: number;
   lastLegacyAccountId?: string;
-  lastWaterfillAccountId?: string;
+  lastApportionedAccountId?: string;
 };
 
 const quotaAllocatorMetrics: CodexQuotaAllocatorMetrics = {
@@ -141,7 +141,9 @@ const quotaAllocatorMetrics: CodexQuotaAllocatorMetrics = {
 
 export function codexQuotaAllocatorMode(): CodexQuotaAllocatorMode {
   const configured = process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR?.trim().toLowerCase();
-  if (configured === "shadow" || configured === "waterfill") return configured;
+  if (configured === "shadow") return configured;
+  // `waterfill` was the unpublished rollout name for the continuous prototype.
+  if (configured === "apportion" || configured === "waterfill") return "apportion";
   return "legacy";
 }
 
@@ -157,7 +159,7 @@ export function resetCodexQuotaAllocatorMetricsForTests(): void {
   quotaAllocatorMetrics.mismatches = 0;
   delete quotaAllocatorMetrics.lastEvaluatedAt;
   delete quotaAllocatorMetrics.lastLegacyAccountId;
-  delete quotaAllocatorMetrics.lastWaterfillAccountId;
+  delete quotaAllocatorMetrics.lastApportionedAccountId;
 }
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
@@ -1575,13 +1577,13 @@ function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
 
 /**
  * Legacy quota routing persists its cursor for dashboard compatibility. The
- * waterfill allocator changes new-session assignments routinely, so persisting
+ * proportional allocator changes new-session assignments routinely, so persisting
  * each pick would turn runtime scheduling into config write amplification.
  */
 function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
   if (
     normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
-    && codexQuotaAllocatorMode() !== "waterfill"
+    && codexQuotaAllocatorMode() !== "apportion"
   ) {
     setActiveCodexAccount(config, accountId);
     return;
@@ -1596,7 +1598,7 @@ function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
 function applyAutomaticCodexAccountSelection(config: OcxConfig, accountId: string): void {
   if (
     normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
-    && codexQuotaAllocatorMode() !== "waterfill"
+    && codexQuotaAllocatorMode() !== "apportion"
   ) {
     setActiveCodexAccount(config, accountId);
     return;
@@ -1734,7 +1736,7 @@ function pickLegacyQuotaAccountForUnbound(
   return selected;
 }
 
-function pickWaterfillQuotaAccountForUnbound(
+function pickApportionedQuotaAccountForUnbound(
   config: OcxConfig,
   active: string,
   now: number,
@@ -1755,15 +1757,15 @@ function pickWaterfillQuotaAccountForUnbound(
 
 function recordQuotaAllocatorComparison(
   legacyAccountId: string,
-  waterfillAccountId: string,
+  apportionedAccountId: string,
   now: number,
 ): void {
   quotaAllocatorMetrics.evaluated += 1;
-  if (legacyAccountId === waterfillAccountId) quotaAllocatorMetrics.matches += 1;
+  if (legacyAccountId === apportionedAccountId) quotaAllocatorMetrics.matches += 1;
   else quotaAllocatorMetrics.mismatches += 1;
   quotaAllocatorMetrics.lastEvaluatedAt = now;
   quotaAllocatorMetrics.lastLegacyAccountId = legacyAccountId;
-  quotaAllocatorMetrics.lastWaterfillAccountId = waterfillAccountId;
+  quotaAllocatorMetrics.lastApportionedAccountId = apportionedAccountId;
 }
 
 function pickQuotaAccountForUnbound(
@@ -1790,15 +1792,15 @@ function pickQuotaAccountForUnbound(
   const mode = codexQuotaAllocatorMode();
   if (mode === "legacy") return legacy;
 
-  const waterfill = pickWaterfillQuotaAccountForUnbound(
+  const apportioned = pickApportionedQuotaAccountForUnbound(
     config,
     active,
     now,
     quotaScope,
     selectionOptions,
   );
-  recordQuotaAllocatorComparison(legacy, waterfill, now);
-  return mode === "waterfill" ? waterfill : legacy;
+  recordQuotaAllocatorComparison(legacy, apportioned, now);
+  return mode === "apportion" ? apportioned : legacy;
 }
 
 function shouldFailover(config: OcxConfig, accountId: string, now: number): boolean {
@@ -1994,7 +1996,7 @@ export function resolveCodexAccountForThreadDetailed(
     // Priority preemption leaves the operator's persisted selection untouched.
     // Same-tier quota scheduling retains the historical active cursor behavior
     // so the dashboard reports the account currently serving new work.
-    if (preempted || codexQuotaAllocatorMode() === "waterfill") {
+    if (preempted || codexQuotaAllocatorMode() === "apportion") {
       rememberActiveCodexAccount(config, quotaSelected);
     } else {
       setActiveCodexAccount(config, quotaSelected);

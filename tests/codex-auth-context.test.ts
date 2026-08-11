@@ -235,8 +235,8 @@ describe("Codex auth context", () => {
     }
   });
 
-  test("waterfill keeps thread affinity after turn settlement", async () => {
-    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+  test("apportion keeps thread affinity after turn settlement", async () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "apportion";
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",
       refreshToken: "pool_refresh",
@@ -256,7 +256,7 @@ describe("Codex auth context", () => {
       claimMainProfile: () => false,
       release: () => {},
     };
-    const headers = new Headers({ "x-codex-parent-thread-id": "waterfill-thread" });
+    const headers = new Headers({ "x-codex-parent-thread-id": "apportion-thread" });
 
     await expect(resolveCodexAuthContext(headers, config(), "pool", {
       beginCodexAccountSelection: () => admission,
@@ -264,8 +264,8 @@ describe("Codex auth context", () => {
     expect(settlement).toBeUndefined();
   });
 
-  test("waterfill atomically fills eight accounts to 48 turns and queues the 49th", async () => {
-    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+  test("apportion atomically fills eight accounts to 48 turns and queues the 49th", async () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "apportion";
     const now = Date.now();
     const accountIds = Array.from({ length: 8 }, (_, index) => `pool-${index + 1}`);
     const cfg = {
@@ -300,7 +300,7 @@ describe("Codex auth context", () => {
       for (let index = 0; index < 48; index += 1) {
         const turn = tryAdmitTurn()!;
         const context = await resolveCodexAuthContext(
-          new Headers({ "x-codex-parent-thread-id": `waterfill-load-${index}` }),
+          new Headers({ "x-codex-parent-thread-id": `apportion-load-${index}` }),
           cfg,
           "pool",
           { beginCodexAccountSelection: codexAccountSelectionForTurn(turn) },
@@ -315,7 +315,7 @@ describe("Codex auth context", () => {
       const waitingAccount = getEffectiveActiveCodexAccountId(cfg)!;
       const waitingTurn = tryAdmitTurn()!;
       const waiting = resolveCodexAuthContext(
-        new Headers({ "x-codex-parent-thread-id": "waterfill-load-49" }),
+        new Headers({ "x-codex-parent-thread-id": "apportion-load-49" }),
         cfg,
         "pool",
         { beginCodexAccountSelection: codexAccountSelectionForTurn(waitingTurn) },
