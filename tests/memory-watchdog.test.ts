@@ -194,6 +194,7 @@ describe("GET /api/system/memory", () => {
 	        headCount: number; supersededCount: number; headTtlEvictions: number;
 	        supersededTtlEvictions: number; supersededCapacityEvictions: number;
 	        emergencyHeadEvictions: number; replayMisses: number;
+	        persistenceBackend: string;
 	      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
@@ -213,11 +214,13 @@ describe("GET /api/system/memory", () => {
 	    expect(body.observedBytes).toBeGreaterThan(0);
 	    expect(["rss", "external", "arrayBuffers"]).toContain(body.observedMetric);
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
-    // responseState is a scalar-only continuation-store attribution block: every field is a
-    // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
+    // responseState is a bounded continuation-store attribution block with one allowlisted
+    // backend label; every other field is a finite scalar and carries no dynamic identity.
     const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(18);
-    expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    expect(responseStateValues).toHaveLength(28);
+    expect(body.responseState.persistenceBackend).toBe("sqlite-incremental");
+    expect(responseStateValues.filter(value => value !== body.responseState.persistenceBackend)
+      .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.appOwnedBytes).toEqual({
       budgetBytes: expect.any(Number),
