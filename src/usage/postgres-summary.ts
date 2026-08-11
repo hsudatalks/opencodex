@@ -688,9 +688,10 @@ async function summarizeDashboardRollupsInTransaction(
   now: number,
   surface: UsageSurface,
   sinceMs: number | null,
+  throughMs = now,
 ): Promise<UsageSummary> {
   const since = sinceMs === null ? null : new Date(sinceMs).toISOString();
-  const through = new Date(now).toISOString();
+  const through = new Date(throughMs).toISOString();
   const params = [since, surfaceMode(surface), through];
   const totals = await tx.unsafe<SqlRow[]>(`
     SELECT sum(h.request_count) requests, min(h.oldest_occurred_at) oldest_occurred_at,
@@ -795,14 +796,29 @@ export async function summarizeUsageFromPostgres(
       `);
       if (state[0]?.ready !== true) return summarizeRawInTransaction(tx, range, now, surface);
       const since = sinceForRange(range, now);
-      if (since === null) return summarizeDashboardRollupsInTransaction(tx, range, now, surface, null);
+      const currentHourStart = Math.floor(now / 3_600_000) * 3_600_000;
+      const tail = await summarizeRawInTransaction(tx, range, now, surface, currentHourStart, now);
+      if (since === null) {
+        const rollups = await summarizeDashboardRollupsInTransaction(
+          tx, range, now, surface, null, currentHourStart - 1,
+        );
+        return mergeSummaries(range, surface, now, rollups, tail);
+      }
       const completeHourStart = Math.ceil(since / 3_600_000) * 3_600_000;
-      if (completeHourStart >= now) return summarizeRawInTransaction(tx, range, now, surface);
-      const boundary = completeHourStart > since
+      if (completeHourStart >= currentHourStart) return summarizeRawInTransaction(tx, range, now, surface);
+      const head = completeHourStart > since
         ? await summarizeRawInTransaction(tx, range, now, surface, since, completeHourStart - 1)
         : { range, surface, since, generatedAt: now, summary: zeroTotals(), days: [], models: [], providers: [] };
-      const rollups = await summarizeDashboardRollupsInTransaction(tx, range, now, surface, completeHourStart);
-      return mergeSummaries(range, surface, now, boundary, rollups);
+      const rollups = await summarizeDashboardRollupsInTransaction(
+        tx, range, now, surface, completeHourStart, currentHourStart - 1,
+      );
+      return mergeSummaries(
+        range,
+        surface,
+        now,
+        mergeSummaries(range, surface, now, head, rollups),
+        tail,
+      );
     });
   } catch (error) {
     if (process.env.OPENCODEX_USAGE_POSTGRES_DIAGNOSTICS === "1") {

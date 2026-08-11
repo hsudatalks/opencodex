@@ -3,15 +3,13 @@ import type { SQL } from "bun";
 import { cachedUsageSummaryFromPostgres, summarizeUsageFromPostgres } from "../src/usage/postgres-summary";
 
 describe("PostgreSQL usage summary cache", () => {
-  test("serves all-range summaries entirely from the hourly read model", async () => {
-    let normalizedFactReads = 0;
+  test("serves completed all-range hours from the read model and the current hour from facts", async () => {
+    const factWindows: unknown[][] = [];
     const tx = {
-      unsafe: async (query: string) => {
+      unsafe: async (query: string, params: unknown[] = []) => {
         if (query.includes("dashboard_read_model_state")) return [{ ready: true }];
-        if (query.includes("FROM opencodex_usage.requests")) {
-          normalizedFactReads++;
-          return [];
-        }
+        if (query.includes("SELECT count(*) requests")) factWindows.push(params);
+        if (query.includes("FROM opencodex_usage.requests")) return [];
         if (query.includes("dashboard_request_hourly") && !query.includes("GROUP BY")) {
           return [{
             requests: 3, oldest_occurred_at: "2026-08-10T00:00:00.000Z", attempt_count: 4,
@@ -46,12 +44,14 @@ describe("PostgreSQL usage summary cache", () => {
 
     const result = await summarizeUsageFromPostgres(sql, "all", Date.parse("2026-08-11T00:00:00Z"), "all");
 
-    expect(normalizedFactReads).toBe(0);
+    expect(factWindows).toEqual([[
+      "2026-08-11T00:00:00.000Z", 0, "2026-08-11T00:00:00.000Z",
+    ]]);
     expect(result.summary).toMatchObject({ requests: 3, attemptCount: 4, totalTokens: 36, estimatedCostUsd: 0.5 });
     expect(result.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 3, estimatedCostUsd: 0.5 });
   });
 
-  test("reads only the partial first hour from facts before merging hourly rows", async () => {
+  test("reads partial first and current hours from facts around completed hourly rows", async () => {
     const factWindows: unknown[][] = [];
     const rollupWindows: unknown[][] = [];
     const tx = {
@@ -84,12 +84,13 @@ describe("PostgreSQL usage summary cache", () => {
 
     const result = await summarizeUsageFromPostgres(sql, "7d", now, "all");
 
-    expect(result.summary).toMatchObject({ requests: 3, attemptCount: 4, totalTokens: 15 });
-    expect(factWindows).toEqual([[
-      "2026-08-05T12:30:00.000Z", 0, "2026-08-05T12:59:59.999Z",
-    ]]);
+    expect(result.summary).toMatchObject({ requests: 4, attemptCount: 5, totalTokens: 20 });
+    expect(factWindows).toEqual([
+      ["2026-08-12T12:00:00.000Z", 0, "2026-08-12T12:30:00.000Z"],
+      ["2026-08-05T12:30:00.000Z", 0, "2026-08-05T12:59:59.999Z"],
+    ]);
     expect(rollupWindows[0]).toEqual([
-      "2026-08-05T13:00:00.000Z", 0, "2026-08-12T12:30:00.000Z",
+      "2026-08-05T13:00:00.000Z", 0, "2026-08-12T11:59:59.999Z",
     ]);
   });
 

@@ -271,8 +271,8 @@ When `OPENCODEX_USAGE_DATABASE_URL` is configured, JSONL is the recoverable inge
 normalized PostgreSQL request/attempt rows are the audit facts. The Dashboard reads three exact
 hourly projections: request totals, model attribution, and provider attribution. Keeping those grains
 separate prevents retries from duplicating logical request totals or same-provider requests. A 7d/30d
-query reads normalized facts only for its partial starting hour and reads the projections for every
-complete hour; `all` reads projections only. The projection has an explicit readiness row, so a new
+query reads normalized facts only for its partial starting and current hours and reads the projections
+for every complete hour; `all` reads completed-hour projections plus current-hour facts. The projection has an explicit readiness row, so a new
 migration or interrupted backfill falls back to normalized facts instead of serving partial totals.
 
 The management API still caches only the compact summary. JSONL-only installations retain the
