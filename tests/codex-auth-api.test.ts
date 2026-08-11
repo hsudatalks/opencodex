@@ -29,6 +29,7 @@ import {
   clearThreadAccountMap,
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
+  resetCodexQuotaAllocatorMetricsForTests,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
@@ -72,6 +73,7 @@ const WARMUP_INPUT = [{ type: "message", role: "user", content: [{ type: "input_
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousManualImportEnv: string | undefined;
+let previousQuotaAllocator: string | undefined;
 let previousFetch: typeof fetch;
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
@@ -224,12 +226,15 @@ beforeEach(() => {
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   previousManualImportEnv = process.env[MANUAL_IMPORT_ENV];
+  previousQuotaAllocator = process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
   previousFetch = globalThis.fetch;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_CODEX_HOME, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_CODEX_HOME;
   delete process.env[MANUAL_IMPORT_ENV];
+  delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+  resetCodexQuotaAllocatorMetricsForTests();
   clearAccountNeedsReauth("__main__");
   clearAccountQuota();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
@@ -261,6 +266,9 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousManualImportEnv === undefined) delete process.env[MANUAL_IMPORT_ENV];
   else process.env[MANUAL_IMPORT_ENV] = previousManualImportEnv;
+  if (previousQuotaAllocator === undefined) delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+  else process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = previousQuotaAllocator;
+  resetCodexQuotaAllocatorMetricsForTests();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -1033,6 +1041,19 @@ describe("codex-auth API", () => {
         rejected: 0,
         cancelled: 0,
         peak: 0,
+      },
+      quotaAllocator: {
+        mode: "legacy",
+        evaluated: 0,
+        matches: 0,
+        mismatches: 0,
+        allocation: {
+          mode: "legacy",
+          desiredTurns: 0,
+          admittedTurns: 0,
+          hardCapacity: 0,
+          rows: [],
+        },
       },
       quotaRouting: [{
         accountId: "pool-live",

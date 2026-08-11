@@ -14,6 +14,7 @@ import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import {
+  codexQuotaAllocatorMode,
   codexQuotaScopeForModel,
   getCodexQuotaHealthSnapshot,
   releaseCodexQuotaProbeLease,
@@ -397,7 +398,9 @@ export async function resolveCodexAuthContext(
       while (!selectionAdmission.claimAccount(
         accountId,
         maxConcurrentTurns,
-        fixedAccountId === undefined && threadId
+        fixedAccountId === undefined
+          && threadId
+          && codexQuotaAllocatorMode() !== "waterfill"
           ? () => releaseLaggingCodexThreadAffinityAfterTurn(
               threadId,
               accountId,

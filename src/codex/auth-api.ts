@@ -33,6 +33,8 @@ import {
   clearCodexAccountCooldown,
   clearThreadAccountMapForAccount,
   getEffectiveActiveCodexAccountId,
+  getCodexQuotaAllocationSnapshot,
+  getCodexQuotaAllocatorMetrics,
   getCodexQuotaRoutingSnapshot,
   isEffectiveCodexAccountPinned,
   reconcileCodexActiveAfterExclusion,
@@ -1557,6 +1559,8 @@ export async function handleCodexAuthAPI(
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {
     const runtimeConfig = getRuntimeConfig(config);
+    const now = Date.now();
+    const activeTurnsByAccount = activeCodexAccountTurnCounts();
     return jsonResponse({
       activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
       pinned: isEffectiveCodexAccountPinned(runtimeConfig),
@@ -1572,9 +1576,18 @@ export async function handleCodexAuthAPI(
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
       accountMaxConcurrentTurns: normalizeAccountMaxConcurrentTurns(runtimeConfig.accountMaxConcurrentTurns),
       accountPoolOfficialResetAt: runtimeConfig.accountPoolOfficialResetAt ?? null,
-      activeTurnsByAccount: activeCodexAccountTurnCounts(),
+      activeTurnsByAccount,
       accountCapacityQueue: codexAccountCapacityQueueMetrics(),
-      quotaRouting: getCodexQuotaRoutingSnapshot(runtimeConfig, Date.now(), "shared"),
+      quotaRouting: getCodexQuotaRoutingSnapshot(runtimeConfig, now, "shared"),
+      quotaAllocator: {
+        ...getCodexQuotaAllocatorMetrics(),
+        allocation: getCodexQuotaAllocationSnapshot(
+          runtimeConfig,
+          activeTurnsByAccount,
+          now,
+          "shared",
+        ),
+      },
     });
   }
 

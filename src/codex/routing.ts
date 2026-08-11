@@ -8,6 +8,7 @@ import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./accou
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
+  normalizeAccountMaxConcurrentTurns,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
@@ -25,6 +26,12 @@ import { captureConfigGeneration, type GenerationContext } from "../lib/state-st
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { retainedUtf8Bytes } from "../lib/admission";
 import { recordUpstreamHostFailure } from "./upstream-host-health";
+import {
+  decideCodexQuotaRoute,
+  planCodexQuotaAllocation,
+  type CodexQuotaAllocationAccount,
+  type CodexQuotaAllocationPlan,
+} from "./quota-allocation-model";
 
 type ThreadAffinityEntry = {
   accountId: string;
@@ -114,6 +121,44 @@ export const CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY = 10_000;
 /** Release settled affinity only for a large urgency gap, such as a fresh reset. */
 export const CODEX_QUOTA_AFFINITY_RELEASE_GAP = 1_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
+
+export type CodexQuotaAllocatorMode = "legacy" | "shadow" | "waterfill";
+
+export type CodexQuotaAllocatorMetrics = {
+  evaluated: number;
+  matches: number;
+  mismatches: number;
+  lastEvaluatedAt?: number;
+  lastLegacyAccountId?: string;
+  lastWaterfillAccountId?: string;
+};
+
+const quotaAllocatorMetrics: CodexQuotaAllocatorMetrics = {
+  evaluated: 0,
+  matches: 0,
+  mismatches: 0,
+};
+
+export function codexQuotaAllocatorMode(): CodexQuotaAllocatorMode {
+  const configured = process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR?.trim().toLowerCase();
+  if (configured === "shadow" || configured === "waterfill") return configured;
+  return "legacy";
+}
+
+export function getCodexQuotaAllocatorMetrics(): Readonly<CodexQuotaAllocatorMetrics & {
+  mode: CodexQuotaAllocatorMode;
+}> {
+  return { mode: codexQuotaAllocatorMode(), ...quotaAllocatorMetrics };
+}
+
+export function resetCodexQuotaAllocatorMetricsForTests(): void {
+  quotaAllocatorMetrics.evaluated = 0;
+  quotaAllocatorMetrics.matches = 0;
+  quotaAllocatorMetrics.mismatches = 0;
+  delete quotaAllocatorMetrics.lastEvaluatedAt;
+  delete quotaAllocatorMetrics.lastLegacyAccountId;
+  delete quotaAllocatorMetrics.lastWaterfillAccountId;
+}
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
 /**
@@ -1027,6 +1072,111 @@ function quotaAffinityLoads(now: number, quotaScope?: CodexQuotaScope): Readonly
   return loads;
 }
 
+function governingQuotaUsage(
+  quota: StoredAccountQuota | null,
+  plan?: string | null,
+): number | null {
+  if (!quota) return null;
+  const normalizedPlan = plan?.trim().toLowerCase();
+  const usage = normalizedPlan === "go" || normalizedPlan === "free"
+    ? quota.monthlyPercent
+    : quota.weeklyPercent;
+  return typeof usage === "number" && Number.isFinite(usage) ? usage : null;
+}
+
+function quotaAllocationAccounts(
+  config: OcxConfig,
+  accountIds: readonly string[],
+  activeTurns: Readonly<Record<string, number>> | undefined,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+): readonly CodexQuotaAllocationAccount[] {
+  const affinityLoads = quotaAffinityLoads(now, quotaScope);
+  const hardCapacity = normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns);
+  return accountIds.map(accountId => {
+    const quota = getAccountQuota(accountId);
+    const plan = getPoolAccountPlan(config, accountId);
+    const usedPercent = governingQuotaUsage(quota, plan);
+    const accountActiveTurns = Math.max(0, activeTurns?.[accountId] ?? 0);
+    return {
+      id: accountId,
+      plan,
+      usedPercent,
+      weeklyResetAt: quota?.weeklyResetAt,
+      monthlyResetAt: quota?.monthlyResetAt,
+      resetCredits: quota?.resetCredits,
+      resetCreditExpiresAt: quota?.resetCreditExpiresAt,
+      officialResetAt: config.accountPoolOfficialResetAt,
+      activeTurns: accountActiveTurns,
+      affinityCount: affinityLoads.get(accountId) ?? 0,
+      // A 100%-remaining snapshot needs one request to establish the new
+      // window's actual burn. Treat that as an explicit probe, not a magic
+      // scheduling weight, and keep it single-flight per account.
+      needsProbe: usedPercent === 0,
+      probeInFlight: usedPercent === 0 && accountActiveTurns > 0,
+      hardCapacity,
+    };
+  });
+}
+
+function quotaAllocationCandidateIds(
+  config: OcxConfig,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): readonly string[] {
+  // Preserve the existing priority/pin boundary and capacity fallback. When at
+  // least one account can be claimed, plan only over that selectable tier. If
+  // every account is full, retain the stable tier so the decision is "queue"
+  // rather than falsely reporting that the pool is unavailable.
+  const claimable = getEligiblePoolAccounts(config, undefined, now, quotaScope, selectionOptions);
+  const eligible = claimable.length > 0
+    ? claimable
+    : getEligiblePoolAccounts(
+        config,
+        undefined,
+        now,
+        quotaScope,
+        withoutTransientAccountCapacity(selectionOptions),
+      );
+  const withHeadroom = eligible.filter(accountId => hasCodexQuotaHeadroom(config, accountId));
+  return withHeadroom.length > 0 ? withHeadroom : eligible;
+}
+
+function accountTurnCountsForAllocation(
+  accountIds: readonly string[],
+  selectionOptions?: CodexAccountUsabilityOptions,
+): Readonly<Record<string, number>> {
+  return Object.fromEntries(accountIds.map(accountId => [
+    accountId,
+    Math.max(0, selectionOptions?.accountTurnCount?.(accountId) ?? 0),
+  ]));
+}
+
+export type CodexQuotaAllocationSnapshot = CodexQuotaAllocationPlan & {
+  mode: CodexQuotaAllocatorMode;
+};
+
+export function getCodexQuotaAllocationSnapshot(
+  config: OcxConfig,
+  activeTurns: Readonly<Record<string, number>> = {},
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+): CodexQuotaAllocationSnapshot {
+  const accountIds = quotaAllocationCandidateIds(config, now, quotaScope);
+  const desiredTurns = Object.values(activeTurns)
+    .reduce((sum, count) => sum + Math.max(0, count), 0);
+  return {
+    mode: codexQuotaAllocatorMode(),
+    ...planCodexQuotaAllocation(
+      quotaAllocationAccounts(config, accountIds, activeTurns, now, quotaScope),
+      desiredTurns,
+      now,
+      { defaultHardCapacity: normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns) },
+    ),
+  };
+}
+
 function quotaAccountWorkingSet(
   config: OcxConfig,
   now: number,
@@ -1423,9 +1573,16 @@ function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   saveConfigPreservingClaudeCode(config);
 }
 
-/** Quota strategy persists; RR/fill-first keep a process-local cursor only. */
+/**
+ * Legacy quota routing persists its cursor for dashboard compatibility. The
+ * waterfill allocator changes new-session assignments routinely, so persisting
+ * each pick would turn runtime scheduling into config write amplification.
+ */
 function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
-  if (normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota") {
+  if (
+    normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
+    && codexQuotaAllocatorMode() !== "waterfill"
+  ) {
     setActiveCodexAccount(config, accountId);
     return;
   }
@@ -1433,6 +1590,17 @@ function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
   // saves this release with its own write; a transient failover does not, so the
   // pin survives a restart that also clears the failure history behind it.
   releaseCodexAccountPinFor(config, accountId);
+  rememberActiveCodexAccount(config, accountId);
+}
+
+function applyAutomaticCodexAccountSelection(config: OcxConfig, accountId: string): void {
+  if (
+    normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota"
+    && codexQuotaAllocatorMode() !== "waterfill"
+  ) {
+    setActiveCodexAccount(config, accountId);
+    return;
+  }
   rememberActiveCodexAccount(config, accountId);
 }
 
@@ -1523,7 +1691,7 @@ function releaseDrainedCodexAccountPin(config: OcxConfig): void {
  * provider cache. Unknown active quota is the sole hold case so startup cannot
  * override an operator selection before quota priming has comparable evidence.
  */
-function pickQuotaAccountForUnbound(
+function pickLegacyQuotaAccountForUnbound(
   config: OcxConfig,
   active: string,
   now: number,
@@ -1564,6 +1732,73 @@ function pickQuotaAccountForUnbound(
     ) selected = candidate;
   }
   return selected;
+}
+
+function pickWaterfillQuotaAccountForUnbound(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string {
+  const accountIds = quotaAllocationCandidateIds(config, now, quotaScope, selectionOptions);
+  if (accountIds.length === 0) return active;
+  const activeTurns = accountTurnCountsForAllocation(accountIds, selectionOptions);
+  const decision = decideCodexQuotaRoute(
+    quotaAllocationAccounts(config, accountIds, activeTurns, now, quotaScope),
+    null,
+    now,
+    { defaultHardCapacity: normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns) },
+  );
+  return decision.accountId ?? active;
+}
+
+function recordQuotaAllocatorComparison(
+  legacyAccountId: string,
+  waterfillAccountId: string,
+  now: number,
+): void {
+  quotaAllocatorMetrics.evaluated += 1;
+  if (legacyAccountId === waterfillAccountId) quotaAllocatorMetrics.matches += 1;
+  else quotaAllocatorMetrics.mismatches += 1;
+  quotaAllocatorMetrics.lastEvaluatedAt = now;
+  quotaAllocatorMetrics.lastLegacyAccountId = legacyAccountId;
+  quotaAllocatorMetrics.lastWaterfillAccountId = waterfillAccountId;
+}
+
+function pickQuotaAccountForUnbound(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string {
+  const activeUsage = computeCodexUsageScore(
+    getAccountQuota(active),
+    getPoolAccountPlan(config, active),
+  );
+  if (isUnknownUsage(activeUsage)) return active;
+  if (pinnedCodexAccountId(config) === active && hasCodexQuotaHeadroom(config, active)) return active;
+
+  const legacy = pickLegacyQuotaAccountForUnbound(
+    config,
+    active,
+    now,
+    quotaScope,
+    selectionOptions,
+  );
+  const mode = codexQuotaAllocatorMode();
+  if (mode === "legacy") return legacy;
+
+  const waterfill = pickWaterfillQuotaAccountForUnbound(
+    config,
+    active,
+    now,
+    quotaScope,
+    selectionOptions,
+  );
+  recordQuotaAllocatorComparison(legacy, waterfill, now);
+  return mode === "waterfill" ? waterfill : legacy;
 }
 
 function shouldFailover(config: OcxConfig, accountId: string, now: number): boolean {
@@ -1722,7 +1957,7 @@ export function resolveCodexAccountForThreadDetailed(
   if (!active) {
     const selected = pickLowestUsageCodexAccount(config, undefined, now, quotaScope, quotaRoutingOptions);
     if (!selected) return { status: "none" };
-    if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, selected);
+    if (!isIndependentCodexQuotaScope(quotaScope)) applyAutomaticCodexAccountSelection(config, selected);
     active = selected;
   }
   if (
@@ -1731,7 +1966,7 @@ export function resolveCodexAccountForThreadDetailed(
   ) {
     const fallback = pickLowestUsageCodexAccount(config, active, now, quotaScope, quotaRoutingOptions);
     if (fallback) {
-      if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, fallback);
+      if (!isIndependentCodexQuotaScope(quotaScope)) applyAutomaticCodexAccountSelection(config, fallback);
       active = fallback;
     } else if (
       hasConfiguredPoolAccount(config, active, quotaRoutingOptions)
@@ -1759,8 +1994,11 @@ export function resolveCodexAccountForThreadDetailed(
     // Priority preemption leaves the operator's persisted selection untouched.
     // Same-tier quota scheduling retains the historical active cursor behavior
     // so the dashboard reports the account currently serving new work.
-    if (preempted) rememberActiveCodexAccount(config, quotaSelected);
-    else setActiveCodexAccount(config, quotaSelected);
+    if (preempted || codexQuotaAllocatorMode() === "waterfill") {
+      rememberActiveCodexAccount(config, quotaSelected);
+    } else {
+      setActiveCodexAccount(config, quotaSelected);
+    }
   }
   active = quotaSelected;
   active = applyFailureFailover(config, active, now, quotaScope, quotaRoutingOptions);

@@ -21,6 +21,8 @@ import {
   getCodexAccountCooldownUntil,
   getEffectiveActiveCodexAccountId,
   getCodexQuotaHealthSnapshot,
+  getCodexQuotaAllocationSnapshot,
+  getCodexQuotaAllocatorMetrics,
   getCodexQuotaRoutingSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
@@ -32,6 +34,7 @@ import {
   reconcileCodexActiveAfterExclusion,
   recordCodexUpstreamOutcome,
   releaseLaggingCodexThreadAffinityAfterTurn,
+  resetCodexQuotaAllocatorMetricsForTests,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
@@ -57,6 +60,7 @@ import type { OcxConfig } from "../src/types";
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-routing-test");
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let previousQuotaAllocator: string | undefined;
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return {
@@ -97,6 +101,9 @@ describe("codex routing", () => {
     // account is deterministically absent (these cases test the pool-only scenario).
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = TEST_DIR;
+    previousQuotaAllocator = process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+    delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+    resetCodexQuotaAllocatorMetricsForTests();
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
@@ -120,6 +127,9 @@ describe("codex routing", () => {
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
+    if (previousQuotaAllocator === undefined) delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+    else process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = previousQuotaAllocator;
+    resetCodexQuotaAllocatorMetricsForTests();
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -578,6 +588,98 @@ describe("codex routing", () => {
     };
     expect(resolveCodexAccountForThreadDetailed("new-balanced", config, now + 3, undefined, capacity))
       .toEqual({ status: "selected", accountId: "a" });
+  });
+
+  test("shadow allocator records a different waterfill choice without changing legacy routing", () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "shadow";
+    const now = 1_800_000_000_000;
+    const config = makeConfig({
+      activeCodexAccountId: "b",
+      codexAccounts: ["a", "b", "c"].map(id => ({ id, email: `${id}@test`, isMain: false })),
+    });
+    saveTestCredential("c");
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 1,
+      weeklyResetAt: now / 1000 + 24 * 60 * 60,
+    });
+    for (const id of ["b", "c"]) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 50,
+        weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      });
+    }
+    const capacity = {
+      canClaimAccount: () => true,
+      accountTurnCount: (accountId: string) => accountId === "a" ? 1 : 0,
+    };
+
+    expect(previewCodexAccountForRequest("shadow-new", config, now, undefined, capacity)).toBe("b");
+    expect(getCodexQuotaAllocatorMetrics()).toMatchObject({
+      mode: "shadow",
+      evaluated: 1,
+      matches: 0,
+      mismatches: 1,
+      lastLegacyAccountId: "b",
+      lastWaterfillAccountId: "a",
+    });
+  });
+
+  test("waterfill allocator routes new sessions by target deficit and preserves thread affinity", () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+    const now = 1_800_000_000_000;
+    const config = makeConfig({
+      activeCodexAccountId: "b",
+      codexAccounts: ["a", "b", "c"].map(id => ({ id, email: `${id}@test`, isMain: false })),
+    });
+    saveTestCredential("c");
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 1,
+      weeklyResetAt: now / 1000 + 24 * 60 * 60,
+    });
+    for (const id of ["b", "c"]) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 50,
+        weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      });
+    }
+    const loaded = {
+      canClaimAccount: () => true,
+      accountTurnCount: (accountId: string) => accountId === "a" ? 1 : 0,
+    };
+
+    expect(resolveCodexAccountForThreadDetailed("waterfill-affinity", config, now, undefined, loaded))
+      .toEqual({ status: "selected", accountId: "a" });
+    expect(config.activeCodexAccountId).toBe("b");
+    const laterCapacity = {
+      canClaimAccount: (accountId: string) => accountId !== "a",
+      accountTurnCount: (accountId: string) => accountId === "a" ? 6 : 0,
+    };
+    expect(resolveCodexAccountForThreadDetailed(
+      "waterfill-affinity",
+      config,
+      now + 1,
+      undefined,
+      laterCapacity,
+    )).toEqual({ status: "selected", accountId: "a" });
+  });
+
+  test("waterfill allocation snapshot exposes hard-cap targets without mutating routing", () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+    const now = 1_800_000_000_000;
+    const config = makeConfig({ accountMaxConcurrentTurns: 6 });
+    for (const id of ["a", "b"]) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 20,
+        weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      });
+    }
+
+    const snapshot = getCodexQuotaAllocationSnapshot(config, { a: 6, b: 6 }, now);
+    expect(snapshot.mode).toBe("waterfill");
+    expect(snapshot.desiredTurns).toBe(12);
+    expect(snapshot.hardCapacity).toBe(12);
+    expect(snapshot.rows.map(row => row.targetTurns)).toEqual([6, 6]);
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
   test("all paused accounts fail closed instead of falling back to a configured account", () => {

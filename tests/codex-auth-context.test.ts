@@ -44,6 +44,7 @@ import {
   handleCodexAuthAPI,
   isAccountNeedsReauth,
   markAccountNeedsReauth,
+  setAccountQuotaFromParsed,
 } from "../src/codex/auth-api";
 import { __resetGuardianState, guardianSweep } from "../src/oauth/token-guardian";
 import {
@@ -51,6 +52,7 @@ import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getEffectiveActiveCodexAccountId,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -62,6 +64,7 @@ import {
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import {
   acquireNativeMainProfileDrain,
+  activeCodexAccountTurnCounts,
   codexAccountCapacityQueueMetrics,
   codexAccountSelectionForTurn,
   resetLifecycleDrainStateForTests,
@@ -71,6 +74,7 @@ import {
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let previousQuotaAllocator: string | undefined;
 
 beforeEach(() => {
   // This suite validates refresh admission and auth-context outcomes. Real icacls
@@ -84,6 +88,8 @@ beforeEach(() => {
   // account is deterministically absent (these cases test pool-only fail-closed behavior).
   previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = testDir;
+  previousQuotaAllocator = process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+  delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -107,6 +113,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
+  if (previousQuotaAllocator === undefined) delete process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR;
+  else process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = previousQuotaAllocator;
 });
 
 function config(): OcxConfig {
@@ -224,6 +232,105 @@ describe("Codex auth context", () => {
     } finally {
       first.release();
       second.release();
+    }
+  });
+
+  test("waterfill keeps thread affinity after turn settlement", async () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: Date.now() + 3_600_000,
+      chatgptAccountId: "pool_acc",
+    });
+    let settlement: (() => void) | undefined;
+    const admission = {
+      mainProfileDraining: false,
+      canClaimAccount: () => true,
+      accountTurnCount: () => 0,
+      claimAccount: (_accountId: string, _limit: number, onTurnSettled?: () => void) => {
+        settlement = onTurnSettled;
+        return true;
+      },
+      waitForCapacity: async () => "capacity_changed" as const,
+      claimMainProfile: () => false,
+      release: () => {},
+    };
+    const headers = new Headers({ "x-codex-parent-thread-id": "waterfill-thread" });
+
+    await expect(resolveCodexAuthContext(headers, config(), "pool", {
+      beginCodexAccountSelection: () => admission,
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(settlement).toBeUndefined();
+  });
+
+  test("waterfill atomically fills eight accounts to 48 turns and queues the 49th", async () => {
+    process.env.OPENCODEX_CODEX_QUOTA_ALLOCATOR = "waterfill";
+    const now = Date.now();
+    const accountIds = Array.from({ length: 8 }, (_, index) => `pool-${index + 1}`);
+    const cfg = {
+      ...config(),
+      activeCodexAccountId: accountIds[0],
+      accountMaxConcurrentTurns: 6,
+      codexAccounts: accountIds.map(id => ({
+        id,
+        email: `${id}@example.test`,
+        isMain: false,
+        chatgptAccountId: `chatgpt-${id}`,
+      })),
+    };
+    for (const id of accountIds) {
+      saveCodexAccountCredential(id, {
+        accessToken: `access-${id}`,
+        refreshToken: `refresh-${id}`,
+        expiresAt: now + 3_600_000,
+        chatgptAccountId: `chatgpt-${id}`,
+      });
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 20,
+        weeklyResetAt: now / 1000 + 7 * 24 * 60 * 60,
+      });
+    }
+
+    const admitted: Array<{
+      accountId: string;
+      turn: NonNullable<ReturnType<typeof tryAdmitTurn>>;
+    }> = [];
+    try {
+      for (let index = 0; index < 48; index += 1) {
+        const turn = tryAdmitTurn()!;
+        const context = await resolveCodexAuthContext(
+          new Headers({ "x-codex-parent-thread-id": `waterfill-load-${index}` }),
+          cfg,
+          "pool",
+          { beginCodexAccountSelection: codexAccountSelectionForTurn(turn) },
+        );
+        expect(context.kind).toBe("pool");
+        admitted.push({ accountId: context.accountId!, turn });
+      }
+      expect(activeCodexAccountTurnCounts()).toEqual(Object.fromEntries(
+        accountIds.map(id => [id, 6]),
+      ));
+
+      const waitingAccount = getEffectiveActiveCodexAccountId(cfg)!;
+      const waitingTurn = tryAdmitTurn()!;
+      const waiting = resolveCodexAuthContext(
+        new Headers({ "x-codex-parent-thread-id": "waterfill-load-49" }),
+        cfg,
+        "pool",
+        { beginCodexAccountSelection: codexAccountSelectionForTurn(waitingTurn) },
+      );
+      await Bun.sleep(0);
+      expect(codexAccountCapacityQueueMetrics().queued).toBe(1);
+
+      const released = admitted.find(entry => entry.accountId === waitingAccount)!;
+      released.turn.release();
+      const waitingContext = await waiting;
+      expect(waitingContext).toMatchObject({ kind: "pool", accountId: waitingAccount });
+      expect(Object.values(activeCodexAccountTurnCounts()).reduce((sum, count) => sum + count, 0)).toBe(48);
+      waitingTurn.release();
+    } finally {
+      for (const entry of admitted) entry.turn.release();
     }
   });
 
