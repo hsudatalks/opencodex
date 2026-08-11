@@ -7,6 +7,8 @@ export interface AccountQuota {
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
   resetCredits?: number;
+  /** Nearest future manual-reset credit expiry, in epoch seconds. */
+  resetCreditExpiresAt?: number;
   updatedAt: number;
 }
 
@@ -21,6 +23,7 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
     ...(quota.monthlyPercent !== undefined ? { monthlyPercent: quota.monthlyPercent } : {}),
     ...(quota.monthlyResetAt !== undefined ? { monthlyResetAt: quota.monthlyResetAt } : {}),
     ...(quota.resetCredits !== undefined ? { resetCredits: quota.resetCredits } : {}),
+    ...(quota.resetCreditExpiresAt !== undefined ? { resetCreditExpiresAt: quota.resetCreditExpiresAt } : {}),
     updatedAt: quota.updatedAt,
   };
 }

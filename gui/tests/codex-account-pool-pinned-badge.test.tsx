@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
+import { formatCreditDateTime } from "../src/components/codex-account-pool-utils";
 import type { CodexAccountEntry, CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -237,4 +238,31 @@ test("each account card renders its current active turn count", async () => {
   const poolBadge = cardFor("pool@example.test").querySelector(".codex-active-turns-badge");
   expect(mainBadge?.textContent?.trim()).toBe("2 turns");
   expect(poolBadge?.textContent?.trim()).toBe("4 turns");
+});
+
+test("reset dialog falls back to the cached credit expiry when detail lookup is unavailable", async () => {
+  const expirySeconds = Math.floor((Date.now() + 72 * 60 * 60 * 1000) / 1000);
+  await mountPool(makeController({
+    accounts: [
+      mainAccount,
+      {
+        ...account,
+        quota: { resetCredits: 1, resetCreditExpiresAt: expirySeconds, updatedAt: Date.now() },
+      },
+    ],
+  }));
+
+  const reset = cardFor("pool@example.test").querySelector<HTMLButtonElement>(
+    'button[aria-label="1 reset credit(s)"]',
+  );
+  expect(reset).toBeTruthy();
+  await act(async () => {
+    reset!.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  const expiryIso = new Date(expirySeconds * 1000).toISOString();
+  expect(host.querySelector(".credit-item-dates")?.textContent).toContain(
+    formatCreditDateTime(expiryIso, "en"),
+  );
 });

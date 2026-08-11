@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useI18n } from "../i18n/shared";
 import { IconAlert, IconTicket } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
-import { CodexCreditItem } from "./codex-account-pool-helpers";
+import { CodexCreditExpiryFallback, CodexCreditItem } from "./codex-account-pool-helpers";
 import { formatCreditDate } from "./codex-account-pool-utils";
 
 export function CodexAccountResetModal({
@@ -28,6 +28,13 @@ export function CodexAccountResetModal({
 }) {
   const { locale, t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const cachedExpiry = resetPopup.quota?.resetCreditExpiresAt;
+  const cachedExpiryMs = typeof cachedExpiry === "number" && Number.isFinite(cachedExpiry)
+    ? (cachedExpiry < 10_000_000_000 ? cachedExpiry * 1000 : cachedExpiry)
+    : 0;
+  const cachedExpiryIso = cachedExpiryMs > Date.now()
+    ? new Date(cachedExpiryMs).toISOString()
+    : null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -63,6 +70,11 @@ export function CodexAccountResetModal({
                       {creditDetails.map((c, i) => (
                         <CodexCreditItem key={`${c.granted_at}:${c.expires_at}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
                       ))}
+                    </div>
+                  )}
+                  {!creditDetailsLoading && (!creditDetails || creditDetails.length === 0) && cachedExpiryIso && (
+                    <div className="credit-list">
+                      <CodexCreditExpiryFallback expiresAt={cachedExpiryIso} locale={locale} t={t} />
                     </div>
                   )}
                   <button type="button" className="btn btn-primary" style={{ marginTop: 12, width: "100%" }}

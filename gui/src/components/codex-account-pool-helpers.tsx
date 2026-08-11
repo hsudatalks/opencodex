@@ -25,6 +25,29 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
   );
 }
 
+export function CodexCreditExpiryFallback({ expiresAt, locale, t }: {
+  expiresAt: string; locale: Locale; t: TFn;
+}) {
+  const days = daysUntil(expiresAt);
+  const urgent = days <= 7;
+  return (
+    <div className="credit-item credit-next">
+      <div className="credit-item-head">
+        <IconTicket width={13} />
+        <span className="credit-item-label">{t("codexAuth.creditNext")}</span>
+        <span className="badge badge-amber text-micro" style={{ padding: "1px 6px" }}>
+          {t("codexAuth.creditNextBadge")}
+        </span>
+      </div>
+      <div className="credit-item-dates">
+        <span className={urgent ? "credit-urgent" : ""}>
+          {t("codexAuth.creditExpires", { date: formatCreditDateTime(expiresAt, locale), days: String(days) })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onClick: () => void; t: TFn }) {
   const credits = account.quota?.resetCredits;
   // Reserve badge width while WHAM quota is still null so the card-head does not grow
