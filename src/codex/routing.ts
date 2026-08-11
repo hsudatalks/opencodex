@@ -111,6 +111,8 @@ export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
 export const CODEX_QUOTA_URGENCY_BUCKET_SIZE = 10;
 /** One-shot priority for a freshly reset governing window with 100% remaining. */
 export const CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY = 10_000;
+/** Release settled affinity only for a large urgency gap, such as a fresh reset. */
+export const CODEX_QUOTA_AFFINITY_RELEASE_GAP = 1_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
@@ -1086,6 +1088,37 @@ export function getCodexQuotaRoutingSnapshot(
     affinityCount: loads.get(accountId) ?? 0,
     candidate: candidates.has(accountId),
   }));
+}
+
+/**
+ * Drop a completed session's binding only when its quota urgency is materially
+ * behind the best current bucket. The next turn then performs a normal new-
+ * session assignment; no in-flight request ever changes credentials.
+ */
+export function releaseLaggingCodexThreadAffinityAfterTurn(
+  threadId: string,
+  accountId: string,
+  config: OcxConfig,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+): boolean {
+  if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return false;
+  const entry = getThreadAffinity(threadId, quotaScope);
+  if (!entry || entry.accountId !== accountId) return false;
+
+  const workingSet = quotaAccountWorkingSet(config, now, quotaScope);
+  const highestBucket = workingSet.length > 0
+    ? quotaUrgencyBucket(config, workingSet[0]!, now)
+    : null;
+  const accountBucket = quotaUrgencyBucket(config, accountId, now);
+  if (
+    highestBucket === null
+    || accountBucket === null
+    || highestBucket - accountBucket <= CODEX_QUOTA_AFFINITY_RELEASE_GAP
+  ) return false;
+
+  deleteThreadAffinity(threadId, quotaScope);
+  return true;
 }
 
 function getEligiblePoolAccounts(

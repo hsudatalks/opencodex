@@ -65,10 +65,10 @@ refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, rem
 normalized to a 144-hour horizon using the weekly/30-day reset or nearest manual-reset expiry. A
 freshly reset governing window gets bootstrap urgency 10000 until its first nonzero usage report. New
 sessions balance across every account in the highest 10-point urgency bucket; round-robin and
-fill-first use their own policies. Existing Codex threads retain affinity across successful turns;
-urgency changes affect new or otherwise unbound sessions instead of churning an established
-conversation. Failover, account exclusion, affinity expiry, or 401/403 and 429 recovery can still
-rebind it. Give the accounts a
+fill-first use their own policies. Existing Codex threads retain affinity during a turn. After turn
+settlement, a binding more than 1000 urgency points behind the highest bucket is released, allowing
+freshly reset accounts to rotate in once without reacting to ordinary urgency drift. Failover,
+account exclusion, affinity expiry, or 401/403 and 429 recovery can also rebind it. Give the accounts a
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 

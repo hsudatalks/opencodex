@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY,
   CODEX_FAILURE_WINDOW_MS,
+  CODEX_QUOTA_AFFINITY_RELEASE_GAP,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
@@ -30,6 +31,7 @@ import {
   previewCodexAccountForRequest,
   reconcileCodexActiveAfterExclusion,
   recordCodexUpstreamOutcome,
+  releaseLaggingCodexThreadAffinityAfterTurn,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
@@ -356,7 +358,7 @@ describe("codex routing", () => {
     expect(snapshot.filter(row => row.candidate).map(row => row.accountId).sort()).toEqual(["a", "b", "c"]);
   });
 
-  test("urgency changes affect new tasks without releasing an existing task binding", () => {
+  test("a fresh reset releases settled affinity when urgency lags by over 1000", () => {
     const now = 1_800_000_000_000;
     const config = makeConfig();
     setAccountQuotaFromParsed("a", {
@@ -377,8 +379,34 @@ describe("codex routing", () => {
       weeklyPercent: 0,
       weeklyResetAt: now / 1000 + 144 * 60 * 60,
     });
-    expect(resolveCodexAccountForThread("settled-session", config, now + 1)).toBe("a");
-    expect(resolveCodexAccountForThread("new-session", config, now + 2)).toBe("b");
+    expect(CODEX_QUOTA_AFFINITY_RELEASE_GAP).toBe(1_000);
+    expect(releaseLaggingCodexThreadAffinityAfterTurn("settled-session", "a", config, now + 1)).toBe(true);
+    expect(resolveCodexAccountForThread("settled-session", config, now + 2)).toBe("b");
+  });
+
+  test("ordinary urgency differences keep settled affinity stable", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig();
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 144 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 0,
+      weeklyResetAt: now / 1000 + 144 * 60 * 60,
+    });
+    expect(resolveCodexAccountForThread("stable-session", config, now)).toBe("b");
+
+    setAccountQuotaFromParsed("a", {
+      weeklyPercent: 10,
+      weeklyResetAt: now / 1000 + 16 * 60 * 60,
+    });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 20,
+      weeklyResetAt: now / 1000 + 144 * 60 * 60,
+    });
+    expect(releaseLaggingCodexThreadAffinityAfterTurn("stable-session", "b", config, now + 1)).toBe(false);
+    expect(resolveCodexAccountForThread("stable-session", config, now + 2)).toBe("b");
   });
 
   test("zero migration threshold still deadline-schedules new quota tasks", () => {

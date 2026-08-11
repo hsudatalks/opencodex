@@ -21,6 +21,7 @@ import {
   tryAcquireCodexQuotaProbeLease,
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
+  releaseLaggingCodexThreadAffinityAfterTurn,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
@@ -396,6 +397,15 @@ export async function resolveCodexAuthContext(
       while (!selectionAdmission.claimAccount(
         accountId,
         maxConcurrentTurns,
+        fixedAccountId === undefined && threadId
+          ? () => releaseLaggingCodexThreadAffinityAfterTurn(
+              threadId,
+              accountId,
+              config,
+              Date.now(),
+              quotaScope,
+            )
+          : undefined,
       )) {
         // Capacity waits can be long. The native-main selection fence protects
         // credential inspection only; retaining it in the queue would block an
