@@ -60,6 +60,14 @@
   text-overflow: ellipsis;
 }
 
+.provider-catalog-account-group > .pwi-auth-wait {
+  margin: -1px 0 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
 .provider-catalog-footer {
   display: flex;
   gap: 8px;

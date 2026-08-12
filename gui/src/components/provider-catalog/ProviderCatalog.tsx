@@ -6,6 +6,8 @@
  */
 import { useMemo, useState } from "react";
 import { useT } from "../../i18n/shared";
+import { OAuthLoginWait } from "../oauth-login-wait";
+import type { LoginHint } from "../provider-workspace/types";
 import {
   bucketPresets,
   filterPresets,
@@ -38,6 +40,7 @@ export default function ProviderCatalog({
   accountRows = EMPTY_ACCOUNT_ROWS,
   accountStatus = EMPTY_ACCOUNT_STATUS,
   busyProvider = null,
+  loginHint = null,
   onLogin,
   onCancelLogin,
   onLogout,
@@ -53,6 +56,7 @@ export default function ProviderCatalog({
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
   busyProvider?: string | null;
+  loginHint?: LoginHint | null;
   onLogin?: (provider: string, addAccount?: boolean) => void;
   onCancelLogin?: (provider: string) => void;
   onLogout?: (provider: string) => void;
@@ -153,61 +157,71 @@ export default function ProviderCatalog({
             ? (status?.email ?? row.statusLabel ?? t("modal.accountLoggedIn"))
             : (status?.error ?? row.statusLabel ?? t("modal.accountLoggedOut"));
           return (
-            <div key={row.id} className="list-row provider-catalog-account-row">
-              <div>
-                <div className="title">{row.label}</div>
-                <div className="sub">{statusText}</div>
+            <div key={row.id} className="provider-catalog-account-group">
+              <div className="list-row provider-catalog-account-row">
+                <div>
+                  <div className="title">{row.label}</div>
+                  <div className="sub">{statusText}</div>
+                </div>
+                <div className="provider-catalog-badges">
+                  {row.kind === "key" ? null : row.kind === "codex" ? (
+                    <>
+                      {loggedIn && (
+                        <a className="btn btn-ghost" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
+                      )}
+                      {onLogin && (
+                        <button type="button"
+                          className={loggedIn ? "btn btn-ghost" : "btn btn-primary"}
+                          disabled={busy}
+                          onClick={() => { if (!busy) onLogin(row.id); }}
+                        >
+                          {busy ? t("codexAuth.enablingOpenai") : loggedIn ? t("modal.accountAdd") : t("modal.accountLogin")}
+                        </button>
+                      )}
+                    </>
+                  ) : loggedIn ? (
+                    <>
+                      {onManage && (
+                        <button type="button" className="btn btn-ghost" onClick={() => onManage(row.id)}>
+                          {t("modal.accountManage")}
+                        </button>
+                      )}
+                      {onLogin && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={busy}
+                          onClick={() => { if (!busy) onLogin(row.id, true); }}
+                        >
+                          {busy ? t("prov.waitingBrowser") : t("modal.accountAdd")}
+                        </button>
+                      )}
+                      {busy && onCancelLogin && loginHint?.provider !== row.id && (
+                        <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>
+                          {t("common.cancel")}
+                        </button>
+                      )}
+                      {onLogout && !busy && (
+                        <button type="button" className="btn btn-ghost" onClick={() => onLogout(row.id)}>
+                          {t("modal.accountLogout")}
+                        </button>
+                      )}
+                    </>
+                  ) : busy ? (
+                    onCancelLogin && loginHint?.provider !== row.id
+                      ? <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>{t("common.cancel")}</button>
+                      : null
+                  ) : (
+                    onLogin && <button type="button" className="btn btn-primary" onClick={() => onLogin(row.id)}>{t("modal.accountLogin")}</button>
+                  )}
+                </div>
               </div>
-              <div className="provider-catalog-badges">
-                {row.kind === "key" ? null : row.kind === "codex" ? (
-                  <>
-                    {loggedIn && (
-                      <a className="btn btn-ghost" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
-                    )}
-                    {onLogin && (
-                      <button type="button"
-                        className={loggedIn ? "btn btn-ghost" : "btn btn-primary"}
-                        disabled={busy}
-                        onClick={() => { if (!busy) onLogin(row.id); }}
-                      >
-                        {busy ? t("codexAuth.enablingOpenai") : loggedIn ? t("modal.accountAdd") : t("modal.accountLogin")}
-                      </button>
-                    )}
-                  </>
-                ) : loggedIn ? (
-                  <>
-                    {onManage && (
-                      <button type="button" className="btn btn-ghost" onClick={() => onManage(row.id)}>
-                        {t("modal.accountManage")}
-                      </button>
-                    )}
-                    {onLogin && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={busy}
-                        onClick={() => { if (!busy) onLogin(row.id, true); }}
-                      >
-                        {busy ? t("prov.waitingBrowser") : t("modal.accountAdd")}
-                      </button>
-                    )}
-                    {busy && onCancelLogin && (
-                      <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>
-                        {t("common.cancel")}
-                      </button>
-                    )}
-                    {onLogout && !busy && (
-                      <button type="button" className="btn btn-ghost" onClick={() => onLogout(row.id)}>
-                        {t("modal.accountLogout")}
-                      </button>
-                    )}
-                  </>
-                ) : busy ? (
-                  onCancelLogin && <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>{t("common.cancel")}</button>
-                ) : (
-                  onLogin && <button type="button" className="btn btn-primary" onClick={() => onLogin(row.id)}>{t("modal.accountLogin")}</button>
-                )}
-              </div>
+              {busy && loginHint?.provider === row.id && (
+                <OAuthLoginWait
+                  hint={loginHint}
+                  onCancel={onCancelLogin ? () => onCancelLogin(row.id) : undefined}
+                />
+              )}
             </div>
           );
         })}

@@ -379,6 +379,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         adding={adding}
         addIntent={addIntent}
         busy={busy}
+        loginInfo={loginInfo}
         addModalAccountRows={addModalAccountRows}
         accountLoginStatus={accountLoginStatus}
         removeConfirmName={removeConfirmName}

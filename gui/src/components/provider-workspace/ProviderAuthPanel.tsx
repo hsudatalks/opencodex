@@ -18,9 +18,8 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
-import { LoginUrlBlock } from "../login-url-block";
+import { OAuthLoginWait } from "../oauth-login-wait";
 import QuotaBars from "../QuotaBars";
-import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
@@ -52,7 +51,6 @@ export default function ProviderAuthPanel({
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
-  const deviceCodeCopy = useCopyFeedback<string>();
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -100,13 +98,6 @@ export default function ProviderAuthPanel({
   if (!surface || !authHandlers) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
-  const deviceCode = hintForThis?.deviceCode ?? "";
-  const deviceCodeOutcome = deviceCodeCopy.outcomeFor(deviceCode);
-  const deviceCodeCopyLabel = deviceCodeOutcome === "copied"
-    ? t("prov.codeCopied")
-    : deviceCodeOutcome === "unavailable"
-      ? t("prov.linkCopyUnavailable")
-      : t("prov.copyCode");
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
@@ -156,28 +147,12 @@ export default function ProviderAuthPanel({
               </span>
             </div>
             {busy && hintForThis && (
-              <div className="pwi-auth-wait">
-                <span className="pwi-spin-inline" aria-hidden="true" />
-                <div className="pwi-auth-wait-copy">
-                  <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
-                  {hintForThis.deviceCode && (
-                    <div className="pwi-device-code-wrap">
-                      <span>{t("prov.deviceCode")}</span>
-                      <code className="pwi-device-code">{hintForThis.deviceCode}</code>
-                      <button type="button" className="btn btn-primary btn-sm"
-                        onClick={() => deviceCodeCopy.copy(deviceCode, deviceCode)}>
-                        <span aria-live="polite">{deviceCodeCopyLabel}</span>
-                      </button>
-                    </div>
-                  )}
-                  <LoginUrlBlock url={hintForThis.url ?? ""} />
-                  {authHandlers.onCancelLogin && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
-                      {t("common.cancel")}
-                    </button>
-                  )}
-                </div>
-              </div>
+              <OAuthLoginWait
+                hint={hintForThis}
+                onCancel={authHandlers.onCancelLogin
+                  ? () => void authHandlers.onCancelLogin?.(item.name)
+                  : undefined}
+              />
             )}
             {accountLoadState === "loading" && accounts.length === 0 && (
               <div className="pwi-auth-state" role="status">

@@ -146,9 +146,10 @@ describe("workspace account integration seam", () => {
   });
 
   test("wires OAuth re-authenticate handlers into the workspace detail", async () => {
-    const [page, panel, details, overview] = await Promise.all([
+    const [page, panel, oauthWait, details, overview] = await Promise.all([
       providersPageSeam(),
       Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/oauth-login-wait.tsx").text(),
       Bun.file("gui/src/components/provider-workspace/ProviderDetails.tsx").text(),
       Bun.file("gui/src/components/provider-workspace/ProviderOverview.tsx").text(),
     ]);
@@ -160,7 +161,8 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("oauthLoginGenerationRef");
     expect(page).toContain("/api/oauth/login/cancel");
     expect(page).toContain("deviceCode");
-    expect(panel).toContain("pwi-device-code");
+    expect(panel).toContain("OAuthLoginWait");
+    expect(oauthWait).toContain("pwi-device-code");
     // Add Provider account row CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
     expect(page).toContain('href: "#codex-auth"');
     expect(panel).toContain("onReauth");

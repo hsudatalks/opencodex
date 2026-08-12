@@ -13,6 +13,7 @@ export function ProvidersPageModals({
   adding,
   addIntent,
   busy,
+  loginInfo,
   addModalAccountRows,
   accountLoginStatus,
   removeConfirmName,
@@ -43,6 +44,7 @@ export function ProvidersPageModals({
   adding: boolean;
   addIntent: AddProviderIntent | null;
   busy: string | null;
+  loginInfo: { provider: string; url?: string; instructions?: string; deviceCode?: string } | null;
   addModalAccountRows: AccountLoginRow[];
   accountLoginStatus: Record<string, AccountLoginStatus>;
   removeConfirmName: string | null;
@@ -81,6 +83,7 @@ export function ProvidersPageModals({
           accountRows={addModalAccountRows}
           accountStatus={accountLoginStatus}
           accountBusy={busy}
+          accountLoginHint={loginInfo}
           onAccountLogin={onAccountLogin}
           onAccountCancelLogin={onAccountCancelLogin}
           onAccountLogout={onAccountLogout}
