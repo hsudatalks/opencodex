@@ -59,6 +59,7 @@ export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collisi
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
+  codexQuotaWindowForPlan,
   clearAccountQuota,
   getAccountQuota,
   isCompleteCodexQuotaRecoverySnapshot,
@@ -425,6 +426,7 @@ function expireCodexAuthFlow(flowId: string | null, error = "Login cancelled"): 
 const MAIN_CACHE_TTL = 5 * 60_000;
 const POOL_CACHE_TTL = 5 * 60_000;
 const POOL_QUOTA_REFRESH_CONCURRENCY = 4;
+const RESET_QUOTA_SETTLE_DELAYS_MS = [0, 150, 350, 750, 1_500] as const;
 
 function nonEmptyPlan(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
@@ -671,6 +673,42 @@ interface PoolQuotaResult {
   /** Present only when this call's WHAM response included `rate_limit_reset_credits.available_count`. */
   freshResetCredits?: number;
   quotaProbeSkipped?: true;
+}
+
+type FreshQuotaResult = Pick<PoolQuotaResult, "freshQuota" | "freshResetCredits">;
+
+function resetQuotaTransitionObserved(
+  before: StoredAccountQuota | null,
+  after: Omit<StoredAccountQuota, "updatedAt"> | undefined,
+  plan?: string | null,
+): boolean {
+  if (!after) return false;
+  const monthly = codexQuotaWindowForPlan(plan) === "monthly";
+  const beforePercent = monthly ? before?.monthlyPercent : before?.weeklyPercent;
+  const afterPercent = monthly ? after.monthlyPercent : after.weeklyPercent;
+  const beforeResetAt = monthly ? before?.monthlyResetAt : before?.weeklyResetAt;
+  const afterResetAt = monthly ? after.monthlyResetAt : after.weeklyResetAt;
+
+  // Without a prior governing-window reading there is no stale value to disprove.
+  if (beforePercent === undefined && beforeResetAt === undefined) return afterPercent !== undefined;
+  if (afterPercent === undefined && afterResetAt === undefined) return false;
+  if (beforePercent !== undefined && afterPercent !== undefined && afterPercent < beforePercent) return true;
+  if (beforeResetAt !== undefined && afterResetAt !== undefined && afterResetAt > beforeResetAt) return true;
+  return beforePercent === 0 && afterPercent === 0;
+}
+
+async function refreshQuotaAfterReset(
+  before: StoredAccountQuota | null,
+  plan: string | null | undefined,
+  refresh: () => Promise<FreshQuotaResult>,
+): Promise<FreshQuotaResult> {
+  let latest: FreshQuotaResult = {};
+  for (const delayMs of RESET_QUOTA_SETTLE_DELAYS_MS) {
+    if (delayMs > 0) await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+    latest = await refresh();
+    if (resetQuotaTransitionObserved(before, latest.freshQuota, plan)) break;
+  }
+  return latest;
 }
 
 interface PoolQuotaRefreshFlight {
@@ -1738,6 +1776,10 @@ export async function handleCodexAuthAPI(
     const body = (await req.json().catch(() => ({}))) as { accountId?: string };
     if (!body.accountId) return jsonResponse({ error: "accountId required" }, 400);
     const accountId = body.accountId;
+    const quotaBeforeReset = getAccountQuota(accountId);
+    const resetPlan = accountId === MAIN_CODEX_ACCOUNT_ID
+      ? getMainAccountPlan()
+      : configuredPoolAccount(getRuntimeConfig(config), accountId)?.plan;
 
     try {
       const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
@@ -1761,21 +1803,25 @@ export async function handleCodexAuthAPI(
         }
         const result = safeResetCreditConsumeDto(await resp.json());
         // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
-        // and return remaining only when that refresh freshly parsed available_count.
-        // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
+        // until the governing window itself changes. OpenAI can decrement available_count a few
+        // seconds before the reset usage window becomes visible; accepting that split snapshot
+        // pins the old bar in the five-minute quota cache even though the credit was consumed.
+        // Return remaining only when a refresh freshly parsed available_count. Do not fall back
+        // to a preserved cached resetCredits (failed/omitted refresh).
         if (result.code === "reset" || result.code === "already_redeemed") {
-          let freshResetCredits: number | undefined;
-          if (auth.isMain) {
-            ({ freshResetCredits } = await fetchMainAccountInfoAttempt(
-              true,
-              1,
-              auth.nativeMainLease,
-              auth.nativeMainSharedClaimHeld === true,
-            ));
-          } else {
+          const refreshed = await refreshQuotaAfterReset(quotaBeforeReset, resetPlan, async () => {
+            if (auth.isMain) {
+              return await fetchMainAccountInfoAttempt(
+                true,
+                1,
+                auth.nativeMainLease,
+                auth.nativeMainSharedClaimHeld === true,
+              );
+            }
             const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
-            ({ freshResetCredits } = await fetchPoolAccountQuota(accountId, true, account?.plan));
-          }
+            return await fetchPoolAccountQuota(accountId, true, account?.plan);
+          });
+          const freshResetCredits = refreshed.freshResetCredits;
           return jsonResponse({
             code: result.code,
             ...(typeof freshResetCredits === "number" && Number.isFinite(freshResetCredits)

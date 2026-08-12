@@ -2027,6 +2027,53 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("reset-credit consume waits for the usage window after credits update first", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "pool-reset-lag", email: "reset-lag@example.test", plan: "pro" });
+    updateAccountQuota("pool-reset-lag", 64, 1_782_000_000, undefined, undefined, 1);
+    const originalFetch = globalThis.fetch;
+    let usageCalls = 0;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/backend-api/wham/rate-limit-reset-credits/consume")) {
+          return Response.json({ code: "reset" });
+        }
+        if (url.includes("/backend-api/wham/usage")) {
+          usageCalls += 1;
+          return Response.json({
+            plan_type: "pro",
+            rate_limit: {
+              primary_window: usageCalls === 1
+                ? { used_percent: 64, reset_at: 1_782_000_000 }
+                : { used_percent: 0, reset_at: 1_782_604_800 },
+            },
+            // The credit count leads the governing usage window on the first read.
+            rate_limit_reset_credits: { available_count: 0 },
+          });
+        }
+        return originalFetch(input);
+      }) as typeof fetch;
+
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountId: "pool-reset-lag" }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(200);
+      expect(await resp!.json()).toEqual({ code: "reset", remaining: 0 });
+      expect(usageCalls).toBe(2);
+      expect(getAccountQuota("pool-reset-lag")).toMatchObject({
+        weeklyPercent: 0,
+        weeklyResetAt: 1_782_604_800,
+        resetCredits: 0,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("reset-credit already_redeemed refreshes quota and never invents a local decrement", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "pool-idempotent", email: "idem@example.test" });
