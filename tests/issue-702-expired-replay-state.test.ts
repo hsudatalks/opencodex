@@ -361,7 +361,9 @@ describe("Issue #702 expired forward replay state", () => {
   });
 
   test("forward mode expands fresh replay state before continuing upstream", async () => {
-    const scenario = await runForwardScenario("fresh");
+    const scenario = await runForwardScenario("fresh", {
+      "x-codex-parent-thread-id": "issue-702-scoped-thread",
+    });
 
     expect(scenario.firstStatus).toBe(200);
     expect(scenario.stateBeforeResume.count).toBe(1);
@@ -376,6 +378,10 @@ describe("Issue #702 expired forward replay state", () => {
     expect(serialized).toContain(HISTORICAL_USER_SENTINEL);
     expect(serialized).toContain(HISTORICAL_ASSISTANT_SENTINEL);
     expect(serialized).toContain(CURRENT_USER_SENTINEL);
+    expect(responseStateMetrics()).toMatchObject({
+      scopedHeadCount: 1,
+      scopedConversationCount: 1,
+    });
   });
 
   test("forward mode still sends an ordinary request without previous_response_id", async () => {

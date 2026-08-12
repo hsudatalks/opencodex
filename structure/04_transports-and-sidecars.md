@@ -33,6 +33,43 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+Forward-mode continuation is expanded locally before a request reaches ChatGPT. The upstream cannot
+resolve a Gateway-issued `previous_response_id`, so a missing local state must fail closed instead of
+forwarding only the latest input and silently dropping conversation history. Durable state is an
+immutable conversation DAG: a legacy or initial response is a self-contained checkpoint, while a
+successfully replayed child stores only `parentId` plus that turn's newly appended input and output.
+Concurrent helpers and forks share their ancestor nodes instead of serializing the same prefix into
+every response. Ancestors remain retained while any child references them; TTL and capacity cleanup
+operate on unreferenced leaves and then make their parents eligible. Existing full-state records are
+valid checkpoints, so this is a dual-read migration with no destructive rewrite or session reset.
+
+The request path keeps a byte-bounded LRU of materialized hot heads under the same 64 MiB resident
+budget. A normal next turn therefore reuses the already expanded item vector; only the first access
+after process restart walks and verifies the durable DAG. Cache accounting carries forward the
+parent's conservative byte estimate and serializes only the newly appended suffix, so the hot write
+path does not rescan the full conversation merely to enforce its RAM budget. Every 256 deltas, the
+next response becomes a new self-contained checkpoint; this bounds cold-restart reads and lets the
+detached older segment age out normally. The disk representation grows linearly with new turn content
+rather than quadratically with cumulative conversation length.
+
+States are grouped by the normalized Codex conversation correlation carried by the request headers.
+Each conversation keeps up to 16 live branch heads for main turns, helpers, and subagents; older
+heads enter the existing one-hour superseded replay grace. A global emergency bound remains only for
+abandoned or legacy unscoped states and must prefer evicting those rows. Legacy durable states acquire
+their scope on first successful replay, so upgrades do not require clearing existing continuation data.
+Durable spill payloads also have a 4 GiB process-wide hard ceiling. If that emergency ceiling is
+crossed, eviction prefers superseded history, then legacy unscoped heads, and only then the oldest
+scoped head. This disk bound is independent of the 64 MiB resident-memory cap and prevents a valid
+but unusually large working set from exhausting the host filesystem.
+
+[Decision Log]
+- Purpose: Prevent unrelated high request volume from evicting a still-active Codex conversation and producing a non-recoverable continuation 400.
+- Prior implementation and constraint: Every completed response serialized the full expanded history and remained a live 24-hour head until a global 10,000-row hard cap evicted the oldest entry. Long conversations therefore produced quadratic disk growth even when only a small number of conversations were active.
+- Alternatives considered: Raise the global cap; gzip each full snapshot; globally content-address every item; forward a delta after a miss; retain a single head per conversation.
+- Selected design: Persist parent-linked turn deltas with legacy checkpoints, cache only hot materialized heads, bound live heads per privacy-safe conversation scope, preserve bounded branch concurrency and replay grace, enforce a spill-byte ceiling with history-first eviction, and keep fail-closed behavior on a genuine miss.
+- Why this design: Raising the cap only delays growth, compression preserves quadratic duplication, global item CAS adds reference-count and privacy complexity beyond the conversation graph, delta forwarding corrupts context, and one head cannot represent concurrent Codex helpers or forks.
+- Impact: New continuation storage is linear in appended turn content, active conversations survive unrelated traffic with bounded storage, restart recovery remains exact, and already-evicted state still cannot be reconstructed.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in

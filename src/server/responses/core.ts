@@ -1433,7 +1433,12 @@ async function handleResponsesInner(
     (body as { input?: unknown } | undefined)?.input,
   );
   const originalBody = body;
-  body = expandPreviousResponseInput(body);
+  const inboundContinuationScope = conversationIdFromResponsesRequest({
+    clientThreadId: req.headers.get("x-codex-parent-thread-id")?.trim(),
+    sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+    threadIdHeader: req.headers.get("thread-id"),
+  });
+  body = expandPreviousResponseInput(body, inboundContinuationScope);
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1492,6 +1497,11 @@ async function handleResponsesInner(
   logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+  const responseStateOptions = (force: boolean, durable = false) => ({
+    ...(force ? { force: true } : {}),
+    ...(durable ? { durable: true } : {}),
+    ...(logCtx.conversationId ? { scope: logCtx.conversationId } : {}),
+  });
 
   // Shadow call intercept: rewrite Codex 0.145.0+ helper calls (gpt-5.6-luna).
   // Ancient clients using gpt-5.4-mini remain configurable via sourceModels.
@@ -1929,7 +1939,7 @@ async function handleResponsesInner(
       && (!parsed.previousResponseId || parsed._previousResponseInputExpanded === true);
     const rememberPassthroughResponse = passthroughRecordEligible
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
-        rememberResponseState(parsed._rawBody, response, undefined, { force: true, durable: true })
+        rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true, true))
       : undefined;
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
@@ -2732,7 +2742,7 @@ async function handleResponsesInner(
           parsed._rawBody,
           response,
           continuationStateForResponse(providerState),
-          adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
+          responseStateOptions(adapterNeedsForcedContinuation(adapter.name)),
         ),
     });
     if (imgResponse.body) {
@@ -2880,7 +2890,7 @@ async function handleResponsesInner(
                 parsed._rawBody,
                 response,
                 continuationStateForResponse(providerState),
-                adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
+                responseStateOptions(adapterNeedsForcedContinuation(adapter.name)),
               ),
           }),
         },
@@ -2926,7 +2936,7 @@ async function handleResponsesInner(
         parsed._rawBody,
         json,
         continuationStateForResponse(providerState),
-        adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
+        responseStateOptions(adapterNeedsForcedContinuation(adapter.name)),
       );
     }
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
@@ -3573,7 +3583,7 @@ async function handleResponsesInner(
               parsed._rawBody,
               response,
               continuationStateForResponse(providerState),
-              activeAdapter.name === "kiro" ? { force: true } : undefined,
+              responseStateOptions(activeAdapter.name === "kiro"),
             ),
         }),
       },
@@ -3629,7 +3639,7 @@ async function handleResponsesInner(
         parsed._rawBody,
         json,
         continuationStateForResponse(providerState),
-        activeAdapter.name === "kiro" ? { force: true } : undefined,
+        responseStateOptions(activeAdapter.name === "kiro"),
       );
     }
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });

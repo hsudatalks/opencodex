@@ -42,13 +42,16 @@ import {
   responseContinuationRetainedStoreSnapshot,
   runPendingResponseStatePersistForTests,
   setResponseStateByteCapForTests,
+  setResponseStateSpillByteCapForTests,
   setResponseStatePersistAttemptHookForTests,
+  sweepExpiredResponseStates,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
 import { responseStateStorePath } from "../src/responses/state-store";
 import {
   readResponseSpill,
   deleteResponseSpill,
+  deleteResponseSpills,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
   setResponseSpillPayloadCapForTests,
@@ -300,6 +303,179 @@ describe("Responses previous_response_id state", () => {
       (first.output as unknown[])[0],
       { role: "user", content: "next" },
     ]);
+  });
+
+  test("retains a long continuation as one checkpoint plus linear DAG deltas", () => {
+    setResponseStateByteCapForTests(1_000_000_000);
+    const rootText = "root-history".repeat(3_000);
+    let response = fixedResponse("resp_dag_0", [{ role: "assistant", content: "answer-0" }]);
+    rememberResponseState({ model: "gpt-5.6-sol", input: rootText }, response, undefined, { force: true });
+
+    for (let turn = 1; turn < 50; turn += 1) {
+      const request = expandPreviousResponseInput({
+        model: "gpt-5.6-sol",
+        previous_response_id: response.id,
+        input: `question-${turn}`,
+      });
+      response = fixedResponse(`resp_dag_${turn}`, [{ role: "assistant", content: `answer-${turn}` }]);
+      rememberResponseState(request, response, undefined, { force: true });
+    }
+
+    const metrics = responseStateMetrics();
+    expect(metrics).toMatchObject({
+      count: 50,
+      checkpointCount: 1,
+      deltaNodeCount: 49,
+      headCount: 1,
+      supersededCount: 49,
+    });
+    // Full snapshots would repeat the ~36KB root 50 times. The DAG stores it once.
+    expect(metrics.totalBytes).toBeLessThan(200_000);
+
+    const replay = expandPreviousResponseInput({
+      previous_response_id: response.id,
+      input: "final-question",
+    }) as { input: Array<{ content?: string }> };
+    expect(replay.input[0]).toEqual({ role: "user", content: rootText });
+    expect(replay.input.at(-2)).toEqual({ role: "assistant", content: "answer-49" });
+    expect(replay.input.at(-1)).toEqual({ role: "user", content: "final-question" });
+  });
+
+  test("durable DAG delta excludes its shared prefix and replays after restart", async () => {
+    const scope = "d".repeat(32);
+    const rootText = "durable-root".repeat(2_000);
+    const root = fixedResponse("resp_durable_dag_root", [{ role: "assistant", content: "root-answer" }]);
+    rememberResponseState(
+      { model: "gpt-5.6-sol", input: rootText, store: false },
+      root,
+      undefined,
+      { force: true, durable: true, scope },
+    );
+    const childRequest = expandPreviousResponseInput({
+      model: "gpt-5.6-sol",
+      previous_response_id: root.id,
+      input: "child-question",
+      store: false,
+    }, scope);
+    const child = fixedResponse("resp_durable_dag_child", [{ role: "assistant", content: "child-answer" }]);
+    rememberResponseState(childRequest, child, undefined, { force: true, durable: true, scope });
+    await flushResponseState();
+
+    const childRow = persistedStateRow(home, child.id)!;
+    expect(childRow.parentId).toBe(root.id);
+    const childSpill = readResponseSpill(
+      child.id,
+      childRow.spill as Parameters<typeof readResponseSpill>[1],
+    );
+    expect(childSpill.ok).toBe(true);
+    if (!childSpill.ok) throw new Error("expected readable child spill");
+    expect(JSON.stringify(childSpill.payload.items)).not.toContain(rootText.slice(0, 100));
+    expect(childSpill.payload.items).toEqual([
+      { role: "user", content: "child-question" },
+      { role: "assistant", content: "child-answer" },
+    ]);
+
+    clearResponseStateMemoryForTests();
+    const replay = expandPreviousResponseInput({ previous_response_id: child.id, input: "resume" }, scope) as {
+      input: Array<{ content?: string }>;
+    };
+    expect(replay.input.map(item => item.content)).toEqual([
+      rootText,
+      "root-answer",
+      "child-question",
+      "child-answer",
+      "resume",
+    ]);
+    expandPreviousResponseInput({ previous_response_id: child.id, input: "hot-resume" }, scope);
+    expect(responseStateMetrics()).toMatchObject({
+      checkpointCount: 1,
+      deltaNodeCount: 1,
+      materializedCacheCount: 1,
+      materializedCacheHits: 1,
+      materializedCacheMisses: 1,
+    });
+  });
+
+  test("durable spill bytes grow with appended turns instead of cumulative history", () => {
+    const scope = "e".repeat(32);
+    const rootText = "linear-disk-root".repeat(2_500);
+    let response = fixedResponse("resp_disk_linear_0", [{ role: "assistant", content: "answer-0" }]);
+    rememberResponseState(
+      { input: rootText, store: false },
+      response,
+      undefined,
+      { force: true, durable: true, scope },
+    );
+    for (let turn = 1; turn < 20; turn += 1) {
+      const request = expandPreviousResponseInput({
+        previous_response_id: response.id,
+        input: `question-${turn}`,
+        store: false,
+      }, scope);
+      response = fixedResponse(`resp_disk_linear_${turn}`, [{ role: "assistant", content: `answer-${turn}` }]);
+      rememberResponseState(request, response, undefined, { force: true, durable: true, scope });
+    }
+
+    const spillBytes = spillFileNames(home).reduce(
+      (sum, file) => sum + statSync(join(responseSpillDirectory(home), file)).size,
+      0,
+    );
+    expect(responseStateMetrics()).toMatchObject({ checkpointCount: 1, deltaNodeCount: 19 });
+    expect(spillBytes).toBeLessThan(100_000);
+    expect(spillBytes).toBeLessThan(rootText.length * 3);
+  });
+
+  test("periodic checkpoints bound cold replay depth without changing conversation content", () => {
+    let response = fixedResponse("resp_checkpoint_0", [{ role: "assistant", content: "a-0" }]);
+    rememberResponseState({ input: "q-0" }, response, undefined, { force: true });
+    for (let turn = 1; turn < 260; turn += 1) {
+      const request = expandPreviousResponseInput({
+        previous_response_id: response.id,
+        input: `q-${turn}`,
+      });
+      response = fixedResponse(`resp_checkpoint_${turn}`, [{ role: "assistant", content: `a-${turn}` }]);
+      rememberResponseState(request, response, undefined, { force: true });
+    }
+
+    expect(responseStateMetrics()).toMatchObject({ checkpointCount: 2, deltaNodeCount: 258 });
+    const replay = expandPreviousResponseInput({ previous_response_id: response.id, input: "q-final" }) as {
+      input: Array<{ content?: string }>;
+    };
+    expect(replay.input).toHaveLength(521);
+    expect(replay.input[0]?.content).toBe("q-0");
+    expect(replay.input.at(-2)?.content).toBe("a-259");
+    expect(replay.input.at(-1)?.content).toBe("q-final");
+  });
+
+  test("retains a superseded ancestor while live branches still reference it", () => {
+    const realNow = Date.now;
+    const start = realNow();
+    try {
+      Date.now = () => start;
+      const parent = fixedResponse("resp_dag_branch_parent", [{ role: "assistant", content: "parent" }]);
+      rememberResponseState({ input: "root" }, parent, undefined, { force: true });
+      for (const branch of ["a", "b"]) {
+        const request = expandPreviousResponseInput({ previous_response_id: parent.id, input: branch });
+        rememberResponseState(
+          request,
+          fixedResponse(`resp_dag_branch_${branch}`, [{ role: "assistant", content: `answer-${branch}` }]),
+          undefined,
+          { force: true },
+        );
+      }
+
+      Date.now = () => start + 2 * 60 * 60 * 1_000;
+      sweepExpiredResponseStates(Date.now());
+      for (const branch of ["a", "b"]) {
+        const replay = expandPreviousResponseInput({
+          previous_response_id: `resp_dag_branch_${branch}`,
+          input: "resume",
+        }) as { input: Array<{ content?: string }> };
+        expect(replay.input.map(item => item.content)).toContain("parent");
+      }
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test("SSE inspector backfills empty completed output before passthrough persistence (#334)", () => {
@@ -664,6 +840,18 @@ describe("Responses previous_response_id state", () => {
     setSpillIoForTest({ record: event => events.push(event) });
     deleteResponseSpill(ref);
     expect(events).toEqual(["dir-fsync"]);
+  });
+
+  test("batch spill cleanup uses one directory durability barrier", () => {
+    const refs = ["a", "b", "c"].map(id => writeResponseSpillDurably(
+      `resp_batch_unlink_${id}`,
+      { createdAt: Date.now(), items: [id] },
+    ));
+    const events: string[] = [];
+    setSpillIoForTest({ record: event => events.push(event) });
+    deleteResponseSpills(refs);
+    expect(events).toEqual(["dir-fsync"]);
+    expect(spillFileNames(home)).toHaveLength(0);
   });
 
   test("directory fsync still records and closes when fsync throws", () => {
@@ -1422,6 +1610,141 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
+  test("bounds parallel continuation heads per conversation scope without losing replay grace", () => {
+    const scope = "a".repeat(32);
+    for (let i = 0; i < 20; i++) {
+      rememberResponseState(
+        { model: "gpt-5.6-sol", input: `turn-${i}` },
+        fixedResponse(`resp_scoped_${i}`, [{ role: "assistant", content: `done-${i}` }]),
+        undefined,
+        { scope },
+      );
+    }
+
+    expect(responseStateMetrics()).toMatchObject({
+      count: 20,
+      headCount: 16,
+      supersededCount: 4,
+      scopedHeadCount: 16,
+      scopedConversationCount: 1,
+      scopedHeadSupersessions: 4,
+    });
+    const replay = expandPreviousResponseInput({ previous_response_id: "resp_scoped_0", input: "continue" });
+    expect(JSON.stringify((replay as { input: unknown[] }).input)).toContain("done-0");
+  });
+
+  test("durable spill budget evicts superseded then unscoped state before scoped heads", async () => {
+    const scope = "c".repeat(32);
+    const bulk = "disk-budget".repeat(512);
+    const rememberDurably = (id: string, previousId?: string, scoped = true) => {
+      rememberResponseState(
+        {
+          model: "gpt-5.6-sol",
+          input: `${bulk}-${id}`,
+          store: false,
+          ...(previousId ? { previous_response_id: previousId } : {}),
+        },
+        fixedResponse(id, [{ role: "assistant", content: `${bulk}-done-${id}` }]),
+        undefined,
+        { force: true, durable: true, ...(scoped ? { scope } : {}) },
+      );
+    };
+
+    rememberDurably("resp_disk_parent");
+    rememberDurably("resp_disk_head", "resp_disk_parent");
+    rememberDurably("resp_disk_scoped_peer");
+    rememberDurably("resp_disk_unscoped", undefined, false);
+    const initialBytes = responseStateMetrics().spillPayloadBytes;
+    expect(initialBytes).toBeGreaterThan(0);
+
+    setResponseStateSpillByteCapForTests(initialBytes - 1);
+    rememberResponseState({ input: "prune superseded" }, fixedResponse("resp_disk_trigger_1", []));
+    expect(responseStateMetrics().spillByteEvictions).toBe(1);
+    const missingParent = { previous_response_id: "resp_disk_parent", input: "resume" };
+    expect(expandPreviousResponseInput(missingParent)).toBe(missingParent);
+    const retainedHead = { previous_response_id: "resp_disk_head", input: "resume" };
+    expect(expandPreviousResponseInput(retainedHead)).not.toBe(retainedHead);
+
+    setResponseStateSpillByteCapForTests(responseStateMetrics().spillPayloadBytes - 1);
+    rememberResponseState({ input: "prune unscoped" }, fixedResponse("resp_disk_trigger_2", []));
+    expect(responseStateMetrics().spillByteEvictions).toBe(2);
+    const missingUnscoped = { previous_response_id: "resp_disk_unscoped", input: "resume" };
+    expect(expandPreviousResponseInput(missingUnscoped)).toBe(missingUnscoped);
+    const retainedScopedPeer = { previous_response_id: "resp_disk_scoped_peer", input: "resume" };
+    expect(expandPreviousResponseInput(retainedScopedPeer)).not.toBe(retainedScopedPeer);
+
+    await flushResponseState();
+    expect(spillFileNames(home)).toHaveLength(2);
+  });
+
+  test("spill budget is enforced after same-pass resident demotion", () => {
+    setResponseStateByteCapForTests(1_000_000);
+    rememberLarge("resp_disk_resident", "resident-to-spill".repeat(2_000));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 1, spillStubCount: 0 });
+
+    setResponseStateByteCapForTests(10_000);
+    setResponseStateSpillByteCapForTests(1);
+    rememberResponseState({ input: "trigger" }, fixedResponse("resp_disk_resident_trigger", []));
+
+    expect(responseStateMetrics()).toMatchObject({
+      spillPayloadBytes: 0,
+      spillByteEvictions: 1,
+    });
+    const missing = { previous_response_id: "resp_disk_resident", input: "resume" };
+    expect(expandPreviousResponseInput(missing)).toBe(missing);
+  });
+
+  test("same-pass spill-budget rejection keeps the last replayable DAG parent authoritative", () => {
+    const scope = "f".repeat(32);
+    const parent = fixedResponse("resp_budget_dag_parent", [{ role: "assistant", content: "ready" }]);
+    rememberResponseState(
+      { input: "parent", store: false },
+      parent,
+      undefined,
+      { force: true, durable: true, scope },
+    );
+    setResponseStateSpillByteCapForTests(responseStateMetrics().spillPayloadBytes);
+    const childRequest = expandPreviousResponseInput({
+      previous_response_id: parent.id,
+      input: "child",
+      store: false,
+    }, scope);
+    rememberResponseState(
+      childRequest,
+      fixedResponse("resp_budget_dag_child", [{ role: "assistant", content: "child" }]),
+      undefined,
+      { force: true, durable: true, scope },
+    );
+
+    expect(responseStateMetrics()).toMatchObject({ headCount: 1, supersededCount: 0 });
+    const child = { previous_response_id: "resp_budget_dag_child", input: "retry" };
+    expect(expandPreviousResponseInput(child)).toBe(child);
+    const replay = expandPreviousResponseInput({ previous_response_id: parent.id, input: "retry" }, scope);
+    expect(JSON.stringify((replay as { input: unknown[] }).input)).toContain("ready");
+  });
+
+  test("attaches a durable scope when a legacy continuation is first replayed", async () => {
+    rememberResponseState(
+      { model: "gpt-5.6-sol", input: "legacy" },
+      fixedResponse("resp_legacy_scope", [{ role: "assistant", content: "ready" }]),
+    );
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    const scope = "b".repeat(32);
+    const replay = expandPreviousResponseInput(
+      { previous_response_id: "resp_legacy_scope", input: "resume" },
+      scope,
+    );
+    expect(JSON.stringify((replay as { input: unknown[] }).input)).toContain("ready");
+    await flushResponseState();
+    expect(persistedStateRow(home, "resp_legacy_scope")?.scope).toBe(scope);
+
+    clearResponseStateMemoryForTests();
+    expect(previousResponseProviderState("resp_legacy_scope")).toBeUndefined();
+    expect(responseStateMetrics()).toMatchObject({ scopedHeadCount: 1, scopedConversationCount: 1 });
+  });
+
   test("TTL-prune eviction releases byte accounting", () => {
     setResponseStateByteCapForTests(10_000);
     try {
@@ -1864,10 +2187,20 @@ describe("Responses previous_response_id state", () => {
         spillReadFailures: 0,
         headCount: 0,
         supersededCount: 0,
+        scopedHeadCount: 0,
+        scopedConversationCount: 0,
+        checkpointCount: 0,
+        deltaNodeCount: 0,
+        materializedCacheCount: 0,
+        materializedCacheBytes: 0,
+        materializedCacheHits: 0,
+        materializedCacheMisses: 0,
         headTtlEvictions: 0,
         supersededTtlEvictions: 0,
         supersededCapacityEvictions: 0,
         emergencyHeadEvictions: 0,
+        spillByteEvictions: 0,
+        scopedHeadSupersessions: 0,
         replayMisses: 0,
         persistenceBackend: "sqlite-incremental",
         persistencePendingMutations: 0,

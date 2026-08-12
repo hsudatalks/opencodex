@@ -5,6 +5,7 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/
 import type { OcxProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
+  deleteResponseSpills,
   noteStubSwapForTest,
   readResponseSpill,
   recoverOrphanedResponseSpills,
@@ -28,14 +29,31 @@ import {
 const SUPERSEDED_RESPONSE_TTL_MS = 60 * 60 * 1_000;
 /** A chain head is authoritative session state, not an ordinary cache entry. */
 const RESPONSE_HEAD_TTL_MS = 24 * 60 * 60 * 1_000;
-/** Soft budget applies only to superseded history. Live chain heads are protected. */
+/** Soft budget applies only to unreferenced superseded replay history. */
 const MAX_STORED_RESPONSES = 1_000;
-/** Emergency bound for abandoned heads when clients never advance or resume them. */
-const MAX_STORED_RESPONSE_HEADS = 10_000;
+/**
+ * A Codex conversation can have several in-flight branches (main turn, helpers,
+ * and subagents). Keep enough branch heads for real concurrency while preventing
+ * every completed request from becoming a 24h disk-pinned head.
+ */
+const MAX_STORED_RESPONSE_HEADS_PER_SCOPE = 16;
+/**
+ * Last-resort bound for unscoped/legacy clients. Scoped heads are compacted
+ * first; the extra 1,000 slots let pre-scope rows age out without a destructive
+ * migration on upgrade.
+ */
+const MAX_STORED_RESPONSE_HEADS = 11_000;
+/**
+ * Hard disk budget for durable continuation payloads. Count limits alone are
+ * insufficient because one replay snapshot may be hundreds of MiB. The
+ * expected scoped working set is far below this ceiling; crossing it is an
+ * emergency condition where preserving host disk health outranks an old
+ * continuation branch.
+ */
+export const MAX_STORED_RESPONSE_SPILL_BYTES = 4 * 1024 * 1024 * 1024;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
-/** In-memory high-water byte cap across all entries. Forced store:false retention (kiro/cursor
- * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
- * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
+/** In-memory high-water byte cap across all entries. New continuation nodes retain only their
+ * appended suffix; legacy checkpoints may still contain a full expanded conversation. */
 export const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
 /** Refuse-to-parse ceiling for an existing snapshot file (above the 24 MiB write
  * bound, so anything we wrote ourselves always loads; guards against externally
@@ -51,6 +69,9 @@ interface ResidentResponseState {
   kind: "resident";
   createdAt: number;
   supersededAt?: number;
+  scope?: string;
+  /** Absent means `items` is a self-contained checkpoint; present means an immutable DAG delta. */
+  parentId?: string;
   items: unknown[];
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
@@ -60,6 +81,9 @@ interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
   supersededAt?: number;
+  scope?: string;
+  /** Stored in SQLite metadata; the spill payload contains only this node's item suffix. */
+  parentId?: string;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -69,6 +93,7 @@ interface SpillFailedResponseState {
   kind: "spill-failed";
   createdAt: number;
   supersededAt?: number;
+  scope?: string;
   sizeBytes: number;
 }
 
@@ -77,15 +102,35 @@ type ResidentInput = Omit<ResidentResponseState, "kind" | "sizeBytes">;
 
 export type PreviousResponseReplayFailure = {
   code: "previous_response_not_found";
-  reason: "spill_missing" | "spill_corrupt" | "spill_failed" | "spill_too_large";
+  reason:
+    | "spill_missing"
+    | "spill_corrupt"
+    | "spill_failed"
+    | "spill_too_large"
+    | "chain_missing"
+    | "chain_cycle"
+    | "chain_too_deep"
+    | "chain_too_large";
 };
 
 const states = new Map<string, StoredResponseState>();
+const scopedHeads = new Map<string, Set<string>>();
+/** Number of retained DAG children that require each response node. */
+const parentRefCounts = new Map<string, number>();
+interface MaterializedCacheEntry {
+  items: unknown[];
+  sizeBytes: number;
+}
+/** LRU of hot full heads; durable state remains the immutable delta DAG. */
+const materializedCache = new Map<string, MaterializedCacheEntry>();
 let storedResponseBytes = 0;
 let residentResponseBytes = 0;
+let storedSpillPayloadBytes = 0;
+let materializedCacheBytes = 0;
 let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
+let spillByteCapOverride: number | null = null;
 let stateRevision = 0;
 let mutationRevision = 0;
 let hydrating = false;
@@ -97,13 +142,87 @@ interface PendingStateMutation {
 const pendingStateMutations = new Map<string, PendingStateMutation>();
 let incrementalStoreConfigDir: string | null = null;
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
+const materializationCounters = { hits: 0, misses: 0 };
 const retentionCounters = {
   headTtlEvictions: 0,
   supersededTtlEvictions: 0,
   supersededCapacityEvictions: 0,
   emergencyHeadEvictions: 0,
+  spillByteEvictions: 0,
+  scopedHeadSupersessions: 0,
   replayMisses: 0,
 };
+
+const RESPONSE_SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+const MAX_RESPONSE_PARENT_ID_LENGTH = 512;
+const MAX_RESPONSE_CHAIN_DEPTH = 4_096;
+/** Periodic checkpoints bound cold-restart file reads and detach old DAG segments for GC. */
+const MAX_RESPONSE_DELTA_DEPTH = 256;
+
+function validParentId(parentId: unknown, childId?: string): parentId is string {
+  return typeof parentId === "string"
+    && parentId.length > 0
+    && parentId.length <= MAX_RESPONSE_PARENT_ID_LENGTH
+    && parentId !== childId;
+}
+
+function parentIdOf(state: StoredResponseState | undefined): string | undefined {
+  return state && state.kind !== "spill-failed" ? state.parentId : undefined;
+}
+
+function adjustParentRef(parentId: string | undefined, delta: number): void {
+  if (!parentId) return;
+  const next = (parentRefCounts.get(parentId) ?? 0) + delta;
+  if (next > 0) parentRefCounts.set(parentId, next);
+  else parentRefCounts.delete(parentId);
+}
+
+function isReferencedAncestor(id: string): boolean {
+  return (parentRefCounts.get(id) ?? 0) > 0;
+}
+
+function responseDeltaDepth(id: string): number {
+  const visited = new Set<string>();
+  let cursorId: string | undefined = id;
+  let depth = 0;
+  while (cursorId && depth <= MAX_RESPONSE_DELTA_DEPTH) {
+    if (visited.has(cursorId)) return MAX_RESPONSE_DELTA_DEPTH;
+    visited.add(cursorId);
+    const parentId = parentIdOf(states.get(cursorId));
+    if (!parentId) return depth;
+    depth += 1;
+    cursorId = parentId;
+  }
+  return MAX_RESPONSE_DELTA_DEPTH;
+}
+
+function validResponseScope(scope: unknown): scope is string {
+  return typeof scope === "string" && RESPONSE_SCOPE_PATTERN.test(scope);
+}
+
+function isScopedReplayHead(state: StoredResponseState): boolean {
+  return state.kind !== "spill-failed"
+    && state.supersededAt === undefined
+    && validResponseScope(state.scope);
+}
+
+function removeScopedHead(id: string, state: StoredResponseState | undefined): void {
+  if (!state || !isScopedReplayHead(state)) return;
+  const ids = scopedHeads.get(state.scope!);
+  if (!ids) return;
+  ids.delete(id);
+  if (ids.size === 0) scopedHeads.delete(state.scope!);
+}
+
+function addScopedHead(id: string, state: StoredResponseState): void {
+  if (!isScopedReplayHead(state)) return;
+  let ids = scopedHeads.get(state.scope!);
+  if (!ids) {
+    ids = new Set<string>();
+    scopedHeads.set(state.scope!, ids);
+  }
+  ids.add(id);
+}
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized
  * candidates routed straight to durable spill without a resident stay or
@@ -127,9 +246,18 @@ function byteCap(): number {
   return byteCapOverride ?? MAX_STORED_RESPONSE_BYTES;
 }
 
+function spillByteCap(): number {
+  return spillByteCapOverride ?? MAX_STORED_RESPONSE_SPILL_BYTES;
+}
+
 /** Test-only: lower/restore the in-memory byte cap (null restores the default). */
 export function setResponseStateByteCapForTests(bytes: number | null): void {
   byteCapOverride = bytes;
+}
+
+/** Test-only: lower/restore the durable spill byte ceiling (null restores). */
+export function setResponseStateSpillByteCapForTests(bytes: number | null): void {
+  spillByteCapOverride = bytes;
 }
 
 /** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
@@ -144,6 +272,44 @@ function serializedBytes(value: unknown): number | null {
   } catch {
     return null;
   }
+}
+
+function deleteMaterializedCacheEntry(id: string): number {
+  const existing = materializedCache.get(id);
+  if (!existing) return 0;
+  materializedCache.delete(id);
+  materializedCacheBytes -= existing.sizeBytes;
+  if (materializedCacheBytes < 0) materializedCacheBytes = 0;
+  return existing.sizeBytes;
+}
+
+function pruneMaterializedCache(): void {
+  while (materializedCacheBytes + residentResponseBytes > byteCap() && materializedCache.size > 0) {
+    const oldest = materializedCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    deleteMaterializedCacheEntry(oldest);
+  }
+}
+
+function cacheMaterializedItems(id: string, items: unknown[], knownSizeBytes?: number): void {
+  const sizeBytes = knownSizeBytes ?? serializedBytes(items);
+  if (sizeBytes === null || sizeBytes > byteCap()) return;
+  deleteMaterializedCacheEntry(id);
+  materializedCache.set(id, { items, sizeBytes });
+  materializedCacheBytes += sizeBytes;
+  pruneMaterializedCache();
+}
+
+function cachedMaterializedItems(id: string): MaterializedCacheEntry | undefined {
+  const cached = materializedCache.get(id);
+  if (!cached) {
+    materializationCounters.misses += 1;
+    return undefined;
+  }
+  materializedCache.delete(id);
+  materializedCache.set(id, cached);
+  materializationCounters.hits += 1;
+  return cached;
 }
 
 function persistedStateJson(entry: StoredResponseState): string {
@@ -183,6 +349,8 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
   const sizeBytes = serializedBytes({
     responseId: id,
     createdAt: entry.createdAt,
+    ...(entry.scope ? { scope: entry.scope } : {}),
+    ...(entry.parentId ? { parentId: entry.parentId } : {}),
     items: entry.items,
     ...(entry.providers ? { providers: entry.providers } : {}),
   });
@@ -203,8 +371,14 @@ function recomputeOldestResident(): void {
 function replaceMapEntry(id: string, next: StoredResponseState, expected?: StoredResponseState): boolean {
   const existing = states.get(id);
   if (expected && existing !== expected) return false;
+  deleteMaterializedCacheEntry(id);
+  const existingParentId = parentIdOf(existing);
+  const nextParentId = parentIdOf(next);
+  removeScopedHead(id, existing);
   storedResponseBytes -= existing?.sizeBytes ?? 0;
   storedResponseBytes += next.sizeBytes;
+  storedSpillPayloadBytes -= existing?.kind === "spill" ? existing.spill.payloadBytes : 0;
+  storedSpillPayloadBytes += next.kind === "spill" ? next.spill.payloadBytes : 0;
   if (existing?.kind === "resident") {
     residentResponseBytes -= existing.sizeBytes;
   }
@@ -213,8 +387,14 @@ function replaceMapEntry(id: string, next: StoredResponseState, expected?: Store
   }
   if (storedResponseBytes < 0) storedResponseBytes = 0;
   if (residentResponseBytes < 0) residentResponseBytes = 0;
+  if (storedSpillPayloadBytes < 0) storedSpillPayloadBytes = 0;
   if (existing) states.delete(id);
   states.set(id, next);
+  if (existingParentId !== nextParentId) {
+    adjustParentRef(existingParentId, -1);
+    adjustParentRef(nextParentId, 1);
+  }
+  addScopedHead(id, next);
   if (oldestResidentId === id) {
     recomputeOldestResident();
   } else if (next.kind === "resident" && (oldestResidentAt === null || next.createdAt < oldestResidentAt)) {
@@ -230,11 +410,17 @@ function stubSize(id: string, entry: Omit<SpilledResponseState, "sizeBytes">): n
   return serializedBytes({ responseId: id, ...entry }) ?? 0;
 }
 
-function tombstone(id: string, createdAt: number, supersededAt?: number): SpillFailedResponseState {
+function tombstone(
+  id: string,
+  createdAt: number,
+  supersededAt?: number,
+  scope?: string,
+): SpillFailedResponseState {
   const base = {
     kind: "spill-failed" as const,
     createdAt,
     ...(supersededAt !== undefined ? { supersededAt } : {}),
+    ...(validResponseScope(scope) ? { scope } : {}),
   };
   return { ...base, sizeBytes: serializedBytes({ responseId: id, ...base }) ?? 0 };
 }
@@ -247,17 +433,45 @@ function deleteOwnedSpills(entry: StoredResponseState): void {
 function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void {
   const existing = states.get(id);
   if (!existing) return;
+  if (isReferencedAncestor(id)) return;
+  deleteMaterializedCacheEntry(id);
+  removeScopedHead(id, existing);
+  adjustParentRef(parentIdOf(existing), -1);
   storedResponseBytes -= existing.sizeBytes;
+  storedSpillPayloadBytes -= existing.kind === "spill" ? existing.spill.payloadBytes : 0;
   if (existing.kind === "resident") {
     residentResponseBytes -= existing.sizeBytes;
   }
   if (storedResponseBytes < 0) storedResponseBytes = 0;
   if (residentResponseBytes < 0) residentResponseBytes = 0;
+  if (storedSpillPayloadBytes < 0) storedSpillPayloadBytes = 0;
   states.delete(id);
   if (oldestResidentId === id) recomputeOldestResident();
   stateRevision += 1;
   noteStateMutation(id, null);
   if (options.deleteSpill !== false && existing.kind === "spill") deferSpillUnlink(id, existing.spill);
+}
+
+function deleteExpiredChain(id: string, at: number): number {
+  let removed = 0;
+  let cursorId: string | undefined = id;
+  while (cursorId) {
+    const state = states.get(cursorId);
+    if (!state || isReferencedAncestor(cursorId)) break;
+    const superseded = state.supersededAt !== undefined;
+    const expired = superseded
+      ? at - state.supersededAt! > SUPERSEDED_RESPONSE_TTL_MS
+      : at - state.createdAt > RESPONSE_HEAD_TTL_MS;
+    if (!expired) break;
+    const parentId = parentIdOf(state);
+    if (superseded) retentionCounters.supersededTtlEvictions += 1;
+    else retentionCounters.headTtlEvictions += 1;
+    deleteEntry(cursorId);
+    if (states.has(cursorId)) break;
+    removed += 1;
+    cursorId = parentId;
+  }
+  return removed;
 }
 
 function replaceWithSpillFailure(
@@ -271,6 +485,7 @@ function replaceWithSpillFailure(
     id,
     expected?.createdAt ?? existing?.createdAt ?? now(),
     expected?.supersededAt ?? existing?.supersededAt,
+    expected?.scope ?? existing?.scope,
   );
   if (replaceMapEntry(id, failed, expected)) {
     if (existing) {
@@ -283,6 +498,8 @@ function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: 
   const base: Omit<SpilledResponseState, "sizeBytes"> = {
     kind: "spill",
     createdAt: expected.createdAt,
+    ...(expected.scope ? { scope: expected.scope } : {}),
+    ...(expected.parentId ? { parentId: expected.parentId } : {}),
     ...(expected.providers ? { providers: expected.providers } : {}),
     spill: ref,
   };
@@ -310,6 +527,8 @@ function replaceSpillEntryAtomically(
       kind: "spill",
       createdAt: candidate.createdAt,
       ...(candidate.supersededAt !== undefined ? { supersededAt: candidate.supersededAt } : {}),
+      ...(candidate.scope ? { scope: candidate.scope } : {}),
+      ...(candidate.parentId ? { parentId: candidate.parentId } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -370,7 +589,7 @@ function markResponseSuperseded(id: string, at: number): void {
     replaceMapEntry(id, { ...base, sizeBytes: stubSize(id, base) }, existing);
     return;
   }
-  replaceMapEntry(id, tombstone(id, existing.createdAt, at), existing);
+  replaceMapEntry(id, tombstone(id, existing.createdAt, at, existing.scope), existing);
 }
 
 /** Install a completed response as a durable spill as soon as its terminal event is observed. */
@@ -424,6 +643,8 @@ function admitOversizedCandidate(
       kind: "spill",
       createdAt: candidate.createdAt,
       ...(candidate.supersededAt !== undefined ? { supersededAt: candidate.supersededAt } : {}),
+      ...(candidate.scope ? { scope: candidate.scope } : {}),
+      ...(candidate.parentId ? { parentId: candidate.parentId } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -450,6 +671,8 @@ function admitOversizedCandidate(
 // newly appended input suffix without adding an unknown field that native passthrough could send
 // upstream. The parser uses this boundary to acknowledge historical compaction markers exactly once.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
+/** Conservative materialized-byte estimate for the exact locally expanded request. */
+const replayedInputPrefixBytes = new WeakMap<object, number>();
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -469,6 +692,8 @@ function snapshotPath(): string {
 interface LegacySnapshotState {
   createdAt?: unknown;
   supersededAt?: unknown;
+  scope?: unknown;
+  parentId?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
@@ -492,12 +717,16 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const supersededAt = typeof rec.supersededAt === "number" && Number.isFinite(rec.supersededAt)
     ? rec.supersededAt
     : undefined;
+  const scope = validResponseScope(rec.scope) ? rec.scope : undefined;
+  const parentId = validParentId(rec.parentId, id) ? rec.parentId : undefined;
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
       ...(supersededAt !== undefined ? { supersededAt } : {}),
+      ...(scope ? { scope } : {}),
+      ...(parentId ? { parentId } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -505,7 +734,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     return;
   }
   if (rec.kind === "spill-failed") {
-    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt));
+    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt, scope));
     return;
   }
   if (rec.kind !== undefined && rec.kind !== "resident") return;
@@ -523,11 +752,13 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const resident = measureResidentEntry(id, {
     createdAt: rec.createdAt,
     ...(supersededAt !== undefined ? { supersededAt } : {}),
+    ...(scope ? { scope } : {}),
+    ...(parentId ? { parentId } : {}),
     items: rec.items,
     ...(providers ? { providers } : {}),
   });
   if (!resident) {
-    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt));
+    replaceMapEntry(id, tombstone(id, rec.createdAt, supersededAt, scope));
     return;
   }
   // Same admission boundary as live writes: an oversized snapshot row goes
@@ -818,9 +1049,13 @@ async function commitPendingMutations(configDir: string): Promise<IncrementalCom
 }
 
 function drainPendingSpillUnlinks(): void {
+  const releasable: Array<[string, ResponseSpillRef]> = [];
   for (const [id, ref] of pendingSpillUnlinks) {
     if (committedSpillRefs.get(id)?.fileName === ref.fileName) continue;
-    deleteResponseSpill(ref);
+    releasable.push([id, ref]);
+  }
+  deleteResponseSpills(releasable.map(([, ref]) => ref));
+  for (const [id] of releasable) {
     pendingSpillUnlinks.delete(id);
   }
 }
@@ -876,26 +1111,50 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
-function pruneResponses(at = now()): void {
-  for (const [id, state] of states) {
-    if (state.supersededAt !== undefined) {
-      if (at - state.supersededAt > SUPERSEDED_RESPONSE_TTL_MS) {
-        retentionCounters.supersededTtlEvictions += 1;
-        deleteEntry(id);
-      }
-    } else if (at - state.createdAt > RESPONSE_HEAD_TTL_MS) {
-      retentionCounters.headTtlEvictions += 1;
-      deleteEntry(id);
+function compactScopedHeads(at: number): void {
+  for (const ids of [...scopedHeads.values()]) {
+    const excess = ids.size - MAX_STORED_RESPONSE_HEADS_PER_SCOPE;
+    if (excess <= 0) continue;
+    for (const id of [...ids].slice(0, excess)) {
+      const state = states.get(id);
+      if (!state || !isScopedReplayHead(state)) continue;
+      retentionCounters.scopedHeadSupersessions += 1;
+      markResponseSuperseded(id, at);
     }
   }
+}
+
+function retainedHeadCount(): number {
+  let count = 0;
+  for (const state of states.values()) {
+    if (state.supersededAt === undefined) count += 1;
+  }
+  return count;
+}
+
+function pruneResponses(at = now()): void {
+  for (const id of [...states.keys()]) deleteExpiredChain(id, at);
+  compactScopedHeads(at);
+  // A reachable DAG may legitimately exceed the historical row cap. Preserve
+  // its ancestors, but retain the old total-size behavior whenever an
+  // unreferenced superseded replay id is available to release.
   while (states.size > MAX_STORED_RESPONSES) {
-    const oldest = [...states].find(([, state]) => state.supersededAt !== undefined)?.[0];
+    const oldest = [...states].find(([id, state]) => (
+      state.supersededAt !== undefined && !isReferencedAncestor(id)
+    ))?.[0];
     if (!oldest) break;
     retentionCounters.supersededCapacityEvictions += 1;
     deleteEntry(oldest);
   }
-  while (states.size > MAX_STORED_RESPONSE_HEADS) {
-    const oldest = states.keys().next().value;
+  while (retainedHeadCount() > MAX_STORED_RESPONSE_HEADS) {
+    // Preserve identified active conversations during legacy migration. Once
+    // every producer supplies a scope this branch is only a final safety valve.
+    const oldest = [...states].find(([id, state]) => (
+      state.supersededAt === undefined && !validResponseScope(state.scope) && !isReferencedAncestor(id)
+    ))?.[0]
+      ?? [...states].find(([id, state]) => (
+        state.supersededAt === undefined && !isReferencedAncestor(id)
+      ))?.[0];
     if (!oldest) break;
     retentionCounters.emergencyHeadEvictions += 1;
     deleteEntry(oldest);
@@ -904,7 +1163,8 @@ function pruneResponses(at = now()): void {
   // deleted only when even their bounded metadata cannot fit the override.
   while (storedResponseBytes > byteCap() && states.size > 0) {
     const oldestResident = [...states].find(([, entry]) => entry.kind === "resident");
-    const oldestId = oldestResident?.[0] ?? states.keys().next().value as string | undefined;
+    const oldestId = oldestResident?.[0]
+      ?? [...states].find(([id]) => !isReferencedAncestor(id))?.[0];
     if (!oldestId) break;
     const entry = states.get(oldestId)!;
     if (entry.kind !== "resident") {
@@ -923,21 +1183,31 @@ function pruneResponses(at = now()): void {
       replaceWithSpillFailure(oldestId, entry);
     }
   }
+  // Run after RAM demotion: a resident converted to a spill during this same
+  // prune pass must also satisfy the durable byte invariant before returning.
+  while (storedSpillPayloadBytes > spillByteCap()) {
+    const oldestSpill = [...states].find(([id, state]) => (
+      state.kind === "spill" && state.supersededAt !== undefined && !isReferencedAncestor(id)
+    ))?.[0]
+      ?? [...states].find(([id, state]) => (
+        state.kind === "spill" && !validResponseScope(state.scope) && !isReferencedAncestor(id)
+      ))?.[0]
+      ?? [...states].find(([id, state]) => state.kind === "spill" && !isReferencedAncestor(id))?.[0];
+    // A resident leaf can hide a spilled ancestor. Detach that branch first,
+    // then the next loop can reclaim the newly exposed spill.
+    const oldest = oldestSpill
+      ?? [...states].find(([id, state]) => parentIdOf(state) && !isReferencedAncestor(id))?.[0];
+    if (!oldest) break;
+    retentionCounters.spillByteEvictions += 1;
+    deleteEntry(oldest);
+  }
+  pruneMaterializedCache();
 }
 
 /** Periodic TTL-only sweep; count/byte eviction remains owned by mutation paths. */
 export function sweepExpiredResponseStates(at = now()): number {
   let removed = 0;
-  for (const [id, state] of states) {
-    const expired = state.supersededAt !== undefined
-      ? at - state.supersededAt > SUPERSEDED_RESPONSE_TTL_MS
-      : at - state.createdAt > RESPONSE_HEAD_TTL_MS;
-    if (!expired) continue;
-    if (state.supersededAt !== undefined) retentionCounters.supersededTtlEvictions += 1;
-    else retentionCounters.headTtlEvictions += 1;
-    deleteEntry(id);
-    removed += 1;
-  }
+  for (const id of [...states.keys()]) removed += deleteExpiredChain(id, at);
   if (removed > 0) schedulePersist();
   return removed;
 }
@@ -945,14 +1215,16 @@ export function sweepExpiredResponseStates(at = now()): number {
 export function responseContinuationRetainedStoreSnapshot(): RetainedStoreSnapshot {
   return {
     count: states.size,
-    bytes: storedResponseBytes,
-    evictableBytes: residentResponseBytes,
+    bytes: storedResponseBytes + materializedCacheBytes,
+    evictableBytes: residentResponseBytes + materializedCacheBytes,
     pinnedBytes: Math.max(0, storedResponseBytes - residentResponseBytes),
     oldestAt: oldestResidentAt,
   };
 }
 
 export function evictOldestResponseContinuationForBudget(): number {
+  const oldestCached = materializedCache.keys().next().value as string | undefined;
+  if (oldestCached) return deleteMaterializedCacheEntry(oldestCached);
   if (oldestResidentId === undefined) return 0;
   const id = oldestResidentId;
   const entry = states.get(id);
@@ -975,11 +1247,15 @@ export function evictOldestResponseContinuationForBudget(): number {
     : Math.max(0, entry.sizeBytes - replacement.sizeBytes);
 }
 
-function materializeEntry(
+type MaterializedResponseState = Omit<ResidentInput, "parentId">;
+
+function readEntrySegment(
   id: string,
   entry: StoredResponseState,
-): { ok: true; state: ResidentResponseState } | { ok: false; failure: PreviousResponseReplayFailure } {
-  if (entry.kind === "resident") return { ok: true, state: entry };
+): { ok: true; items: unknown[]; payloadBytes: number } | { ok: false; failure: PreviousResponseReplayFailure } {
+  if (entry.kind === "resident") {
+    return { ok: true, items: entry.items, payloadBytes: entry.sizeBytes };
+  }
   if (entry.kind === "spill-failed") {
     return { ok: false, failure: { code: "previous_response_not_found", reason: "spill_failed" } };
   }
@@ -998,42 +1274,121 @@ function materializeEntry(
     schedulePersist();
     return { ok: false, failure };
   }
-  const state = measureResidentEntry(id, {
-    createdAt: result.payload.createdAt,
-    items: result.payload.items,
-    ...(result.payload.providers ? { providers: result.payload.providers } : {}),
-  });
-  if (!state) {
-    spillCounters.readFailures += 1;
-    replaceWithSpillFailure(id, entry);
-    schedulePersist();
-    return { ok: false, failure: { code: "previous_response_not_found", reason: "spill_corrupt" } };
-  }
-  return { ok: true, state };
+  return { ok: true, items: result.payload.items, payloadBytes: entry.spill.payloadBytes };
 }
 
-export function expandPreviousResponseInput(body: unknown): unknown {
+/** Materialize one immutable conversation-DAG path. Checkpoints terminate the walk. */
+function materializeEntry(
+  id: string,
+  entry: StoredResponseState,
+): { ok: true; state: MaterializedResponseState; materializedBytes: number }
+  | { ok: false; failure: PreviousResponseReplayFailure } {
+  const segments: unknown[][] = [];
+  const visited = new Set<string>();
+  let cursorId = id;
+  let cursor = entry;
+  let payloadBytes = 0;
+  const terminalProviders = entry.kind === "spill-failed" ? undefined : entry.providers;
+
+  for (let depth = 0; depth < MAX_RESPONSE_CHAIN_DEPTH; depth += 1) {
+    if (visited.has(cursorId)) {
+      replaceWithSpillFailure(id, entry);
+      schedulePersist();
+      return { ok: false, failure: { code: "previous_response_not_found", reason: "chain_cycle" } };
+    }
+    visited.add(cursorId);
+    const segment = readEntrySegment(cursorId, cursor);
+    if (!segment.ok) return segment;
+    payloadBytes += segment.payloadBytes;
+    if (payloadBytes > responseSpillPayloadCap()) {
+      return { ok: false, failure: { code: "previous_response_not_found", reason: "chain_too_large" } };
+    }
+    segments.push(segment.items);
+
+    const parentId = parentIdOf(cursor);
+    if (!parentId) {
+      return {
+        ok: true,
+        materializedBytes: payloadBytes,
+        state: {
+          createdAt: entry.createdAt,
+          ...(entry.scope ? { scope: entry.scope } : {}),
+          items: segments.reverse().flat(),
+          ...(terminalProviders ? { providers: terminalProviders } : {}),
+        },
+      };
+    }
+    const parent = states.get(parentId);
+    if (!parent || parent.kind === "spill-failed") {
+      replaceWithSpillFailure(id, entry);
+      schedulePersist();
+      return { ok: false, failure: { code: "previous_response_not_found", reason: "chain_missing" } };
+    }
+    cursorId = parentId;
+    cursor = parent;
+  }
+
+  replaceWithSpillFailure(id, entry);
+  schedulePersist();
+  return { ok: false, failure: { code: "previous_response_not_found", reason: "chain_too_deep" } };
+}
+
+function attachResponseScope(id: string, scope: string | undefined): void {
+  if (!validResponseScope(scope)) return;
+  const existing = states.get(id);
+  if (!existing || existing.scope || existing.kind === "spill-failed") return;
+  if (existing.kind === "resident") {
+    const measured = measureResidentEntry(id, { ...existing, scope });
+    if (measured) replaceMapEntry(id, measured, existing);
+    return;
+  }
+  const { sizeBytes: _sizeBytes, ...spill } = existing;
+  const base: Omit<SpilledResponseState, "sizeBytes"> = { ...spill, scope };
+  replaceMapEntry(id, { ...base, sizeBytes: stubSize(id, base) }, existing);
+}
+
+export function expandPreviousResponseInput(body: unknown, scope?: string): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const request = body as Record<string, unknown>;
   const previousId = typeof request.previous_response_id === "string" ? request.previous_response_id : undefined;
   if (!previousId) return body;
   ensureLoaded();
+  attachResponseScope(previousId, scope);
   pruneResponses();
   const previous = states.get(previousId);
   if (!previous) {
     retentionCounters.replayMisses += 1;
     return body;
   }
-  const materialized = materializeEntry(previousId, previous);
+  const cached = previous.kind === "spill" || parentIdOf(previous)
+    ? cachedMaterializedItems(previousId)
+    : undefined;
+  const materialized = cached
+    ? {
+        ok: true as const,
+        materializedBytes: cached.sizeBytes,
+        state: {
+          createdAt: previous.createdAt,
+          ...(previous.scope ? { scope: previous.scope } : {}),
+          items: cached.items,
+          ...(previous.kind !== "spill-failed" && previous.providers ? { providers: previous.providers } : {}),
+        },
+      }
+    : materializeEntry(previousId, previous);
   if (!materialized.ok) {
     replayFailures.set(request, materialized.failure);
     return body;
+  }
+  if (!cached && (previous.kind === "spill" || parentIdOf(previous))) {
+    cacheMaterializedItems(previousId, materialized.state.items, materialized.materializedBytes);
   }
   const expanded = {
     ...request,
     input: [...materialized.state.items, ...inputItems(request.input)],
   };
+  if (validResponseScope(scope)) schedulePersist();
   replayedInputPrefixLengths.set(expanded, materialized.state.items.length);
+  replayedInputPrefixBytes.set(expanded, materialized.materializedBytes);
   return expanded;
 }
 
@@ -1075,10 +1430,20 @@ export interface ResponseStateMetrics {
   spillReadFailures: number;
   headCount: number;
   supersededCount: number;
+  scopedHeadCount: number;
+  scopedConversationCount: number;
+  checkpointCount: number;
+  deltaNodeCount: number;
+  materializedCacheCount: number;
+  materializedCacheBytes: number;
+  materializedCacheHits: number;
+  materializedCacheMisses: number;
   headTtlEvictions: number;
   supersededTtlEvictions: number;
   supersededCapacityEvictions: number;
   emergencyHeadEvictions: number;
+  spillByteEvictions: number;
+  scopedHeadSupersessions: number;
   replayMisses: number;
   persistenceBackend: "sqlite-incremental";
   persistencePendingMutations: number;
@@ -1108,9 +1473,10 @@ export function responseStateMetrics(): ResponseStateMetrics {
   let residentCount = 0;
   let spillStubCount = 0;
   let tombstoneCount = 0;
-  let spillPayloadBytes = 0;
   let headCount = 0;
   let supersededCount = 0;
+  let checkpointCount = 0;
+  let deltaNodeCount = 0;
   const persistence = responseStateStoreStats();
   for (const state of states.values()) {
     const bytes = state.sizeBytes;
@@ -1118,11 +1484,12 @@ export function responseStateMetrics(): ResponseStateMetrics {
     if (state.createdAt < oldestCreatedAt) oldestCreatedAt = state.createdAt;
     if (state.supersededAt === undefined) headCount += 1;
     else supersededCount += 1;
+    if (parentIdOf(state)) deltaNodeCount += 1;
+    else if (state.kind !== "spill-failed") checkpointCount += 1;
     if (state.kind === "resident") {
       residentCount += 1;
     } else if (state.kind === "spill") {
       spillStubCount += 1;
-      spillPayloadBytes += state.spill.payloadBytes;
     } else tombstoneCount += 1;
   }
   return {
@@ -1131,7 +1498,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillStubCount,
     tombstoneCount,
     totalBytes: storedResponseBytes,
-    spillPayloadBytes,
+    spillPayloadBytes: storedSpillPayloadBytes,
     largestBytes,
     oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
     spillWrites: spillCounters.writes,
@@ -1139,6 +1506,14 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillReadFailures: spillCounters.readFailures,
     headCount,
     supersededCount,
+    scopedHeadCount: [...scopedHeads.values()].reduce((sum, ids) => sum + ids.size, 0),
+    scopedConversationCount: scopedHeads.size,
+    checkpointCount,
+    deltaNodeCount,
+    materializedCacheCount: materializedCache.size,
+    materializedCacheBytes,
+    materializedCacheHits: materializationCounters.hits,
+    materializedCacheMisses: materializationCounters.misses,
     ...retentionCounters,
     persistenceBackend: "sqlite-incremental",
     persistencePendingMutations: pendingStateMutations.size,
@@ -1161,7 +1536,7 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean; durable?: boolean },
+  opts?: { force?: boolean; durable?: boolean; scope?: string },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
@@ -1181,6 +1556,18 @@ export function rememberResponseState(
   const previousId = typeof request.previous_response_id === "string"
     ? request.previous_response_id
     : undefined;
+  const requestItems = inputItems(request.input);
+  const replayedPrefixLength = replayedInputPrefixLengths.get(request);
+  const replayedPrefixBytes = replayedInputPrefixBytes.get(request);
+  const replayParent = previousId ? states.get(previousId) : undefined;
+  const canRetainDelta = !!previousId
+    && previousId !== response.id
+    && replayedPrefixLength !== undefined
+    && replayedPrefixLength >= 0
+    && replayedPrefixLength <= requestItems.length
+    && replayParent !== undefined
+    && replayParent.kind !== "spill-failed"
+    && responseDeltaDepth(previousId) < MAX_RESPONSE_DELTA_DEPTH;
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }
     : structuredClone(providerState ?? {});
@@ -1189,9 +1576,15 @@ export function rememberResponseState(
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     });
   }
+  const fullItems = [...requestItems, ...response.output];
   const entry: ResidentInput = {
     createdAt: now(),
-    items: [...inputItems(request.input), ...response.output],
+    ...(validResponseScope(opts?.scope) ? { scope: opts.scope } : {}),
+    ...(canRetainDelta ? { parentId: previousId } : {}),
+    items: [
+      ...(canRetainDelta ? requestItems.slice(replayedPrefixLength) : requestItems),
+      ...response.output,
+    ],
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
     // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
     // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an
@@ -1204,10 +1597,21 @@ export function rememberResponseState(
   // Advance the authoritative head only after the child is replayable. A failed
   // spill write installs a tombstone for the child, but must not age the last
   // known-good parent into the shorter superseded-history window.
+  const storedChild = states.get(response.id);
+  if (storedChild && storedChild.kind !== "spill-failed" && (storedChild.kind === "spill" || parentIdOf(storedChild))) {
+    const deltaBytes = canRetainDelta ? serializedBytes(entry.items) : null;
+    const materializedBytes = canRetainDelta && replayedPrefixBytes !== undefined && deltaBytes !== null
+      // Both values include conservative JSON/metadata overhead. Adding them may
+      // slightly overcount, which is preferable to exceeding the RAM budget.
+      ? replayedPrefixBytes + deltaBytes
+      : undefined;
+    cacheMaterializedItems(response.id, fullItems, materializedBytes);
+  }
   if (
     previousId
     && previousId !== response.id
-    && states.get(response.id)?.kind !== "spill-failed"
+    && storedChild
+    && storedChild.kind !== "spill-failed"
   ) {
     markResponseSuperseded(previousId, now());
   }
@@ -1240,8 +1644,13 @@ export function clearResponseStateMemoryForTests(): void {
   pendingPersistPath = null;
   closeResponseStateStore();
   states.clear();
+  scopedHeads.clear();
+  parentRefCounts.clear();
+  materializedCache.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;
+  storedSpillPayloadBytes = 0;
+  materializedCacheBytes = 0;
   oldestResidentId = undefined;
   oldestResidentAt = null;
   stateRevision = 0;
@@ -1254,12 +1663,17 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writes = 0;
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
+  materializationCounters.hits = 0;
+  materializationCounters.misses = 0;
   retentionCounters.headTtlEvictions = 0;
   retentionCounters.supersededTtlEvictions = 0;
   retentionCounters.supersededCapacityEvictions = 0;
   retentionCounters.emergencyHeadEvictions = 0;
+  retentionCounters.spillByteEvictions = 0;
+  retentionCounters.scopedHeadSupersessions = 0;
   retentionCounters.replayMisses = 0;
   persistAttemptHookForTests = null;
+  spillByteCapOverride = null;
   loaded = false;
 }
 

@@ -192,8 +192,13 @@ describe("GET /api/system/memory", () => {
 	        totalBytes: number; spillPayloadBytes: number; largestBytes: number; oldestAgeMs: number;
 	        spillWrites: number; spillWriteFailures: number; spillReadFailures: number;
 	        headCount: number; supersededCount: number; headTtlEvictions: number;
+	        scopedHeadCount: number; scopedConversationCount: number;
+	        checkpointCount: number; deltaNodeCount: number;
+	        materializedCacheCount: number; materializedCacheBytes: number;
+	        materializedCacheHits: number; materializedCacheMisses: number;
 	        supersededTtlEvictions: number; supersededCapacityEvictions: number;
-	        emergencyHeadEvictions: number; replayMisses: number;
+	        emergencyHeadEvictions: number; spillByteEvictions: number;
+	        scopedHeadSupersessions: number; replayMisses: number;
 	        persistenceBackend: string;
 	      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
@@ -217,7 +222,7 @@ describe("GET /api/system/memory", () => {
     // responseState is a bounded continuation-store attribution block with one allowlisted
     // backend label; every other field is a finite scalar and carries no dynamic identity.
     const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(28);
+    expect(responseStateValues).toHaveLength(38);
     expect(body.responseState.persistenceBackend).toBe("sqlite-incremental");
     expect(responseStateValues.filter(value => value !== body.responseState.persistenceBackend)
       .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);

@@ -375,6 +375,26 @@ export function deleteResponseSpill(ref: ResponseSpillRef): void {
   } catch { /* best effort */ }
 }
 
+/**
+ * Best-effort committed-generation cleanup with one directory durability
+ * barrier for the whole batch. This is equivalent to repeated unlink+fsync for
+ * recovery, but avoids thousands of directory opens/fsyncs when a retention
+ * migration releases an old working set.
+ */
+export function deleteResponseSpills(refs: readonly ResponseSpillRef[]): void {
+  if (refs.length === 0) return;
+  const dir = responseSpillDirectory();
+  let removed = false;
+  for (const ref of refs) {
+    if (!validSpillRef(ref)) continue;
+    try {
+      unlink(join(dir, ref.fileName));
+      removed = true;
+    } catch { /* best effort */ }
+  }
+  if (removed) fsyncDirectoryBestEffort(dir);
+}
+
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
