@@ -13,6 +13,7 @@ import { appendUsageDebug } from "../src/usage/debug";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../src/lib/admission";
+import { MAX_TRACKED_CODEX_WEBSOCKETS } from "../src/codex/websocket-registry";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -75,6 +76,14 @@ describe("management API /api/debug", () => {
       });
       expect(body).toHaveProperty("runtimeOverride");
       expect(body).toHaveProperty("env");
+      expect(body.admission.codexWebSockets).toMatchObject({
+        limit: MAX_TRACKED_CODEX_WEBSOCKETS,
+        active: expect.any(Number),
+        peak: expect.any(Number),
+        admitted: expect.any(Number),
+        rejected: expect.any(Number),
+        releaseMisses: expect.any(Number),
+      });
     } finally {
       await server.stop(true);
     }

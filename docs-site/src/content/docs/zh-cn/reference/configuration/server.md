@@ -32,6 +32,10 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 如果较旧的开发版本在尚未提供备份支持之前修改过了 resume-history 元数据，请运行
 `ocx recover-history --legacy-openai` 强制使用原生提供方恢复。
 
+Responses WebSocket 的准入上限与活跃模型 turn 分开管理。默认允许 1,024 条持久客户端
+连接，可在进程启动时通过 `OPENCODEX_MAX_CODEX_WEBSOCKETS` 调整；超过 8,192 的值会被
+截断。空闲 Codex 会话会保留 WebSocket，但不会占用 active-turn 名额。
+
 ## 远程访问
 
 默认的 `127.0.0.1` 绑定仅限回环地址。像 `0.0.0.0` 这样的非回环地址需要

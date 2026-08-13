@@ -32,6 +32,11 @@ runs helper features around provider requests.
 If an older development build changed resume-history metadata before backup support existed, run
 `ocx recover-history --legacy-openai` to force native-provider recovery.
 
+The Responses WebSocket admission limit is configured separately from active model turns. It
+defaults to 1,024 persistent client connections and can be changed at process startup with
+`OPENCODEX_MAX_CODEX_WEBSOCKETS`; values above 8,192 are clamped. Idle Codex sessions keep their
+WebSocket without consuming an active-turn slot.
+
 ## Remote access
 
 The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` requires

@@ -2,7 +2,18 @@ import type { ServerWebSocket } from "bun";
 import type { WsData } from "../server/ws-bridge";
 import { createAdmissionGate, type AdmissionMetrics, type AdmissionReservation } from "../lib/admission";
 
-export const MAX_TRACKED_CODEX_WEBSOCKETS = 128;
+export const DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS = 1_024;
+export const HARD_MAX_TRACKED_CODEX_WEBSOCKETS = 8_192;
+
+export function codexWebSocketCapacity(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): number {
+  const parsed = Number(env.OPENCODEX_MAX_CODEX_WEBSOCKETS);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS;
+  return Math.min(parsed, HARD_MAX_TRACKED_CODEX_WEBSOCKETS);
+}
+
+export const MAX_TRACKED_CODEX_WEBSOCKETS = codexWebSocketCapacity();
 const websocketGate = createAdmissionGate("codex_websockets", MAX_TRACKED_CODEX_WEBSOCKETS);
 
 export function tryReserveCodexWebSocket(): AdmissionReservation<ServerWebSocket<WsData>> | null {
@@ -24,8 +35,8 @@ export function tryReserveCodexWebSocket(): AdmissionReservation<ServerWebSocket
   };
 }
 
-export function codexWebSocketAdmissionMetrics(): AdmissionMetrics {
-  return websocketGate.metrics();
+export function codexWebSocketAdmissionMetrics(): AdmissionMetrics & { limit: number } {
+  return { ...websocketGate.metrics(), limit: MAX_TRACKED_CODEX_WEBSOCKETS };
 }
 
 const socketsByAccount = new Map<string, Set<ServerWebSocket<WsData>>>();

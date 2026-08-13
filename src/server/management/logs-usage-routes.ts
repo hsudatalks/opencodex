@@ -69,7 +69,7 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
-import { drainAndShutdown } from "../lifecycle";
+import { activeRegistryMetrics, drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -137,7 +137,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/debug" && req.method === "GET") {
-    return jsonResponse(getDebugSettings());
+    return jsonResponse({
+      ...getDebugSettings(),
+      admission: activeRegistryMetrics(),
+    });
   }
 
   if (url.pathname === "/api/debug/logs" && req.method === "GET") {

@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../src/server/lifecycle";
 import {
+  DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS,
+  HARD_MAX_TRACKED_CODEX_WEBSOCKETS,
   MAX_TRACKED_CODEX_WEBSOCKETS,
+  codexWebSocketCapacity,
   getTrackedCodexWebSocketCountForAccount,
   tryReserveCodexWebSocket,
 } from "../src/codex/websocket-registry";
@@ -26,6 +29,14 @@ import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 
 describe("active registry admission", () => {
+  test("Codex WebSocket capacity defaults for many persistent Workbench sessions and remains bounded", () => {
+    expect(codexWebSocketCapacity({})).toBe(DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS);
+    expect(codexWebSocketCapacity({ OPENCODEX_MAX_CODEX_WEBSOCKETS: "2048" })).toBe(2_048);
+    expect(codexWebSocketCapacity({ OPENCODEX_MAX_CODEX_WEBSOCKETS: "999999" })).toBe(HARD_MAX_TRACKED_CODEX_WEBSOCKETS);
+    expect(codexWebSocketCapacity({ OPENCODEX_MAX_CODEX_WEBSOCKETS: "0" })).toBe(DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS);
+    expect(codexWebSocketCapacity({ OPENCODEX_MAX_CODEX_WEBSOCKETS: "invalid" })).toBe(DEFAULT_MAX_TRACKED_CODEX_WEBSOCKETS);
+  });
+
   test("active turn 257 returns structured server_busy before handler work", async () => {
     const leases = Array.from({ length: 256 }, () => tryAdmitTurn());
     const previousHome = process.env.OPENCODEX_HOME;
@@ -58,7 +69,7 @@ describe("active registry admission", () => {
     }
   });
 
-  test("websocket 129 rejects at the real upgrade boundary without entering account registry", async () => {
+  test("one WebSocket beyond the configured capacity rejects before entering account registry", async () => {
     const leases = Array.from({ length: MAX_TRACKED_CODEX_WEBSOCKETS }, () => tryReserveCodexWebSocket());
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-websocket-cap-"));
