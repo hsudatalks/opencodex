@@ -1211,6 +1211,11 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number }>;
+  /**
+   * "failover" keeps the legacy active-key behavior. "balanced" assigns new
+   * conversations across healthy pool entries while preserving conversation affinity.
+   */
+  apiKeyPoolStrategy?: "failover" | "balanced";
   defaultModel?: string;
   models?: string[];
   /**

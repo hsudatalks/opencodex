@@ -472,6 +472,13 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
   }
+  if (
+    raw.apiKeyPoolStrategy !== undefined
+    && raw.apiKeyPoolStrategy !== "failover"
+    && raw.apiKeyPoolStrategy !== "balanced"
+  ) {
+    return `provider ${name} apiKeyPoolStrategy must be failover or balanced`;
+  }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
@@ -560,6 +567,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "allowPrivateNetwork",
       "authMode",
       "apiKeyTransport",
+      "apiKeyPoolStrategy",
       "keyOptional",
       "freeTier",
       "liveModels",

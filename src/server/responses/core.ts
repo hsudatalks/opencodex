@@ -120,6 +120,7 @@ import {
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
 } from "../../providers/key-failover";
+import { balanceProviderApiKey } from "../../providers/api-key-balancer";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -1642,6 +1643,12 @@ async function handleResponsesInner(
       "OpenAI forward continuation state is unavailable or expired; start a new session instead of reusing this previous_response_id.",
     );
   }
+
+  route.provider = await balanceProviderApiKey(
+    route.providerName,
+    route.provider,
+    logCtx.conversationId ?? parsed.options.promptCacheKey,
+  );
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
   // transport-neutral upstream-streaming policy below may force a bounded JSON

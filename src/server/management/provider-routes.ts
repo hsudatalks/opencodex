@@ -148,6 +148,18 @@ function applyProviderPatchFields(
       return { error: "apiKeyTransport must be x-api-key, bearer, or empty to clear" };
     }
   }
+  if (Object.hasOwn(rawBody, "apiKeyPoolStrategy")) {
+    const strategy = rawBody.apiKeyPoolStrategy;
+    if (strategy === "failover" || strategy === "balanced") {
+      next.apiKeyPoolStrategy = strategy;
+      touched = true;
+    } else if (strategy === null || strategy === "") {
+      delete next.apiKeyPoolStrategy;
+      touched = true;
+    } else {
+      return { error: "apiKeyPoolStrategy must be failover, balanced, or null to clear" };
+    }
+  }
   if (Object.hasOwn(rawBody, "note")) {
     if (typeof rawBody.note !== "string") return { error: "note must be a string" };
     const note = rawBody.note.trim();
@@ -339,6 +351,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // let the (possibly new) apiKey join the pool as the active entry.
     const existingPool = config.providers[name]?.apiKeyPool;
     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+    const existingPoolStrategy = config.providers[name]?.apiKeyPoolStrategy;
+    if (existingPoolStrategy && !prov.apiKeyPoolStrategy) prov.apiKeyPoolStrategy = existingPoolStrategy;
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);

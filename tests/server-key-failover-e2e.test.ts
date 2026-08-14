@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { clearKeyCooldowns } from "../src/providers/key-failover";
+import { clearApiKeyBalancerState } from "../src/providers/api-key-balancer";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
@@ -20,6 +21,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-keyfail-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
   clearKeyCooldowns();
+  clearApiKeyBalancerState();
 });
 
 afterEach(() => {
@@ -31,9 +33,88 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   clearKeyCooldowns();
+  clearApiKeyBalancerState();
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test("balanced GLM pool keeps conversation affinity and distributes new conversations", async () => {
+    const originalFetch = globalThis.fetch;
+    const seenKeys: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+      if (url === "https://open.bigmodel.cn/api/monitor/usage/quota/limit") {
+        return Response.json({
+          success: true,
+          data: {
+            limits: [{
+              type: "TOKENS_LIMIT",
+              unit: 3,
+              number: 5,
+              percentage: 10,
+              nextResetTime: 2_000_000_000_000,
+            }],
+          },
+        });
+      }
+      if (url === "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions") {
+        seenKeys.push(key);
+        return Response.json({
+          id: `chatcmpl-${seenKeys.length}`,
+          object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      const config: OcxConfig = {
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "glm",
+        providers: {
+          glm: {
+            adapter: "openai-chat",
+            baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+            authMode: "key",
+            apiKey: "glm-plan-one",
+            apiKeyPool: [
+              { id: "one", key: "glm-plan-one" },
+              { id: "two", key: "glm-plan-two" },
+            ],
+            apiKeyPoolStrategy: "balanced",
+          },
+        },
+      } as OcxConfig;
+      saveConfig(config);
+      server = startServer(0);
+
+      for (const affinity of ["thread-a", "thread-b", "thread-a"]) {
+        const response = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "glm/glm-5.3",
+            input: "hello",
+            stream: false,
+            prompt_cache_key: affinity,
+          }),
+        });
+        expect(response.status).toBe(200);
+      }
+
+      expect(seenKeys).toHaveLength(3);
+      expect(seenKeys[1]).not.toBe(seenKeys[0]);
+      expect(seenKeys[2]).toBe(seenKeys[0]);
+    } finally {
+      await server?.stop(true);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("xAI API-key rotation preserves cache affinity and never adds OAuth CLI headers", async () => {
     const originalFetch = globalThis.fetch;
     const promptCacheKey = "codex-session-high-entropy-429-e2e";

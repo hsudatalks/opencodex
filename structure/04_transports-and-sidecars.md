@@ -332,6 +332,16 @@ once the server observes the client disconnect (Bun propagates it asynchronously
 cancelled with 499 before any replay; because the propagation is async, a replay may precede
 the cancel if the interval elapses first (bounded by the same `attempts` budget).
 
+API-key pools default to the legacy active-key plus 429-failover behavior. Providers that set
+`apiKeyPoolStrategy: "balanced"` select a key per conversation without changing the persisted
+active key. Conversation affinity preserves upstream caches; new conversations use weighted
+least-connections, where each key's live affinity count is normalized by its known remaining
+rolling five-hour quota, with round-robin ties.
+Trusted GLM Coding destinations query each plan's quota endpoint once per minute. Missing quota
+data degrades to even affinity balancing, while exhausted or 429-cooled keys are excluded. The
+balancer retains only hashed conversation identifiers, expires them after six hours, and caps each
+provider at 4,096 affinities.
+
 [Decision Log]
 - 목적과 의도: Prevent Kiro progress from becoming a false final answer, reject invalid empty completion retries, and stop concurrent transient 429s from consuming independent retry budgets.
 - 기존 구현 및 제약 조건: Kiro text has no trustworthy phase; stop metadata arrives only at stream end; the private completion tool is adapter-owned; normal parallel tool traffic must remain parallel; client cancellation must interrupt all waits.

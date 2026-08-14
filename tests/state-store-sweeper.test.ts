@@ -84,6 +84,7 @@ describe("state-store sweeper", () => {
     expect(STATE_STORE_REGISTRATIONS.map(registration => registration.name)).toEqual([
       "subagent-model-health",
       "api-key-cooldowns",
+      "api-key-balancer",
       "combo-target-cooldowns",
       "anthropic-routing-health",
       "xai-refresh-verdicts",
