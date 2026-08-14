@@ -221,6 +221,33 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
+  test("17h. GLM-5.2 Coding Plan requests use the public API-equivalent price", () => {
+    const COST4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+    for (const provider of ["zai", "zhipu-bigmodel-coding"]) {
+      const direct = resolveMatchedPrice(provider, "glm-5.2");
+      expect(direct).toMatchObject({ provider, modelId: "glm-5.2", cost4: COST4 });
+      expect(direct?.sourceRef).toContain("docs.z.ai/guides/overview/pricing");
+
+      const alias = resolveMatchedPrice(provider, "glm-5.2[1m]");
+      expect(alias).toMatchObject({
+        provider,
+        modelId: "glm-5.2[1m]",
+        cost4: COST4,
+        source: "expected",
+        status: "verified-derived",
+      });
+      expect(alias?.sourceRef).toContain("derived alias -> glm-5.2");
+    }
+
+    const estimate = estimateRequestCost({
+      provider: "zhipu-bigmodel-coding",
+      model: "glm-5.2",
+      usageStatus: "reported",
+      usage: { inputTokens: 1_000_000, outputTokens: 1_000_000, cachedInputTokens: 0 },
+    });
+    expect(estimate?.cost.total).toBeCloseTo(5.8, 12);
+  });
+
   test("6. unmatched exact key is null", () => {
     expect(resolveMatchedPrice("no-such-provider", "no-such-model")).toBeNull();
     expect(resolveMatchedPrice("openai", "definitely-not-a-model")).toBeNull();
@@ -261,8 +288,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 51 keys, including Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(51);
+  test("16. shipped overlay membership: 55 keys, including Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(55);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -273,6 +300,10 @@ describe("resolveMatchedPrice", () => {
       "minimax-cn/MiniMax-M2.1-highspeed",
       "deepseek/deepseek-chat",
       "deepseek/deepseek-reasoner",
+      "zai/glm-5.2",
+      "zai/glm-5.2[1m]",
+      "zhipu-bigmodel-coding/glm-5.2",
+      "zhipu-bigmodel-coding/glm-5.2[1m]",
       "google-antigravity/gemini-3.1-pro-low",
       "google-antigravity/gemini-3.1-pro-high",
       "google-antigravity/gemini-pro-agent",

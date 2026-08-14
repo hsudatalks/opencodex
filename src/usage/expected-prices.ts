@@ -40,6 +40,7 @@ const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWri
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
+const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -58,6 +59,7 @@ const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-deta
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
+const GLM_52_PRICING = "https://docs.z.ai/guides/overview/pricing (official GLM-5.2 API list price; USD per 1M tokens; cached-input storage is limited-time free)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
 // is the exit condition the previous Routeway reseller overlay named. Two caveats are
 // deliberately in the source string rather than dropped: the figure comes from Qwen's own
@@ -81,6 +83,13 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // DeepSeek current-generation IDs (verified; cache-hit price mapped to cacheRead).
   { provider: "deepseek", modelId: "deepseek-chat", cost4: { input: 0.27, output: 1.1, cacheRead: 0.07, cacheWrite: 0 }, source: DEEPSEEK_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   { provider: "deepseek", modelId: "deepseek-reasoner", cost4: { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0 }, source: DEEPSEEK_PRICING, verifiedAt: "2026-07-20", status: "verified" },
+  // Z.AI and domestic BigModel Coding Plan are quota subscriptions, so these rows
+  // estimate public API-equivalent value rather than reproducing the subscription bill.
+  // `[1m]` is a local context alias stripped before the request reaches GLM-5.2.
+  { provider: "zai", modelId: "glm-5.2", cost4: GLM_52, source: `public API-equivalent estimate ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived alias -> glm-5.2 ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2", cost4: GLM_52, source: `public API-equivalent estimate ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `public API-equivalent estimate; derived alias -> glm-5.2 ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
   // Google Antigravity effort-suffix variants — derived from the verified base-model
   // price (Google does not publish per-suffix prices; Agent inference bills at the
   // base model's standard rate per the official Billing FAQ).
