@@ -87,6 +87,7 @@ export default function ProviderAuthPanel({
           <CodexAccountPool
             apiBase={apiBase}
             embedded
+            accountModeState={item.nativeMainAccountEnabled === false ? "server" : item.codexAccountMode ?? "pool"}
             controller={codexController}
             onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
           />

@@ -47,6 +47,8 @@ export interface WorkspaceProvider {
   allowPrivateNetwork?: boolean;
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
+  /** False on shared server gateways, where the native Codex login is not a credential source. */
+  nativeMainAccountEnabled?: boolean;
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */

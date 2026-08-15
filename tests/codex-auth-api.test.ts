@@ -2872,6 +2872,43 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);
   });
 
+  test("server deployment lists only managed accounts and rejects the native main id", async () => {
+    const config = makeConfig({
+      deploymentMode: "server",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
+      codexAccounts: [{ id: "pool-server", email: "server@example.test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      activeCodexAccountPinned: MAIN_CODEX_ACCOUNT_ID,
+    });
+
+    const accounts = await listCodexAuthAccounts(config);
+    expect(accounts.map(account => account.id)).toEqual(["pool-server"]);
+    expect(accounts.some(account => account.isMain)).toBe(false);
+
+    const activeReq = new Request("http://localhost/api/codex-auth/active");
+    const active = await handleCodexAuthAPI(activeReq, new URL(activeReq.url), config);
+    expect(await active!.json()).toMatchObject({
+      activeCodexAccountId: null,
+      pinned: false,
+      pinnedAccountId: null,
+    });
+
+    const pauseReq = new Request("http://localhost/api/codex-auth/accounts/pause", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: MAIN_CODEX_ACCOUNT_ID, paused: true }),
+    });
+    const pause = await handleCodexAuthAPI(pauseReq, new URL(pauseReq.url), config);
+    expect(pause!.status).toBe(404);
+  });
+
   test("GET /api/codex-auth/active reports an operator pin but not an automatic pick", async () => {
     const config = makeConfig({ activeCodexAccountId: "work" });
     seedPoolAccount(config, { id: "work", email: "work@example.test" });

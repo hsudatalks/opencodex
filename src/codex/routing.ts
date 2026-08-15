@@ -20,6 +20,7 @@ import {
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, type StoredAccountQuota } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
+import { nativeMainAccountEnabled } from "../deployment-mode";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
@@ -284,7 +285,8 @@ function hasConfiguredPoolAccount(
 export function listLiveCodexAccountIds(config: OcxConfig): ReadonlySet<string> {
   const ids = new Set((config.codexAccounts ?? []).map(account => account.id));
   const openai = config.providers.openai;
-  if (openai && openai.disabled !== true && isCanonicalOpenAiForwardProvider(openai)) {
+  if (nativeMainAccountEnabled(config)
+    && openai && openai.disabled !== true && isCanonicalOpenAiForwardProvider(openai)) {
     ids.add(MAIN_CODEX_ACCOUNT_ID);
   }
   return ids;
@@ -797,10 +799,11 @@ function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Parti
 }
 
 /** Manual selection resets transient routing evidence without bypassing a real 429 cooldown. */
-export function resetCodexRoutingForManualSelection(accountId: string): void {
+export function resetCodexRoutingForManualSelection(accountId?: string): void {
   clearThreadAccountMap();
   // Manual selection is the operator source of truth — drop any automatic runtime cursor.
   runtimeActiveCodexAccountId = undefined;
+  if (!accountId) return;
   // Seed the RR ring so the next unbound new session honors the manually selected account
   // under round-robin (affinity-cleared threads / null threadId). Fill-first already follows
   // config.activeCodexAccountId, which the caller persists before invoking this.

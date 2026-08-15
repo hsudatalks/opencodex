@@ -4,6 +4,7 @@ import { MAIN_CODEX_ACCOUNT_ID, isMainAccountTokenLive } from "./main-account";
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { nativeMainAccountEnabled } from "../deployment-mode";
 
 export interface CodexAccountUsabilityOptions {
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
@@ -22,6 +23,7 @@ export function isCodexAccountUsable(
   options: CodexAccountUsabilityOptions = {},
 ): boolean {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    if (!nativeMainAccountEnabled(config)) return false;
     // Startup recovery owns the physical auth/vault boundary. Never parse or select
     // native __main__ while an encrypted switch journal is pending or inconclusive.
     if (!options.nativeMainSelectionOnly && isNativeMainTrafficBlocked()) return false;

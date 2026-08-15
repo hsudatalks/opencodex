@@ -1045,6 +1045,9 @@ const clientIntegrationsSchema = z.object({
 
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
+  // The credential-ownership boundary fails closed. A typo in a server config must
+  // never silently re-enable reads from the process user's native Codex profile.
+  deploymentMode: z.enum(["local", "server"]).optional().catch("server"),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
   upstreamHostCircuitThreshold: z.number().int()
@@ -2098,8 +2101,16 @@ function loopbackListenerPortError(value: unknown): string | null {
   return null;
 }
 
+function deploymentModeError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const mode = (value as Record<string, unknown>).deploymentMode;
+  if (mode === undefined || mode === "local" || mode === "server") return null;
+  return 'schema_invalid: deploymentMode: must be "local", "server", or omitted';
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
-  const boundaryError = blankHostnameError(value)
+  const boundaryError = deploymentModeError(value)
+    ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)

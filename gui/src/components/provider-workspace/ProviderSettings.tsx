@@ -279,7 +279,7 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
-      {isCanonicalOpenAi && (
+      {isCanonicalOpenAi && item.nativeMainAccountEnabled !== false && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("codexAuth.accountModeTitle")}</span>
           <select

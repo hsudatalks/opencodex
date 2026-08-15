@@ -110,6 +110,14 @@ test("a confirmed mode change sends the exact standalone codexAccountMode patch"
   await act(async () => { root.unmount(); });
 });
 
+test("server deployment hides the local Pool/Direct credential control", async () => {
+  const item = { ...openAiItem("pool"), nativeMainAccountEnabled: false };
+  const { root, container } = await mountSettings(item);
+
+  expect([...container.querySelectorAll("select")].some(select => select.value === "pool" || select.value === "direct")).toBe(false);
+  await act(async () => { root.unmount(); });
+});
+
 test("a cancelled confirmation sends no patch and snaps the select back", async () => {
   const { root, container, patches } = await mountSettings(openAiItem("pool"));
   const select = modeSelect(container);

@@ -17,7 +17,8 @@ import {
   OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "./openai-tiers";
-import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
+import { getProviderRegistryEntry } from "./registry";
+import { effectiveProviderCodexAccountMode } from "../deployment-mode";
 
 export interface OpenAiForwardSidecarCandidate {
   providerName: typeof OPENAI_CODEX_PROVIDER_ID;
@@ -65,7 +66,7 @@ export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiFor
   return [{
     providerName: OPENAI_CODEX_PROVIDER_ID,
     provider: canonicalProvider,
-    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, canonicalProvider) ?? "pool",
+    accountMode: effectiveProviderCodexAccountMode(config, OPENAI_CODEX_PROVIDER_ID, canonicalProvider) ?? "pool",
   }];
 }
 

@@ -12,7 +12,8 @@ import { getAccountCredential, getAccountSet, getCredential } from "../oauth/sto
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
-import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
+import { getProviderRegistryEntry } from "./registry";
+import { effectiveProviderCodexAccountMode } from "../deployment-mode";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
 import {
@@ -121,7 +122,7 @@ function cacheKey(config: OcxConfig): string {
         ? resolveEnvValue(provider.apiKey)?.trim()
         : undefined;
       const activeKeyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "none";
-      return `${name}:${provider.adapter}:${provider.authMode ?? "key"}:${providerCodexAccountMode(name, provider) ?? "none"}:${provider.disabled === true ? "off" : "on"}:${provider.baseUrl}:${activeKeyId}`;
+      return `${name}:${provider.adapter}:${provider.authMode ?? "key"}:${effectiveProviderCodexAccountMode(config, name, provider) ?? "none"}:${provider.disabled === true ? "off" : "on"}:${provider.baseUrl}:${activeKeyId}`;
     })
     .sort()
     .join("|");
@@ -134,7 +135,7 @@ function hasCodexPoolProvider(config: OcxConfig): boolean {
   return Object.entries(config.providers).some(([name, provider]) => (
     provider.disabled !== true
     && isBuiltInChatGptForwardProvider(name, provider)
-    && providerCodexAccountMode(name, provider) !== "direct"
+    && effectiveProviderCodexAccountMode(config, name, provider) !== "direct"
   ));
 }
 
@@ -911,7 +912,7 @@ async function fetchChatGptForwardQuota(
   forceRefresh: boolean,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): Promise<ProviderQuotaReport | null> {
-  if (providerCodexAccountMode(provider, providerConfig) === "direct") {
+  if (effectiveProviderCodexAccountMode(config, provider, providerConfig) === "direct") {
     const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh);
     const quota = snapshot.info.quota
       ? { ...snapshot.info.quota, updatedAt: Date.now() } as ProviderQuota

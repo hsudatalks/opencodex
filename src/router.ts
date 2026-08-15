@@ -12,6 +12,7 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { effectiveProviderCodexAccountMode } from "./deployment-mode";
 import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
@@ -651,6 +652,10 @@ export function routeModel(
   policyEvidence?: PolicyRequestEvidence,
 ): RouteResult {
   const route = routeModelInternal(config, modelId, false, policyEvidence);
+  const effectiveAccountMode = effectiveProviderCodexAccountMode(config, route.providerName, route.provider);
+  if (effectiveAccountMode && route.codexAccountId === undefined) {
+    route.codexAccountMode = effectiveAccountMode;
+  }
   // Policy routes carry a full evaluation trace already; never rebuild it.
   if (route.routeDecision) return route;
   const accountRef = route.codexAccountNamespace;

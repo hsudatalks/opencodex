@@ -203,6 +203,23 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("deploymentMode accepts explicit ownership modes and rejects malformed live writes", () => {
+    const base = getDefaultConfig();
+
+    expect(validateConfigCandidate({ ...base, deploymentMode: "local" })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({ deploymentMode: "local" }),
+    });
+    expect(validateConfigCandidate({ ...base, deploymentMode: "server" })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({ deploymentMode: "server" }),
+    });
+    expect(validateConfigCandidate({ ...base, deploymentMode: "remote" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("deploymentMode"),
+    });
+  });
+
   // A write must not inherit the read path's degrade-to-undefined: dropping a malformed
   // map on load leaves the raw entries in the file to be repaired by hand, but dropping
   // it on a write erases every order the user had set and still reports success.

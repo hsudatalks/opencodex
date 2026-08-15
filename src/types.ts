@@ -577,6 +577,12 @@ export interface OcxClientIntegrationsConfig {
 
 export interface OcxConfig {
   port: number;
+  /**
+   * Runtime credential-ownership boundary. Local mode may use the native Codex login;
+   * server mode is a shared gateway and routes only through managed account stores.
+   * Missing preserves the historical local behavior.
+   */
+  deploymentMode?: "local" | "server";
   /** Maximum usage-log bytes read for one management snapshot. */
   managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;

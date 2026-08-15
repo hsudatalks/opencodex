@@ -15,7 +15,8 @@ import {
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
-import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../deployment-mode";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
@@ -600,12 +601,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       ? getProviderRegistryEntry(name)
       : registryEntryForProviderDestination(provider))?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
-    const codexAccountMode = providerCodexAccountMode(name, provider);
+    const codexAccountMode = effectiveProviderCodexAccountMode(config, name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
+    if (name === "openai" && codexAccountMode) {
+      dto.nativeMainAccountEnabled = nativeMainAccountEnabled(config);
+    }
     providers[name] = dto;
   }
   return {
     port: config.port,
+    deploymentMode: config.deploymentMode ?? "local",
     hostname: config.hostname ?? "127.0.0.1",
     defaultProvider: config.defaultProvider,
     codexAutoStart: codexAutoStartEnabled(config),

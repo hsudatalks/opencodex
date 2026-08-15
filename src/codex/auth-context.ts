@@ -13,6 +13,7 @@ import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { nativeMainAccountEnabled } from "../deployment-mode";
 import {
   codexQuotaAllocatorMode,
   codexQuotaScopeForModel,
@@ -308,6 +309,10 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
+  const mainAccountEnabled = nativeMainAccountEnabled(config);
+  if (!mainAccountEnabled && mode === "direct" && options.accountId === undefined) {
+    mode = "pool";
+  }
   const writerGeneration = captureConfigGeneration();
   const fixedAccountId = options.accountId;
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
@@ -325,7 +330,9 @@ export async function resolveCodexAuthContext(
   let selectionAdmission = options.beginCodexAccountSelection?.();
   const routingSelectionAdmission = selectionAdmission;
   const maxConcurrentTurns = normalizeAccountMaxConcurrentTurns(config.accountMaxConcurrentTurns);
-  const nativeMainReadsForbidden = nativeMainTrafficBlocked || selectionAdmission?.mainProfileDraining === true;
+  const nativeMainReadsForbidden = !mainAccountEnabled
+    || nativeMainTrafficBlocked
+    || selectionAdmission?.mainProfileDraining === true;
   const selectionOptions = {
     // Temporary switch drain keeps the candidate until the atomic claim rejects
     // it. Retained recovery makes main wholly ineligible so pool routing continues.

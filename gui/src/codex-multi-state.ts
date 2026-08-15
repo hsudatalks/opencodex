@@ -1,4 +1,4 @@
-export type CodexAccountModeState = "pool" | "direct" | "disabled" | "absent";
+export type CodexAccountModeState = "pool" | "direct" | "server" | "disabled" | "absent";
 
 export function codexAccountModeState(config: unknown): CodexAccountModeState {
   if (!config || typeof config !== "object") return "absent";
@@ -8,6 +8,11 @@ export function codexAccountModeState(config: unknown): CodexAccountModeState {
   if (!provider || typeof provider !== "object" || Array.isArray(provider)) return "absent";
   const value = provider as { disabled?: unknown; codexAccountMode?: unknown };
   if (value.disabled === true) return "disabled";
+  const deploymentMode = (config as { deploymentMode?: unknown }).deploymentMode;
+  if (deploymentMode === "server"
+    && (value.codexAccountMode === undefined || value.codexAccountMode === "pool" || value.codexAccountMode === "direct")) {
+    return "server";
+  }
   if (value.codexAccountMode === "direct") return "direct";
   if (value.codexAccountMode === undefined || value.codexAccountMode === "pool") return "pool";
   return "absent";

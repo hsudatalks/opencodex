@@ -37,7 +37,7 @@ import type {
 import { visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
-import { providerCodexAccountMode } from "../providers/registry";
+import { effectiveProviderCodexAccountMode } from "../deployment-mode";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
@@ -191,7 +191,7 @@ export function opencodeModelKey(provider: string, id: string): string {
  * chat-completions require the caller's real ChatGPT OAuth bearer, not proxy admission.
  */
 export function opencodeLaunchNativeSlugs(config: OcxConfig): string[] {
-  if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") return [];
+  if (effectiveProviderCodexAccountMode(config, "openai", config.providers?.openai) === "direct") return [];
   return [...visibleNativeSlugs(config)];
 }
 
@@ -298,7 +298,7 @@ export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
   config: OcxConfig,
 ): OpencodeCatalogModel[] {
-  const omitNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
+  const omitNative = effectiveProviderCodexAccountMode(config, "openai", config.providers?.openai) === "direct";
   const seen = new Set<string>();
   const catalog: OpencodeCatalogModel[] = [];
   for (const row of rows) {

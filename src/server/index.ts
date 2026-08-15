@@ -48,7 +48,7 @@ import { scheduleStorageCleanupStartupRun, startStorageCleanupScheduler } from "
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { providerCodexAccountMode } from "../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../deployment-mode";
 import type { StorageCleanupPolicy } from "../types";
 import {
   CodexAccountCooldownError,
@@ -623,15 +623,24 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // CODEX_HOME. When the user has disabled the Codex integration, starting the
   // proxy must not manufacture those Codex artifacts merely to serve other
   // clients; no Codex request can use this lifecycle in that state.
-  const nativeOwnership = inspectNativeCodexOwnership();
-  const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
-    && nativeOwnership.ownership !== "foreign"
-    ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
-    : {
-      homeId: null,
-      settled: Promise.resolve({ status: "ready", homeId: null }),
-      release: async () => {},
-    };
+  const nativeMainLifecycle: NativeMainStartupLifecycle = (() => {
+    if (!nativeMainAccountEnabled(config) || !shouldSyncCodexOnStart(config)) {
+      return {
+        homeId: null,
+        settled: Promise.resolve({ status: "ready", homeId: null }),
+        release: async () => {},
+      };
+    }
+    const nativeOwnership = inspectNativeCodexOwnership();
+    if (nativeOwnership.ownership === "foreign") {
+      return {
+        homeId: null,
+        settled: Promise.resolve({ status: "ready", homeId: null }),
+        release: async () => {},
+      };
+    }
+    return startNativeMainStartupLifecycle(deps.nativeMainStartup);
+  })();
   let server: Server<WsData>;
   let loopbackServer: Server<WsData> | null = null;
   try {
@@ -1584,7 +1593,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     openAiProvider
     && openAiProvider.disabled !== true
     && isCanonicalOpenAiForwardProvider(openAiProvider)
-    && providerCodexAccountMode("openai", openAiProvider) === "pool"
+    && effectiveProviderCodexAccountMode(config, "openai", openAiProvider) === "pool"
   ) {
     import("../codex/auth-api")
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))

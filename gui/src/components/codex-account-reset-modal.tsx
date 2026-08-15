@@ -7,6 +7,7 @@ import { formatCreditDate } from "./codex-account-pool-utils";
 
 export function CodexAccountResetModal({
   resetPopup,
+  openedAt,
   resetConfirm,
   creditDetails,
   creditDetailsLoading,
@@ -17,6 +18,7 @@ export function CodexAccountResetModal({
   onRedeem,
 }: {
   resetPopup: CodexAccountEntry;
+  openedAt: number;
   resetConfirm: boolean;
   creditDetails: { granted_at: string; expires_at: string }[] | null;
   creditDetailsLoading: boolean;
@@ -32,7 +34,7 @@ export function CodexAccountResetModal({
   const cachedExpiryMs = typeof cachedExpiry === "number" && Number.isFinite(cachedExpiry)
     ? (cachedExpiry < 10_000_000_000 ? cachedExpiry * 1000 : cachedExpiry)
     : 0;
-  const cachedExpiryIso = cachedExpiryMs > Date.now()
+  const cachedExpiryIso = cachedExpiryMs > openedAt
     ? new Date(cachedExpiryMs).toISOString()
     : null;
 

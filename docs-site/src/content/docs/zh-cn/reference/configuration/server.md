@@ -11,6 +11,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理监听端口。 |
+| `deploymentMode?` | `"local" \| "server"` | `"local"` | 凭据归属边界。服务器模式只使用托管的 Codex 账号池，并从路由、API、selector 和仪表盘中移除进程用户的原生主账号。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
 | `proxy?` | `string` | — | 出站 HTTP(S) 代理 URL，或 `${ENV_VAR}`。仅当 `HTTP_PROXY` / `HTTPS_PROXY` 未设置时才会应用；回环地址始终保留在 `NO_PROXY` 中。 |
 | `stallTimeoutSec?` | `number` | `300` | 在上游没有数据之前可等待的秒数，超过后返回 `response.incomplete`。最小值为 1。 |
@@ -35,6 +36,27 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 Responses WebSocket 的准入上限与活跃模型 turn 分开管理。默认允许 1,024 条持久客户端
 连接，可在进程启动时通过 `OPENCODEX_MAX_CODEX_WEBSOCKETS` 调整；超过 8,192 的值会被
 截断。空闲 Codex 会话会保留 WebSocket，但不会占用 active-turn 名额。
+
+## 部署模式
+
+共享网关部署应设置 `deploymentMode: "server"`：
+
+```json
+{
+  "deploymentMode": "server",
+  "hostname": "0.0.0.0",
+  "port": 10100
+}
+```
+
+服务器模式把托管账号池作为网关唯一拥有的 Codex 订阅凭据。服务用户 `$CODEX_HOME` 中的
+原生 profile 不会被读取、预热、列出、路由，也不会再以 `__main__` 暴露；遗留的主账号
+selector 和 active selection 会被忽略。即使旧配置仍包含 `codexAccountMode: "direct"`，规范
+`openai` provider 的实际模式也会强制为 Pool。
+
+该设置刻意与 `hostname` 分离。绑定到 `0.0.0.0` 只控制网络暴露和认证，本身不改变凭据
+归属。省略 `deploymentMode` 会保留本地桌面模式及其原生主账号。手工编辑成非法值时会安全
+降级为服务器模式，而管理接口写入非法值会直接被拒绝。
 
 ## 远程访问
 

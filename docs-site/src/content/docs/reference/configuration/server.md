@@ -11,6 +11,7 @@ runs helper features around provider requests.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy listen port. |
+| `deploymentMode?` | `"local" \| "server"` | `"local"` | Credential-ownership boundary. Server mode uses only managed Codex pool accounts and removes the process user's native main account from routing, APIs, selectors, and the dashboard. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | Outbound HTTP(S) proxy URL or `${ENV_VAR}`. Applied to `HTTP_PROXY` / `HTTPS_PROXY` only when those variables are unset; loopback remains in `NO_PROXY`. |
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
@@ -36,6 +37,29 @@ The Responses WebSocket admission limit is configured separately from active mod
 defaults to 1,024 persistent client connections and can be changed at process startup with
 `OPENCODEX_MAX_CODEX_WEBSOCKETS`; values above 8,192 are clamped. Idle Codex sessions keep their
 WebSocket without consuming an active-turn slot.
+
+## Deployment mode
+
+Set `deploymentMode` to `"server"` for a shared gateway deployment:
+
+```json
+{
+  "deploymentMode": "server",
+  "hostname": "0.0.0.0",
+  "port": 10100
+}
+```
+
+Server mode makes managed pool accounts the only Codex subscription credentials owned by the
+gateway. The native profile in the service user's `$CODEX_HOME` is not read, warmed, listed, routed,
+or exposed as `__main__`; stale main-account selectors and active selections are ignored. The
+canonical `openai` provider is effectively Pool-only, even if an old config still says
+`codexAccountMode: "direct"`.
+
+This setting is deliberately independent of `hostname`. Binding to `0.0.0.0` controls network
+exposure and authentication; it does not by itself change credential ownership. Omitting
+`deploymentMode` preserves the local desktop behavior and its native main account. An invalid
+hand-edited value fails closed as server mode, while management writes reject it.
 
 ## Remote access
 

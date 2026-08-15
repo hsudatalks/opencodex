@@ -10,6 +10,17 @@ describe("OpenAI provider account-mode presentation state", () => {
     expect(codexAccountModeState({ providers: { openai: {} } })).toBe("pool");
   });
 
+  test("treats server deployment as a distinct pool-only presentation state", () => {
+    expect(codexAccountModeState({
+      deploymentMode: "server",
+      providers: { openai: { codexAccountMode: "direct" } },
+    })).toBe("server");
+    expect(codexAccountModeState({
+      deploymentMode: "server",
+      providers: { openai: { disabled: true, codexAccountMode: "direct" } },
+    })).toBe("disabled");
+  });
+
   test("fails malformed and inherited provider values conservatively", () => {
     expect(codexAccountModeState({ providers: { openai: "invalid" } })).toBe("absent");
     expect(codexAccountModeState({ providers: { openai: { codexAccountMode: "invalid" } } })).toBe("absent");

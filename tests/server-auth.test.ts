@@ -442,6 +442,23 @@ describe("server local API auth", () => {
     expect(dto.providers.openai.disabled).toBeUndefined();
   });
 
+  test("safeConfigDTO exposes the server credential boundary without a native main account", () => {
+    const dto = safeConfigDTO({
+      ...config("0.0.0.0"),
+      deploymentMode: "server",
+      providers: { openai: canonicalDirect },
+    }) as {
+      deploymentMode: string;
+      providers: Record<string, Record<string, unknown>>;
+    };
+
+    expect(dto.deploymentMode).toBe("server");
+    expect(dto.providers.openai).toMatchObject({
+      codexAccountMode: "pool",
+      nativeMainAccountEnabled: false,
+    });
+  });
+
   test("safeConfigDTO exposes keyOptional for saved free-tier providers", () => {
     const dto = safeConfigDTO({
       ...config("127.0.0.1"),

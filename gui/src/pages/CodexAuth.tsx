@@ -18,6 +18,7 @@ export function OpenAiAccountModeBanner({
   onEnable: () => void;
 }) {
   const t = useT();
+  if (state === "server") return null;
   return (
     <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
       <div className="row">
@@ -177,7 +178,11 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <CodexAccountPool apiBase={apiBase} accountModeState={accountModeState} banner={banner} />
+      <CodexAccountPool
+        apiBase={apiBase}
+        accountModeState={accountModeState}
+        banner={accountModeState === "server" ? null : banner}
+      />
       <DefaultModeRequestUserInputSetting apiBase={apiBase} />
     </>
   );

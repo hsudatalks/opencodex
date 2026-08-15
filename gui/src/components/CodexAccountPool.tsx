@@ -68,6 +68,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
+  const [resetPopupOpenedAt, setResetPopupOpenedAt] = useState(0);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
@@ -221,6 +222,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   const openResetPopup = async (account: CodexAccountEntry) => {
+    setResetPopupOpenedAt(Date.now());
     setResetPopup(account);
     setResetConfirm(false);
     setCreditDetails(null);
@@ -291,25 +293,27 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
       {!(loadState === "loading" && accounts.length === 0) && (
         <>
-          <CodexAccountPoolMainCard
-            t={t}
-            main={main}
-            isMainActive={isMainActive}
-            accountModeState={accountModeState}
-            threshold={autoSwitchThreshold}
-            activeTurns={activeTurnsByAccount.__main__ ?? 0}
-            switchActionLabel={switchActionLabel}
-            onSwitch={setConfirm}
-            onTogglePause={togglePaused}
-            pauseUpdatingId={pauseUpdatingId}
-            pauseBusy={pauseBusy}
-            onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
-            fastModeUpdatingId={fastModeUpdatingId}
-            pinnedId={activePinnedId}
-            onOpenReset={openResetPopup}
-            onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
-            doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
-          />
+          {main && (
+            <CodexAccountPoolMainCard
+              t={t}
+              main={main}
+              isMainActive={isMainActive}
+              accountModeState={accountModeState}
+              threshold={autoSwitchThreshold}
+              activeTurns={activeTurnsByAccount.__main__ ?? 0}
+              switchActionLabel={switchActionLabel}
+              onSwitch={setConfirm}
+              onTogglePause={togglePaused}
+              pauseUpdatingId={pauseUpdatingId}
+              pauseBusy={pauseBusy}
+              onFastModeChange={(entry, enabled) => { void changeFastMode(entry, enabled); }}
+              fastModeUpdatingId={fastModeUpdatingId}
+              pinnedId={activePinnedId}
+              onOpenReset={openResetPopup}
+              onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
+              doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+            />
+          )}
 
           <div className="section-sep">
             <span className="section-label">{t("codexAuth.accountPool")}</span>
@@ -392,6 +396,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       {resetPopup && (
         <CodexAccountResetModal
           resetPopup={resetPopup}
+          openedAt={resetPopupOpenedAt}
           resetConfirm={resetConfirm}
           creditDetails={creditDetails}
           creditDetailsLoading={creditDetailsLoading}

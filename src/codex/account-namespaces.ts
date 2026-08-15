@@ -16,6 +16,7 @@ import {
   codexProviderNamespaceKey,
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./account-namespace-match";
+import { nativeMainAccountEnabled } from "../deployment-mode";
 
 export { isValidCodexAccountNamespaceTarget } from "./account-namespace-match";
 
@@ -87,7 +88,7 @@ function occupiedNamespaces(
 
 /** Build an initial account-selector map without deriving public selectors from aliases or ids. */
 export function defaultCodexAccountNamespaces(
-  config: Pick<OcxConfig, "codexAccounts" | "combos" | "providers" | "routingProfiles">,
+  config: Pick<OcxConfig, "deploymentMode" | "codexAccounts" | "combos" | "providers" | "routingProfiles">,
 ): Record<string, string> {
   const namespaces: Record<string, string> = {};
   const used = occupiedNamespaces(config);
@@ -99,7 +100,9 @@ export function defaultCodexAccountNamespaces(
   );
   for (const candidate of privateCandidates) used.add(candidate);
 
-  namespaces[claimNamespace("main", used)] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
+  if (nativeMainAccountEnabled(config)) {
+    namespaces[claimNamespace("main", used)] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
+  }
   for (const account of accounts) {
     if (account.isMain || !isValidCodexAccountId(account.id)) continue;
     const namespace = claimNamespace(defaultPublicAccountSelector(account, privateCandidates), used);
@@ -116,6 +119,7 @@ export function initializeDefaultCodexAccountNamespaces(
   config: Pick<
     OcxConfig,
     | "codexAccountPickerEnabled"
+    | "deploymentMode"
     | "codexAccountNamespaces"
     | "codexAccounts"
     | "combos"
@@ -177,9 +181,10 @@ function normalizeCodexAccountNamespaceTarget(accountId: string): string {
 }
 
 export function codexAccountNamespaceEntries(
-  config: Pick<OcxConfig, "codexAccountNamespaces">,
+  config: Pick<OcxConfig, "deploymentMode" | "codexAccountNamespaces">,
 ): Array<[string, string]> {
   return Object.entries(config.codexAccountNamespaces ?? {})
+    .filter(([, accountId]) => nativeMainAccountEnabled(config) || !isMainCodexAccountTarget(accountId))
     .map(([namespace, accountId]) => [namespace, normalizeCodexAccountNamespaceTarget(accountId)]);
 }
 

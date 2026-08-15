@@ -1,6 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { loadConfig } from "../config";
-import { providerCodexAccountMode } from "../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../deployment-mode";
 import type { OcxConfig } from "../types";
 import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdClearCooldown, cmdPriority, cmdRefresh, cmdRemove } from "./account-extended";
 import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
@@ -160,7 +160,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     rows.push(...r.rows);
     if (t.type === "codex") {
       if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
-      if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
+      if (effectiveProviderCodexAccountMode(config, "openai", config.providers?.openai) === "direct") {
         notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
       }
     }
@@ -281,6 +281,11 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "clear-cooldown") return await cmdClearCooldown(rest, deps);
     if (sub === "add-key") return await cmdAddKey(rest, deps);
     if (sub === "main") {
+      const config = deps.loadConfigImpl?.() ?? loadConfig();
+      if (!nativeMainAccountEnabled(config)) {
+        console.error("account: native main profiles are unavailable in server deployment mode");
+        return 1;
+      }
       const { cmdNativeMainAccount } = await import("./account-main");
       return await cmdNativeMainAccount(rest, deps);
     }

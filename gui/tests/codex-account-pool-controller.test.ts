@@ -50,6 +50,12 @@ test("main and added account cards expose the same persisted pause control", asy
   expect(addedCards).toContain("saving={pauseUpdatingId === a.id}");
 });
 
+test("the native main card exists only when the server returns a main account", async () => {
+  const pool = await read("../src/components/CodexAccountPool.tsx");
+
+  expect(pool).toMatch(/\{main && \(\s*<CodexAccountPoolMainCard/);
+});
+
 test("account cards omit selection order while routing priority remains safe", async () => {
   const pool = await read("../src/components/CodexAccountPool.tsx");
   const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");

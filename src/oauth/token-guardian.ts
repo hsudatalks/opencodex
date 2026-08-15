@@ -28,7 +28,7 @@ import {
 import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
-import { providerCodexAccountMode } from "../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../deployment-mode";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { tryAcquireNativeMainProfileClaim } from "../codex/native-main-admission";
 
@@ -174,8 +174,8 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
     && isCanonicalOpenAiForwardProvider(openai)
     && resolveRefreshPolicy(OPENAI_CODEX_PROVIDER_ID, config) === "proactive"
   ) {
-    const mode = providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) ?? "pool";
-    if (opts.codexWarmupEnabled) {
+    const mode = effectiveProviderCodexAccountMode(config, OPENAI_CODEX_PROVIDER_ID, openai) ?? "pool";
+    if (opts.codexWarmupEnabled && nativeMainAccountEnabled(config)) {
       const key = `codex:${MAIN_CODEX_ACCOUNT_ID}`;
       if (!inBackoff(key, nowMs)) {
         tasks.push(async () => {

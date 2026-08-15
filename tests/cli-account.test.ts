@@ -363,6 +363,16 @@ async function run(args: string[], deps: AccountDeps = defaultDeps()): Promise<C
   return { code, stdout, stderr, output: [stdout, stderr].filter(Boolean).join("\n") };
 }
 
+test("server deployment rejects native main profile commands before loading that subsystem", async () => {
+  const result = await run(["main", "list"], {
+    ...defaultDeps(),
+    loadConfigImpl: () => ({ ...fixtureConfig(), deploymentMode: "server" }),
+  });
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("native main profiles are unavailable in server deployment mode");
+});
+
 beforeAll(() => {
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: mockManagementApi });
   baseUrl = `http://127.0.0.1:${server.port}`;

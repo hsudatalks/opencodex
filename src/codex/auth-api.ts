@@ -36,7 +36,6 @@ import {
   getCodexQuotaAllocationSnapshot,
   getCodexQuotaAllocatorMetrics,
   getCodexQuotaRoutingSnapshot,
-  isEffectiveCodexAccountPinned,
   reconcileCodexActiveAfterExclusion,
   resetCodexRoutingForManualSelection,
   settleCodexQuotaRecoveryProbe,
@@ -99,7 +98,7 @@ import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./
 export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, OcxConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
-import { providerCodexAccountMode } from "../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../deployment-mode";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import {
   oauthAccountHealthFields,
@@ -254,6 +253,9 @@ async function withResetCreditAuth<T>(
   operation: (auth: ResetCreditAuth) => Promise<T>,
 ): Promise<{ ok: true; value: T } | { ok: false; response: Response }> {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    if (!nativeMainAccountEnabled(runtimeConfig)) {
+      return { ok: false, response: jsonResponse({ error: "Native main account is unavailable in server deployment mode" }, 404) };
+    }
     if (hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
       return { ok: false, response: jsonResponse({ error: "Remove the legacy __main__ pool row before using the Desktop account" }, 409) };
     }
@@ -962,7 +964,7 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
   if (!openai
     || openai.disabled === true
     || !isCanonicalOpenAiForwardProvider(openai)
-    || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool") return;
+    || effectiveProviderCodexAccountMode(config, OPENAI_CODEX_PROVIDER_ID, openai) !== "pool") return;
   if (cooldownRecoveryInFlight) return cooldownRecoveryInFlight;
   cooldownRecoveryInFlight = (async () => {
     const claims = claimDueCodexQuotaRecoveryProbes(config, POOL_QUOTA_REFRESH_CONCURRENCY, now);
@@ -1035,7 +1037,7 @@ export async function primeCodexPoolQuotas(
     !openai
     || openai.disabled === true
     || !isCanonicalOpenAiForwardProvider(openai)
-    || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
+    || effectiveProviderCodexAccountMode(config, OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
   if (primeInFlight) return primeInFlight;
   primeInFlight = (async () => {
@@ -1046,6 +1048,7 @@ export async function primeCodexPoolQuotas(
       return !q || Date.now() - q.updatedAt >= POOL_CACHE_TTL;
     });
     const primeMain = async () => {
+      if (!nativeMainAccountEnabled(runtimeConfig)) return;
       const mainLease = tryAcquireNativeMainPrimeLease();
       if (!mainLease) return;
       try {
@@ -1095,8 +1098,10 @@ export function clearCodexCooldownRecoveryProbeState(): void {
   cooldownRecoveryInFlight = null;
 }
 
-export function effectiveCodexAuthAccountId(config: OcxConfig): string {
-  return getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID;
+export function effectiveCodexAuthAccountId(config: OcxConfig): string | undefined {
+  const active = getEffectiveActiveCodexAccountId(config);
+  if (active && (active !== MAIN_CODEX_ACCOUNT_ID || nativeMainAccountEnabled(config))) return active;
+  return nativeMainAccountEnabled(config) ? MAIN_CODEX_ACCOUNT_ID : undefined;
 }
 
 export interface CodexAuthAccountsSnapshot {
@@ -1110,7 +1115,8 @@ export async function listCodexAuthAccountsSnapshot(
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
-  const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1);
+  const includeMain = nativeMainAccountEnabled(runtimeConfig);
+  const mainResult = includeMain ? await fetchMainAccountInfoAttempt(forceRefresh, 1) : null;
   const refreshedPool = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
     const cred = getCodexAccountCredential(account.id);
     let quotaResult: PoolQuotaResult;
@@ -1177,41 +1183,44 @@ export async function listCodexAuthAccountsSnapshot(
       isCodexAccountFastModeEnabled(runtimeConfig, accountId),
     )];
   });
-  const fetchedMainGeneration = mainResult.identityGeneration ?? captureMainAccountIdentityGeneration();
-  const mainSnapshotLive = isMainAccountIdentityGenerationLive(fetchedMainGeneration);
-  const mainInfo = mainSnapshotLive ? mainResult.info : EMPTY_MAIN_ACCOUNT_INFO;
-  const hasMainCredential = mainSnapshotLive && mainResult.credentialChecked
-    ? mainResult.hasCredential
-    : getMainAccountCredentialPresence() ?? false;
-  const mainNeedsReauth = (mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential)
-    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-  const mainHealth = projectCodexAccountHealth({
-    accountId: MAIN_CODEX_ACCOUNT_ID,
-    needsReauth: mainNeedsReauth,
-  });
-  const main: Omit<CodexAuthAccountDto, "quotaRouting"> = {
-    id: MAIN_CODEX_ACCOUNT_ID,
-    email: maskEmail(mainInfo.email) ?? "Codex App login",
-    plan: mainInfo.plan,
-    isMain: true,
-    paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
-    priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
-    fastModeEnabled: isCodexAccountFastModeEnabled(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
-    hasCredential: hasMainCredential,
-    needsReauth: mainNeedsReauth,
-    quota: mainInfo.quota ? {
-      ...quotaForPlan({
-        ...mainInfo.quota,
-        updatedAt: getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.updatedAt ?? Date.now(),
-      }, mainInfo.plan),
-    } : null,
-    ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
-  };
+  const fetchedMainGeneration = mainResult?.identityGeneration ?? captureMainAccountIdentityGeneration();
+  const mainSnapshotLive = includeMain && isMainAccountIdentityGenerationLive(fetchedMainGeneration);
+  let main: Omit<CodexAuthAccountDto, "quotaRouting"> | null = null;
+  if (includeMain && mainResult) {
+    const mainInfo = mainSnapshotLive ? mainResult.info : EMPTY_MAIN_ACCOUNT_INFO;
+    const hasMainCredential = mainSnapshotLive && mainResult.credentialChecked
+      ? mainResult.hasCredential
+      : getMainAccountCredentialPresence() ?? false;
+    const mainNeedsReauth = (mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential)
+      || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    const mainHealth = projectCodexAccountHealth({
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      needsReauth: mainNeedsReauth,
+    });
+    main = {
+      id: MAIN_CODEX_ACCOUNT_ID,
+      email: maskEmail(mainInfo.email) ?? "Codex App login",
+      plan: mainInfo.plan,
+      isMain: true,
+      paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      fastModeEnabled: isCodexAccountFastModeEnabled(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      hasCredential: hasMainCredential,
+      needsReauth: mainNeedsReauth,
+      quota: mainInfo.quota ? {
+        ...quotaForPlan({
+          ...mainInfo.quota,
+          updatedAt: getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.updatedAt ?? Date.now(),
+        }, mainInfo.plan),
+      } : null,
+      ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
+    };
+  }
   const quotaRoutingByAccount = new Map(
     getCodexQuotaRoutingSnapshot(runtimeConfig, Date.now(), "shared")
       .map(({ accountId, ...routing }) => [accountId, routing] as const),
   );
-  const accounts = [main, ...withQuota].map(account => ({
+  const accounts = [...(main ? [main] : []), ...withQuota].map(account => ({
     ...account,
     quotaRouting: quotaRoutingByAccount.get(account.id) ?? {
       urgency: null,
@@ -1247,7 +1256,8 @@ async function pauseExhaustedCodexAccounts(
   persistPausedAccounts: () => void,
 ): Promise<PauseExhaustedResult> {
   const poolAccounts = (config.codexAccounts ?? []).filter(account => !account.isMain);
-  const nativeMainLease = tryAcquireNativeMainProfileClaim();
+  const includeMain = nativeMainAccountEnabled(config);
+  const nativeMainLease = includeMain ? tryAcquireNativeMainProfileClaim() : null;
   try {
     const performPause = async (mainLease?: AdmissionLease): Promise<PauseExhaustedResult> => {
       const mainWork = async (): Promise<{
@@ -1255,6 +1265,7 @@ async function pauseExhaustedCodexAccounts(
         checkedAccountCount: number;
         failedAccountCount: number;
       }> => {
+        if (!includeMain) return { shouldPause: false, checkedAccountCount: 0, failedAccountCount: 0 };
         if (!mainLease) return { shouldPause: false, checkedAccountCount: 0, failedAccountCount: 1 };
         const mainResult = await fetchMainAccountInfoAttempt(true, 1, mainLease, true);
         if (!mainResult.credentialChecked || !mainResult.hasCredential) {
@@ -1338,6 +1349,11 @@ export async function handleCodexAuthAPI(
   url: URL,
   config: OcxConfig,
 ): Promise<Response | null> {
+  const rejectsNativeMain = (accountId: string): Response | null => (
+    accountId === MAIN_CODEX_ACCOUNT_ID && !nativeMainAccountEnabled(getRuntimeConfig(config))
+      ? jsonResponse({ error: "Native main account is unavailable in server deployment mode" }, 404)
+      : null
+  );
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -1409,6 +1425,8 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { id?: unknown; alias?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
+    const mainRejected = rejectsNativeMain(id);
+    if (mainRejected) return mainRejected;
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
     if (id === MAIN_CODEX_ACCOUNT_ID) return jsonResponse({ error: "Main Codex account alias is not configurable" }, 400);
     if (!isValidCodexAccountId(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
@@ -1427,6 +1445,8 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts/pause" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { id?: unknown; paused?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
+    const mainRejected = rejectsNativeMain(id);
+    if (mainRejected) return mainRejected;
     if (id !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
@@ -1455,6 +1475,8 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts/fast-mode" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { id?: unknown; enabled?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
+    const mainRejected = rejectsNativeMain(id);
+    if (mainRejected) return mainRejected;
     if (!isCodexAccountFastModeKey(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
@@ -1484,6 +1506,8 @@ export async function handleCodexAuthAPI(
     }
     const body = parsedBody as { id?: unknown; priority?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
+    const mainRejected = rejectsNativeMain(id);
+    if (mainRejected) return mainRejected;
     if (!isCodexAccountPriorityKey(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
@@ -1557,6 +1581,8 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts/clear-cooldown" && req.method === "POST") {
     const body = await req.json().catch(() => ({})) as { id?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
+    const mainRejected = rejectsNativeMain(id);
+    if (mainRejected) return mainRejected;
     if (id !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
@@ -1567,11 +1593,14 @@ export async function handleCodexAuthAPI(
     let body: { accountId: string | null };
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     const runtimeConfig = getRuntimeConfig(config);
-    const targetAccountId = body.accountId ?? MAIN_CODEX_ACCOUNT_ID;
+    const mainRejected = body.accountId == null ? null : rejectsNativeMain(body.accountId);
+    if (mainRejected) return mainRejected;
+    const targetAccountId = body.accountId
+      ?? (nativeMainAccountEnabled(runtimeConfig) ? MAIN_CODEX_ACCOUNT_ID : undefined);
     if (body.accountId === MAIN_CODEX_ACCOUNT_ID && hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
       return jsonResponse({ error: "Remove the legacy __main__ pool row before selecting the Desktop account" }, 409);
     }
-    if (isCodexAccountPaused(runtimeConfig, targetAccountId)) {
+    if (targetAccountId && isCodexAccountPaused(runtimeConfig, targetAccountId)) {
       return jsonResponse({ error: "Account is paused" }, 409);
     }
     if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
@@ -1589,7 +1618,7 @@ export async function handleCodexAuthAPI(
     // `isEffectiveCodexAccountPinned` reports as unpinned while the tier filter still
     // honours it as a ceiling — invisibly capping the pool at the main account's tier.
     if (body.accountId == null) clearCodexAccountPin(runtimeConfig);
-    else setCodexAccountPin(runtimeConfig, targetAccountId);
+    else setCodexAccountPin(runtimeConfig, targetAccountId!);
     resetCodexRoutingForManualSelection(targetAccountId);
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true, activeCodexAccountId: body.accountId, appliesImmediately: true });
@@ -1599,15 +1628,21 @@ export async function handleCodexAuthAPI(
     const runtimeConfig = getRuntimeConfig(config);
     const now = Date.now();
     const activeTurnsByAccount = activeCodexAccountTurnCounts();
+    const effectiveActiveId = effectiveCodexAuthAccountId(runtimeConfig) ?? null;
+    const storedPinnedId = pinnedCodexAccountId(runtimeConfig);
+    const publicPinnedId = storedPinnedId === MAIN_CODEX_ACCOUNT_ID
+      && !nativeMainAccountEnabled(runtimeConfig)
+      ? null
+      : storedPinnedId ?? null;
     return jsonResponse({
-      activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
-      pinned: isEffectiveCodexAccountPinned(runtimeConfig),
+      activeCodexAccountId: effectiveActiveId,
+      pinned: publicPinnedId !== null && publicPinnedId === effectiveActiveId,
       // Which account carries the pin, not just whether the active one does. Under
       // round-robin or fill-first the pin caps the tier ceiling at its own tier while the
       // strategy cursor moves freely inside that tier, so `pinned` alone goes false on a
       // sibling's turn even though the pin is still suppressing every higher tier. The id
       // lets a surface mark the account the operator actually chose.
-      pinnedAccountId: pinnedCodexAccountId(runtimeConfig) ?? null,
+      pinnedAccountId: publicPinnedId,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
@@ -1739,6 +1774,8 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/reset-credits" && req.method === "GET") {
     const accountId = url.searchParams.get("accountId");
     if (!accountId) return jsonResponse({ error: "accountId required" }, 400);
+    const mainRejected = rejectsNativeMain(accountId);
+    if (mainRejected) return mainRejected;
 
     try {
       const result = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
@@ -1776,6 +1813,8 @@ export async function handleCodexAuthAPI(
     const body = (await req.json().catch(() => ({}))) as { accountId?: string };
     if (!body.accountId) return jsonResponse({ error: "accountId required" }, 400);
     const accountId = body.accountId;
+    const mainRejected = rejectsNativeMain(accountId);
+    if (mainRejected) return mainRejected;
     const quotaBeforeReset = getAccountQuota(accountId);
     const resetPlan = accountId === MAIN_CODEX_ACCOUNT_ID
       ? getMainAccountPlan()

@@ -15,6 +15,7 @@ export interface ProvidersConfig {
     disabled?: boolean;
     note?: string;
     codexAccountMode?: "direct" | "pool";
+    nativeMainAccountEnabled?: boolean;
   }>;
 }
 

@@ -28,7 +28,8 @@ import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
+import { providerMatchesRegistryTransport } from "../../providers/registry";
+import { effectiveProviderCodexAccountMode, nativeMainAccountEnabled } from "../../deployment-mode";
 import {
   extractModelEnvelopeRows,
   extractProviderModelItems,
@@ -305,7 +306,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
-      codexAccountMode: providerCodexAccountMode(name, p),
+      codexAccountMode: effectiveProviderCodexAccountMode(config, name, p),
+      ...(name === "openai" && effectiveProviderCodexAccountMode(config, name, p)
+        ? { nativeMainAccountEnabled: nativeMainAccountEnabled(config) }
+        : {}),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
   }
@@ -387,6 +391,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const mode = rawBody.codexAccountMode;
       if (mode !== "pool" && mode !== "direct") {
         return jsonResponse({ error: "codexAccountMode must be pool or direct" }, 400);
+      }
+      if (mode === "direct" && !nativeMainAccountEnabled(config)) {
+        return jsonResponse({ error: "direct mode is unavailable in server deployment mode" }, 409);
       }
       const provider = config.providers.openai;
       if (!provider || !isCanonicalOpenAiForwardProvider(provider)) {
