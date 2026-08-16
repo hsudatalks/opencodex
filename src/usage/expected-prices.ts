@@ -24,6 +24,8 @@ export interface ExpectedPriceOverlay {
   provider: string;
   modelId: string;
   cost4: Cost4;
+  /** Optional image-input rate when a model bills text and image input differently. */
+  imageInput?: number;
   source: string;
   verifiedAt: string;
   status: ExpectedPriceStatus;
@@ -40,7 +42,8 @@ const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWri
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
-const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 1.4 };
+const GPT_IMAGE_2: Cost4 = { input: 5, output: 30, cacheRead: 1.25, cacheWrite: 5 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -58,8 +61,10 @@ const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
-const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
-const GLM_52_PRICING = "https://docs.z.ai/guides/overview/pricing (official GLM-5.2 API list price; USD per 1M tokens; cached-input storage is limited-time free)";
+const KIMI_PRICING = "https://platform.kimi.com/ (official K3 table: CNY 20 input / 100 output / 2 cache-hit per MTok; converted at fixed CNY 6.6667/USD for stable USD estimates; cacheWrite derived = input because Kimi has no separate write-token rate)";
+const GLM_52_PRICING = "https://docs.z.ai/guides/overview/pricing + https://bigmodel.cn/pricing (official GLM-5.2 API list price; cacheWrite=input because cache creation remains input-token work; temporary free storage is intentionally excluded)";
+const GLM_53_PRICING = `derived from GLM-5.2 regular API list price until an official GLM-5.3 API billing row is published; temporary free access is intentionally excluded; ${GLM_52_PRICING}`;
+const GPT_IMAGE_2_PRICING = "https://developers.openai.com/api/docs/pricing (standard tier: text input $5/MTok, cached text input $1.25/MTok, image input $8/MTok, image output $30/MTok)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
 // is the exit condition the previous Routeway reseller overlay named. Two caveats are
 // deliberately in the source string rather than dropped: the figure comes from Qwen's own
@@ -90,6 +95,15 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "zai", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived alias -> glm-5.2 ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
   { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2", cost4: GLM_52, source: `public API-equivalent estimate ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
   { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `public API-equivalent estimate; derived alias -> glm-5.2 ${GLM_52_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3", cost4: GLM_52, source: GLM_53_PRICING, verifiedAt: "2026-08-16", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3[1m]", cost4: GLM_52, source: `derived alias -> glm-5.3; ${GLM_53_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3", cost4: GLM_52, source: GLM_53_PRICING, verifiedAt: "2026-08-16", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3[1m]", cost4: GLM_52, source: `derived alias -> glm-5.3; ${GLM_53_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
+  // GPT Image 2 reports image-input detail separately from aggregate input. The
+  // base tuple prices text input and image output; imageInput carries the image
+  // input rate so the estimator can apply only the $3/MTok modality delta.
+  { provider: "openai", modelId: "gpt-image-2", cost4: GPT_IMAGE_2, imageInput: 8, source: GPT_IMAGE_2_PRICING, verifiedAt: "2026-08-16", status: "verified" },
+  { provider: "openai-apikey", modelId: "gpt-image-2", cost4: GPT_IMAGE_2, imageInput: 8, source: GPT_IMAGE_2_PRICING, verifiedAt: "2026-08-16", status: "verified" },
   // Google Antigravity effort-suffix variants — derived from the verified base-model
   // price (Google does not publish per-suffix prices; Agent inference bills at the
   // base model's standard rate per the official Billing FAQ).
@@ -128,6 +142,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // previously empty). kimi = Kimi Code OAuth surface, moonshot = CN key surface,
   // kimi-code = API key surface (expected list price, not actual billing).
   { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3-256k", cost4: KIMI_K3, source: `derived runtime alias -> k3 ${KIMI_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
   { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 (official docs: k3[1m] is the 1M-context compat notation for k3) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
@@ -135,11 +150,13 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "kimi", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code (Kimi Code maps to K2.7 Code per official model docs) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "moonshot", modelId: "k3-256k", cost4: KIMI_K3, source: `derived runtime alias -> kimi-k3 ${KIMI_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3-256k", cost4: KIMI_K3, source: `derived runtime alias -> k3 ${KIMI_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
   { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },

@@ -61,6 +61,21 @@ describe("usageFromResponsesPayload", () => {
     });
   });
 
+  test("preserves image-input token detail from image generation usage", () => {
+    expect(usageFromResponsesPayload({
+      input_tokens: 120,
+      output_tokens: 800,
+      total_tokens: 920,
+      input_tokens_details: { text_tokens: 20, image_tokens: 100 },
+      output_tokens_details: { image_tokens: 800, text_tokens: 0 },
+    })).toEqual({
+      inputTokens: 120,
+      outputTokens: 800,
+      totalTokens: 920,
+      imageInputTokens: 100,
+    });
+  });
+
   test("parses the ChatCompletions shape and maps prompt/completion to input/output", () => {
     const usage = usageFromResponsesPayload({
       prompt_tokens: 42,

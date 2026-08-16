@@ -347,6 +347,8 @@ export interface OcxUrlCitation {
 export interface OcxUsage {
   inputTokens: number;
   outputTokens: number;
+  /** Image-input subset of inputTokens for models with modality-specific rates. */
+  imageInputTokens?: number;
   /**
    * Absolute active-context size after the response. Stateful providers can expose this separately
    * from their per-attempt usage. Responses serialization derives the input side from

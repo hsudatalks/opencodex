@@ -203,6 +203,7 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
+    ...(typeof usage.imageInputTokens === "number" ? { imageInputTokens: usage.imageInputTokens } : {}),
     // Absolute active-context checkpoint (types.ts). Stateful providers such as Kiro report
     // per-attempt usage only, so this field is the ONLY carrier of the cumulative context
     // figure once the log records raw adapter usage instead of re-parsing the bridged wire

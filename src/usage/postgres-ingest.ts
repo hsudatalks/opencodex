@@ -360,6 +360,7 @@ function requestRows(entries: PersistedUsageEntry[], dimensions: Map<string, num
     usage_status_code: USAGE_STATUS_CODES[entry.usageStatus],
     input_tokens: entry.usage?.inputTokens ?? null,
     output_tokens: entry.usage?.outputTokens ?? null,
+    image_input_tokens: entry.usage?.imageInputTokens ?? null,
     context_total_tokens: entry.usage?.contextTotalTokens ?? null,
     cached_input_tokens: entry.usage?.cachedInputTokens ?? null,
     cache_read_input_tokens: entry.usage?.cacheReadInputTokens ?? null,
@@ -542,6 +543,7 @@ function attemptRows(entries: PersistedUsageEntry[], dimensions: Map<string, num
     input_token_estimate: attempt.inputTokenEstimate ?? null,
     input_tokens: attempt.usage?.inputTokens ?? null,
     output_tokens: attempt.usage?.outputTokens ?? null,
+    image_input_tokens: attempt.usage?.imageInputTokens ?? null,
     context_total_tokens: attempt.usage?.contextTotalTokens ?? null,
     cached_input_tokens: attempt.usage?.cachedInputTokens ?? null,
     cache_read_input_tokens: attempt.usage?.cacheReadInputTokens ?? null,
@@ -642,7 +644,7 @@ const REQUEST_INSERT_SQL = `
       configured_service_tier_id bigint, configured_speed_label_id bigint,
       model_supports_service_tier boolean, response_service_tier_id bigint,
       http_status smallint, duration_ms bigint, first_output_ms bigint, usage_status_code smallint,
-      input_tokens bigint, output_tokens bigint, context_total_tokens bigint, cached_input_tokens bigint,
+      input_tokens bigint, output_tokens bigint, image_input_tokens bigint, context_total_tokens bigint, cached_input_tokens bigint,
       cache_read_input_tokens bigint, cache_creation_input_tokens bigint, reasoning_output_tokens bigint,
       total_tokens bigint, attempt_count smallint, error_code_id bigint, terminal_status_id bigint,
       close_reason_code smallint
@@ -656,7 +658,7 @@ const REQUEST_INSERT_SQL = `
       reasoning_wire_number, reasoning_wire_boolean, requested_service_tier_id, requested_speed_label_id,
       configured_service_tier_id, configured_speed_label_id, model_supports_service_tier,
       response_service_tier_id, http_status, duration_ms, first_output_ms, usage_status_code,
-      input_tokens, output_tokens, context_total_tokens, cached_input_tokens, cache_read_input_tokens,
+      input_tokens, output_tokens, image_input_tokens, context_total_tokens, cached_input_tokens, cache_read_input_tokens,
       cache_creation_input_tokens, reasoning_output_tokens, total_tokens, attempt_count,
       error_code_id, terminal_status_id, close_reason_code
     )
@@ -668,7 +670,7 @@ const REQUEST_INSERT_SQL = `
       reasoning_wire_number, reasoning_wire_boolean, requested_service_tier_id, requested_speed_label_id,
       configured_service_tier_id, configured_speed_label_id, model_supports_service_tier,
       response_service_tier_id, http_status, duration_ms, first_output_ms, usage_status_code,
-      input_tokens, output_tokens, context_total_tokens, cached_input_tokens, cache_read_input_tokens,
+      input_tokens, output_tokens, image_input_tokens, context_total_tokens, cached_input_tokens, cache_read_input_tokens,
       cache_creation_input_tokens, reasoning_output_tokens, total_tokens, attempt_count,
       error_code_id, terminal_status_id, close_reason_code
     FROM input
@@ -713,7 +715,7 @@ const ATTEMPT_INSERT_SQL = `
     occurred_at, request_id, ordinal, provider_id, model_id, canonical_provider_id,
     usage_model_id, adapter_id, http_status,
     duration_ms, first_output_ms, send_count, usage_status_code, input_token_estimate,
-    input_tokens, output_tokens, context_total_tokens, cached_input_tokens,
+    input_tokens, output_tokens, image_input_tokens, context_total_tokens, cached_input_tokens,
     cache_read_input_tokens, cache_creation_input_tokens, reasoning_output_tokens,
     total_tokens, error_code_id, requested_effort_id, effective_effort_id,
     reasoning_wire_field_id, reasoning_wire_value_id, reasoning_wire_number, reasoning_wire_boolean
@@ -723,7 +725,7 @@ const ATTEMPT_INSERT_SQL = `
     model_id bigint, canonical_provider_id bigint, usage_model_id bigint,
     adapter_id bigint, http_status smallint, duration_ms bigint,
     first_output_ms bigint, send_count integer, usage_status_code smallint,
-    input_token_estimate bigint, input_tokens bigint, output_tokens bigint,
+    input_token_estimate bigint, input_tokens bigint, output_tokens bigint, image_input_tokens bigint,
     context_total_tokens bigint, cached_input_tokens bigint, cache_read_input_tokens bigint,
     cache_creation_input_tokens bigint, reasoning_output_tokens bigint, total_tokens bigint,
     error_code_id bigint, requested_effort_id bigint, effective_effort_id bigint,

@@ -105,6 +105,35 @@ describe("normalizeCostTokens", () => {
 });
 
 describe("resolveMatchedPrice", () => {
+  test("GLM 5.2/5.3, Kimi K3 runtime alias, and GPT Image 2 resolve regular prices", () => {
+    for (const model of ["glm-5.2", "glm-5.3"]) {
+      expect(resolveMatchedPrice("zhipu-bigmodel-coding", model)).toMatchObject({
+        cost4: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 1.4 },
+        status: "verified-derived",
+      });
+    }
+    expect(resolveMatchedPrice("kimi-code", "k3-256k")).toMatchObject({
+      cost4: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 },
+    });
+    expect(resolveMatchedPrice("openai", "gpt-image-2")).toMatchObject({
+      cost4: { input: 5, output: 30, cacheRead: 1.25, cacheWrite: 5 },
+      imageInputRate: 8,
+      status: "verified",
+    });
+  });
+
+  test("GPT Image 2 prices text input, image input, and image output separately", () => {
+    const estimate = estimateRequestCost({
+      provider: "openai",
+      model: "gpt-image-2",
+      usageStatus: "reported",
+      usage: { inputTokens: 120, imageInputTokens: 100, outputTokens: 800 },
+    });
+    expect(estimate).not.toBeNull();
+    expect(estimate!.cost.input).toBeCloseTo((20 * 5 + 100 * 8) / 1_000_000, 12);
+    expect(estimate!.cost.output).toBeCloseTo(800 * 30 / 1_000_000, 12);
+  });
+
   test("gpt-5.6 family four-tuples match the post-cut official rates (#907)", () => {
     const expectations: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
       "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -222,7 +251,7 @@ describe("resolveMatchedPrice", () => {
   });
 
   test("17h. GLM-5.2 Coding Plan requests use the public API-equivalent price", () => {
-    const COST4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+    const COST4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 1.4 };
     for (const provider of ["zai", "zhipu-bigmodel-coding"]) {
       const direct = resolveMatchedPrice(provider, "glm-5.2");
       expect(direct).toMatchObject({ provider, modelId: "glm-5.2", cost4: COST4 });
@@ -288,8 +317,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 55 keys, including Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(55);
+  test("16. shipped overlay membership: 64 keys, including Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(64);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [

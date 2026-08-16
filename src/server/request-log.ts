@@ -533,7 +533,7 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
   const raw = usage as {
     input_tokens?: unknown;
     output_tokens?: unknown;
-    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown };
+    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown; image_tokens?: unknown };
     output_tokens_details?: { reasoning_tokens?: unknown };
     total_tokens?: unknown;
     prompt_tokens?: unknown;
@@ -546,6 +546,9 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
       inputTokens: raw.input_tokens,
       outputTokens: raw.output_tokens,
       ...(typeof raw.total_tokens === "number" ? { totalTokens: raw.total_tokens } : {}),
+      ...(typeof raw.input_tokens_details?.image_tokens === "number"
+        ? { imageInputTokens: raw.input_tokens_details.image_tokens }
+        : {}),
       ...(typeof raw.input_tokens_details?.cached_tokens === "number"
         ? {
             cachedInputTokens: raw.input_tokens_details.cached_tokens,
@@ -1032,7 +1035,7 @@ export function aggregateAttemptUsage(
   if (usages.length === 0) return { status };
 
   const sumOptional = (
-    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
+    key: "imageInputTokens" | "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
       | "reasoningOutputTokens",
   ): number | undefined => {
     const present = usages.flatMap(usage => (
@@ -1041,6 +1044,7 @@ export function aggregateAttemptUsage(
     return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : undefined;
   };
   const cachedInputTokens = sumOptional("cachedInputTokens");
+  const imageInputTokens = sumOptional("imageInputTokens");
   const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
@@ -1052,6 +1056,7 @@ export function aggregateAttemptUsage(
     inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
     outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
     totalTokens,
+    ...(imageInputTokens !== undefined ? { imageInputTokens } : {}),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),

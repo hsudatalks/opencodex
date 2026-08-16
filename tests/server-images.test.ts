@@ -12,6 +12,7 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/ro
 import { saveConfig } from "../src/config";
 import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
+import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
@@ -37,6 +38,7 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
+  clearRequestLogsForTests();
   globalThis.fetch = originalFetch;
 });
 
@@ -151,6 +153,44 @@ test("POST /v1/images/generations relays to the ChatGPT forward provider with fo
     expect(captured[0].headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
     expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-123");
     expect(captured[0].body).toMatchObject({ prompt: "a halftone gothic hero", model: "gpt-image-2" });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("successful GPT Image 2 relays persist modality usage for pricing", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured, 200, {
+    created: 1_767_000_000,
+    data: [{ b64_json: "aGVsbG8=" }],
+    usage: {
+      input_tokens: 120,
+      output_tokens: 800,
+      total_tokens: 920,
+      input_tokens_details: { text_tokens: 20, image_tokens: 100 },
+      output_tokens_details: { text_tokens: 0, image_tokens: 800 },
+    },
+  });
+  saveConfig(forwardConfig(upstream.url.toString().replace(/\/$/, "")));
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(getRequestLogEntries().at(-1)).toMatchObject({
+      model: "gpt-image-2",
+      usageStatus: "reported",
+      usage: { inputTokens: 120, imageInputTokens: 100, outputTokens: 800, totalTokens: 920 },
+    });
   } finally {
     await server.stop(true);
     await upstream.stop(true);

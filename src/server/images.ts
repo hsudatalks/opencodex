@@ -32,7 +32,7 @@ import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../provid
 import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
-import type { RequestLogContext } from "./request-log";
+import { applyResponseLogMetadata, type RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
@@ -463,6 +463,18 @@ export async function handleImages(
       return formatErrorResponse(502, "upstream_error", `image ${endpoint} response too large (${payload.byteLength} bytes)`);
     }
     forward?.recordOutcome?.(upstreamResponse.status);
+    // Images responses include token usage, with image/text input details. The
+    // relay used to pass this body through without observing it, so every paid
+    // successful image request was persisted as unmetered. Parse only metadata;
+    // prompts and image bytes remain outside the request log.
+    if (upstreamResponse.ok) {
+      try {
+        applyResponseLogMetadata(logCtx, JSON.parse(new TextDecoder().decode(payload)));
+      } catch {
+        // The client still owns response parsing. A malformed success payload is
+        // relayed unchanged and simply remains unmetered.
+      }
+    }
     const relayHeaders: Record<string, string> = {};
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) relayHeaders["content-type"] = contentType;

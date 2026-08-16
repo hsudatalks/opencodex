@@ -372,6 +372,7 @@ async function applyCosts(
         provider text, model text,
         "inputRate" double precision, "outputRate" double precision,
         "cacheReadRate" double precision, "cacheWriteRate" double precision,
+        "imageInputRate" double precision,
         "longThreshold" bigint, "longInclusive" boolean,
         "longInputMultiplier" double precision, "longOutputMultiplier" double precision,
         "longCacheReadMultiplier" double precision, "longCacheWriteMultiplier" double precision,
@@ -382,7 +383,7 @@ async function applyCosts(
         r.usage_status_code request_usage_status_code,
         (r.input_tokens IS NOT NULL AND r.output_tokens IS NOT NULL) request_has_usage,
         r.provider_id, r.model_id, r.canonical_provider_id, r.usage_model_id,
-        r.usage_status_code, r.input_tokens, r.output_tokens,
+        r.usage_status_code, r.input_tokens, r.output_tokens, r.image_input_tokens,
         r.cached_input_tokens, r.cache_read_input_tokens, r.cache_creation_input_tokens,
         response_tier.value response_service_tier,
         requested_tier.value requested_service_tier,
@@ -397,7 +398,7 @@ async function applyCosts(
         r.usage_status_code request_usage_status_code,
         (r.input_tokens IS NOT NULL AND r.output_tokens IS NOT NULL) request_has_usage,
         a.provider_id, a.model_id, a.canonical_provider_id, a.usage_model_id,
-        a.usage_status_code, a.input_tokens, a.output_tokens,
+        a.usage_status_code, a.input_tokens, a.output_tokens, a.image_input_tokens,
         a.cached_input_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens,
         response_tier.value response_service_tier,
         requested_tier.value requested_service_tier,
@@ -427,9 +428,11 @@ async function applyCosts(
       SELECT identified.*, rules.*,
         CASE
           WHEN input_tokens >= 0 AND output_tokens >= 0 AND cache_write >= 0
+            AND (image_input_tokens IS NULL OR image_input_tokens BETWEEN 0 AND input_tokens)
             AND primary_cache_read >= 0 AND primary_cache_read + cache_write <= input_tokens
             THEN primary_cache_read
           WHEN input_tokens >= 0 AND output_tokens >= 0 AND cache_write >= 0
+            AND (image_input_tokens IS NULL OR image_input_tokens BETWEEN 0 AND input_tokens)
             AND legacy_cache_read >= 0 AND legacy_cache_read + cache_write <= input_tokens
             THEN legacy_cache_read
         END normalized_cache_read
@@ -447,6 +450,7 @@ async function applyCosts(
               * CASE WHEN long_active THEN "longCacheReadMultiplier" WHEN priority_active THEN "priorityMultiplier" ELSE 1 END
             + cache_write * "cacheWriteRate"
               * CASE WHEN long_active THEN "longCacheWriteMultiplier" WHEN priority_active THEN "priorityMultiplier" ELSE 1 END
+            + COALESCE(image_input_tokens, 0) * (COALESCE("imageInputRate", "inputRate") - "inputRate")
           ) / 1000000.0
         END attribution_cost
       FROM (
