@@ -89,15 +89,30 @@ import {
 const USAGE_DAY_MS = 86_400_000;
 const SINGAPORE_UTC_OFFSET = "+08:00";
 
-function usageWindowEnd(range: UsageRange, input: string | null, now: number): { end: number; cacheKey: string; historical: boolean } {
-  if (range !== "7d" || !input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) {
-    return { end: now, cacheKey: "latest", historical: false };
+interface UsageWindow {
+  end: number;
+  generatedAt: number;
+  cacheKey: string;
+  historical: boolean;
+}
+
+function singaporeDateKey(timestamp: number): string {
+  return new Date(timestamp + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+}
+
+function usageWindow(range: UsageRange, input: string | null, now: number): UsageWindow {
+  if (range !== "7d") {
+    return { end: now, generatedAt: now, cacheKey: "latest", historical: false };
   }
-  const parsed = Date.parse(`${input}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
-  if (!Number.isFinite(parsed) || parsed >= now) {
-    return { end: now, cacheKey: "latest", historical: false };
+  const latestEnd = Date.parse(`${singaporeDateKey(now)}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
+  if (!input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
   }
-  return { end: parsed, cacheKey: input, historical: true };
+  const requestedEnd = Date.parse(`${input}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
+  if (!Number.isFinite(requestedEnd) || requestedEnd >= latestEnd) {
+    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
+  }
+  return { end: requestedEnd, generatedAt: requestedEnd, cacheKey: input, historical: true };
 }
 
 function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurface): boolean {
@@ -107,10 +122,9 @@ function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurf
   return true;
 }
 
-function nextLocalMidnight(now: number): number {
-  const next = new Date(now);
-  next.setHours(24, 0, 0, 0);
-  return next.getTime();
+function nextSingaporeMidnight(now: number): number {
+  const nextDate = singaporeDateKey(now + USAGE_DAY_MS);
+  return Date.parse(`${nextDate}T00:00:00${SINGAPORE_UTC_OFFSET}`);
 }
 
 function usageSummaryExpiresAt(
@@ -119,7 +133,7 @@ function usageSummaryExpiresAt(
   surface: UsageSurface,
   now: number,
 ): number {
-  let expiresAt = nextLocalMidnight(now);
+  let expiresAt = nextSingaporeMidnight(now);
   const windowMs = range === "7d" ? 7 * USAGE_DAY_MS : range === "30d" ? 30 * USAGE_DAY_MS : null;
   if (windowMs === null) return expiresAt;
   for (const entry of entries) {
@@ -130,9 +144,14 @@ function usageSummaryExpiresAt(
   return expiresAt;
 }
 
-function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: boolean }>(summary: T, range: UsageRange, now: number): T {
-  const since = range === "7d" ? now - 7 * USAGE_DAY_MS : range === "30d" ? now - 30 * USAGE_DAY_MS : null;
-  return { ...summary, since, generatedAt: now };
+function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: boolean }>(
+  summary: T,
+  range: UsageRange,
+  windowEnd: number,
+  generatedAt: number,
+): T {
+  const since = range === "7d" ? windowEnd - 7 * USAGE_DAY_MS : range === "30d" ? windowEnd - 30 * USAGE_DAY_MS : null;
+  return { ...summary, since, generatedAt };
 }
 
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -207,20 +226,22 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const forceRefresh = url.searchParams.get("refresh") === "1";
     const now = Date.now();
-    const window = usageWindowEnd(range, url.searchParams.get("end"), now);
+    const window = usageWindow(range, url.searchParams.get("end"), now);
     try {
       const postgres = usagePostgresClient();
       if (postgres) {
         try {
+          const summary = await cachedUsageSummaryFromPostgres(
+            postgres,
+            range,
+            window.end,
+            surface,
+            forceRefresh,
+            window.cacheKey,
+          );
           return jsonResponse({
-            ...await cachedUsageSummaryFromPostgres(
-              postgres,
-              range,
-              window.end,
-              surface,
-              forceRefresh,
-              window.cacheKey,
-            ),
+            ...summary,
+            generatedAt: window.generatedAt,
             historyTruncated: false,
             truncatedPrefixBytes: 0,
             entriesTruncated: false,
@@ -238,7 +259,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (!forceRefresh && cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
-        return jsonResponse(refreshedUsageSummary(cached.summary, range, window.end));
+        return jsonResponse(refreshedUsageSummary(cached.summary, range, window.end, window.generatedAt));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
@@ -258,13 +279,13 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         revisionReadAt,
         summary,
       });
-      return jsonResponse(summary);
+      return jsonResponse({ ...summary, generatedAt: window.generatedAt });
     } catch {
       return jsonResponse({
         range,
         surface,
         since: null,
-        generatedAt: window.end,
+        generatedAt: window.generatedAt,
         summary: {
           requests: 0,
           attemptCount: 0,

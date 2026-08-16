@@ -168,6 +168,18 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("latest range=7d is exactly seven Singapore calendar days", async () => {
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=7d", server.url)).then(res => res.json());
+      expect(body.days).toHaveLength(7);
+      expect(body.days.at(-1)?.date).toBe(new Date(Date.now() + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10));
+      expect(body.generatedAt).toBeLessThanOrEqual(Date.now());
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("range=7d accepts a historical Singapore calendar window", async () => {
     const rows = [
       ["before", "2026-08-03T23:00:00+08:00", 1],
