@@ -691,6 +691,8 @@ export const ja: Record<TKey, string> = {
   "usage.historyTruncated": "古い利用履歴が読み込まれていないため、合計は利用可能な履歴のみを対象とします。",
   "usage.range.30d": "30日",
   "usage.range.7d": "7日",
+  "usage.window.older": "前の7日間",
+  "usage.window.newer": "次の7日間",
   "usage.card.requests": "リクエスト",
   "usage.card.measured": "計測",
   "usage.card.reported": "報告",

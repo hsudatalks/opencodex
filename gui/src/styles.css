@@ -2204,7 +2204,11 @@ button.prov-account-row.active { cursor: default; }
 .usage-bar-fill { height: 100%; background: var(--green); border-radius: var(--radius-pill); }
 
 /* 7d view: per-day request bar chart (replaces the year heatmap on the 7d toggle). */
+.usage-week-window-head { display: grid; grid-template-columns: var(--control-md) minmax(0, 1fr) var(--control-md); align-items: center; gap: 8px; margin-bottom: 4px; }
+.usage-week-window-label { min-width: 0; text-align: center; color: var(--text); font-size: var(--text-label); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 .daybars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; align-items: end; height: 180px; padding-top: 8px; }
+.usage-week-swipe { touch-action: pan-y; user-select: none; cursor: grab; }
+.usage-week-swipe:active { cursor: grabbing; }
 .daybar { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
 .daybar-track { width: 100%; max-width: 48px; flex: 1; display: flex; align-items: flex-end; background: var(--border); border-radius: var(--radius-xs); overflow: hidden; }
 /* Full-height stack scaled on Y — avoids layout thrash from animating height. */
@@ -2232,6 +2236,11 @@ button.prov-account-row.active { cursor: default; }
 .daybar-tip-swatch { width: 10px; height: 10px; border-radius: var(--radius-2xs); flex-shrink: 0; }
 .daybar-tip-name { color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 .daybar-tip-val { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 480px) {
+  .daybars { gap: 5px; }
+  .daybar-count { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+}
 
 /* ── Toggle switch ── */
 .toggle { position: relative; display: inline-block; width: var(--toggle-w); height: var(--toggle-h); flex-shrink: 0; }

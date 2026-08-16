@@ -724,6 +724,8 @@ export const ko: Record<TKey, string> = {
   "usage.historyTruncated": "이전 사용 기록을 불러오지 않아 합계는 사용 가능한 기록만 포함합니다.",
   "usage.range.30d": "30일",
   "usage.range.7d": "7일",
+  "usage.window.older": "이전 7일",
+  "usage.window.newer": "다음 7일",
   "usage.card.requests": "요청",
   "usage.card.measured": "측정됨",
   "usage.card.reported": "측정됨",

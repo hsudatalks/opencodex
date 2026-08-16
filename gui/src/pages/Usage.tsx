@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
@@ -10,7 +10,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-import { IconRefresh } from "../icons";
+import { IconChevron, IconRefresh } from "../icons";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -105,28 +105,23 @@ function modelColor(model: string, provider: string): string {
   return `hsl(${h % 360} 55% 55%)`;
 }
 
-// Last 7 calendar days (oldest → newest), zero-filled, for the 7d bar chart. The API's `days` only
-// carries dates with activity, so missing days are backfilled to 0 to keep a stable 7-bar axis.
-function lastSevenDays(days: UsageDay[]): UsageDay[] {
-  const byDate = new Map(days.map(d => [d.date, d]));
-  const out: UsageDay[] = [];
-  const cursor = new Date();
-  cursor.setHours(0, 0, 0, 0);
-  cursor.setDate(cursor.getDate() - 6);
-  for (let i = 0; i < 7; i++) {
-    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
-    const d = byDate.get(iso);
-    out.push({
-      date: iso,
-      requests: d?.requests ?? 0,
-      measuredRequests: d?.measuredRequests ?? 0,
-      reportedRequests: d?.reportedRequests ?? 0,
-      totalTokens: d?.totalTokens ?? 0,
-      models: d?.models ?? [],
-    });
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return out;
+function singaporeDateOffset(offsetDays: number): string {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(Date.now() + offsetDays * 86_400_000));
+  const part = (type: "year" | "month" | "day") => parts.find(value => value.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function formatWeekWindow(days: UsageDay[], locale: Locale): string {
+  const first = days.at(0)?.date;
+  const last = days.at(-1)?.date;
+  if (!first || !last) return "";
+  const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", timeZone: "Asia/Singapore" });
+  return `${formatter.format(new Date(`${first}T12:00:00+08:00`))} – ${formatter.format(new Date(`${last}T12:00:00+08:00`))}`;
 }
 
 function quantileBuckets(values: number[]): number[] {
@@ -327,57 +322,117 @@ function UsageSummaryCards({
   );
 }
 
-function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Locale; t: TFn }) {
+function WeekDayBars({
+  weekBars,
+  locale,
+  canMoveNewer,
+  onMove,
+  t,
+}: {
+  weekBars: UsageDay[];
+  locale: Locale;
+  canMoveNewer: boolean;
+  onMove: (direction: "older" | "newer") => void;
+  t: TFn;
+}) {
   const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const dragStart = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const max = Math.max(1, ...weekBars.map(day => day.totalTokens));
 
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    dragStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = dragStart.current;
+    dragStart.current = null;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
+    if (dx > 0) onMove("older");
+    else if (canMoveNewer) onMove("newer");
+  };
+
   return (
-    <div className="daybars" role="img" aria-label={t("usage.section.heatmap")}>
-      {weekBars.map(day => {
-        const percentage = Math.round((day.totalTokens / max) * 100);
-        const label = day.date.slice(5);
-        return (
-          <div
-            key={day.date}
-            className="daybar"
-            onMouseEnter={() => setHoverDay(day.date)}
-            onMouseLeave={() => setHoverDay(current => (current === day.date ? null : current))}
-          >
-            <div className="daybar-track">
-              <div
-                className="daybar-stack"
-                style={{ ["--daybar-scale" as string]: String(Math.max(0, Math.min(1, percentage / 100))) }}
-              >
-                {day.models.map(model => (
-                  <div
-                    key={`${model.provider}/${model.model}`}
-                    className="daybar-seg"
-                    style={{ flexGrow: model.totalTokens, background: modelColor(model.model, model.provider) }}
-                  />
-                ))}
-                {day.models.length === 0 && day.totalTokens > 0 && (
-                  <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
-                )}
+    <>
+      <div className="usage-week-window-head">
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={t("usage.window.older")}
+          title={t("usage.window.older")}
+          onClick={() => onMove("older")}
+        >
+          <IconChevron aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
+        </button>
+        <span className="usage-week-window-label" aria-live="polite">{formatWeekWindow(weekBars, locale)}</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={t("usage.window.newer")}
+          title={t("usage.window.newer")}
+          disabled={!canMoveNewer}
+          onClick={() => onMove("newer")}
+        >
+          <IconChevron aria-hidden="true" />
+        </button>
+      </div>
+      <div
+        className="daybars usage-week-swipe"
+        role="img"
+        aria-label={`${t("usage.section.heatmap")}: ${formatWeekWindow(weekBars, locale)}`}
+        onPointerDown={onPointerDown}
+        onPointerUp={finishPointer}
+        onPointerCancel={() => { dragStart.current = null; }}
+      >
+        {weekBars.map(day => {
+          const percentage = Math.round((day.totalTokens / max) * 100);
+          const label = day.date.slice(5);
+          return (
+            <div
+              key={day.date}
+              className="daybar"
+              onMouseEnter={() => setHoverDay(day.date)}
+              onMouseLeave={() => setHoverDay(current => (current === day.date ? null : current))}
+            >
+              <div className="daybar-track">
+                <div
+                  className="daybar-stack"
+                  style={{ ["--daybar-scale" as string]: String(Math.max(0, Math.min(1, percentage / 100))) }}
+                >
+                  {day.models.map(model => (
+                    <div
+                      key={`${model.provider}/${model.model}`}
+                      className="daybar-seg"
+                      style={{ flexGrow: model.totalTokens, background: modelColor(model.model, model.provider) }}
+                    />
+                  ))}
+                  {day.models.length === 0 && day.totalTokens > 0 && (
+                    <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
+                  )}
+                </div>
               </div>
+              {hoverDay === day.date && day.totalTokens > 0 && (
+                <div className="daybar-tip" role="tooltip">
+                  <div className="daybar-tip-date">{day.date}</div>
+                  {day.models.slice(0, 8).map(model => (
+                    <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
+                      <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
+                      <span className="daybar-tip-name">{modelLabel(model.model)}</span>
+                      <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
+              <span className="daybar-label muted">{label}</span>
             </div>
-            {hoverDay === day.date && day.totalTokens > 0 && (
-              <div className="daybar-tip" role="tooltip">
-                <div className="daybar-tip-date">{day.date}</div>
-                {day.models.slice(0, 8).map(model => (
-                  <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
-                    <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
-                    <span className="daybar-tip-name">{modelLabel(model.model)}</span>
-                    <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
-            <span className="daybar-label muted">{label}</span>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -385,12 +440,16 @@ function UsageHeatmapPanel({
   range,
   heatmap,
   weekBars,
+  weekOffset,
+  onMoveWeek,
   locale,
   t,
 }: {
   range: Range;
   heatmap: ReturnType<typeof buildHeatmap>;
   weekBars: UsageDay[];
+  weekOffset: number;
+  onMoveWeek: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
 }) {
@@ -411,7 +470,7 @@ function UsageHeatmapPanel({
     <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
       <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
       {range === "7d" ? (
-        <WeekDayBars weekBars={weekBars} locale={locale} t={t} />
+        <WeekDayBars weekBars={weekBars} locale={locale} canMoveNewer={weekOffset < 0} onMove={onMoveWeek} t={t} />
       ) : (
         <div className="heatmap" ref={heatmapRef} role="img" aria-labelledby="usage-heatmap-title">
           <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
@@ -670,6 +729,8 @@ function UsageWorkspaceBody({
   onModelQuery,
   sortedProviders,
   range,
+  weekOffset,
+  onMoveWeek,
   locale,
   t,
 }: {
@@ -682,10 +743,14 @@ function UsageWorkspaceBody({
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
   range: Range;
+  weekOffset: number;
+  onMoveWeek: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
 }) {
-  const empty = !!data && data.summary.requests === 0;
+  // A zero-activity historical week must keep the chart navigator visible so the
+  // user can continue paging instead of getting trapped in a generic empty state.
+  const empty = !!data && data.summary.requests === 0 && range !== "7d";
   const sections = [
     {
       id: "overview",
@@ -694,7 +759,15 @@ function UsageWorkspaceBody({
       body: data ? (
         <>
           <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
-          <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
+          <UsageHeatmapPanel
+            range={range}
+            heatmap={heatmap}
+            weekBars={weekBars}
+            weekOffset={weekOffset}
+            onMoveWeek={onMoveWeek}
+            locale={locale}
+            t={t}
+          />
         </>
       ) : null,
     },
@@ -749,17 +822,20 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null): string {
+  return `ocx.usage.v2:${apiBase}:${range}:${surface}:${weekEnd ?? "latest"}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface);
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, weekEnd);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface, weekEnd);
+  if (!usageMemoryCache.has(key) && usageMemoryCache.size >= 96) {
+    usageMemoryCache.delete(usageMemoryCache.keys().next().value!);
+  }
   usageMemoryCache.set(key, value);
   writeSessionListCache(key, value);
 }
@@ -768,28 +844,33 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
+  const [weekOffset, setWeekOffset] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const forceRefreshRef = useRef(false);
+  const weekEnd = range === "7d" && weekOffset < 0
+    ? singaporeDateOffset(weekOffset * 7)
+    : null;
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const forceRefresh = forceRefreshRef.current;
     forceRefreshRef.current = false;
     const params = new URLSearchParams({ range, surface });
+    if (weekEnd) params.set("end", weekEnd);
     if (forceRefresh) params.set("refresh", "1");
     const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, next);
+    writeHeldUsage(apiBase, range, surface, weekEnd, next);
     return next;
-  }, [apiBase, range, surface]);
+  }, [apiBase, range, surface, weekEnd]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface);
-  const cached = readHeldUsage(apiBase, range, surface);
+  const resourceKey = usageCacheKey(apiBase, range, surface, weekEnd);
+  const cached = readHeldUsage(apiBase, range, surface, weekEnd);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface],
+    [apiBase, range, surface, weekEnd],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -801,7 +882,14 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   }, [resource]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
-  const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
+  const weekBars = useMemo(() => (data?.days ?? []).slice(-7), [data?.days]);
+  const moveWeek = useCallback((direction: "older" | "newer") => {
+    setWeekOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
+  }, []);
+  const changeRange = useCallback((next: Range) => {
+    setRange(next);
+    if (next !== "7d") setWeekOffset(0);
+  }, []);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
@@ -829,7 +917,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           range={range}
           refreshing={state.refreshing}
           onSurface={setSurface}
-          onRange={setRange}
+          onRange={changeRange}
           onRefresh={refreshUsage}
           t={t}
         />
@@ -859,6 +947,8 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
             range={range}
+            weekOffset={weekOffset}
+            onMoveWeek={moveWeek}
             locale={locale}
             t={t}
           />

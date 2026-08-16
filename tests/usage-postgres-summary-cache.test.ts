@@ -136,4 +136,24 @@ describe("PostgreSQL usage summary cache", () => {
     expect(afterRefresh.summary.requests).toBe(2);
     expect(aggregateReads).toBe(2);
   });
+
+  test("caches historical windows by their stable window key", async () => {
+    let aggregateReads = 0;
+    const tx = {
+      unsafe: async (query: string) => {
+        if (query.includes("SELECT count(*) requests")) aggregateReads++;
+        return [];
+      },
+    };
+    const sql = {
+      begin: async (_mode: string, run: (transaction: typeof tx) => Promise<unknown>) => run(tx),
+    } as unknown as SQL;
+    const historicalEnd = Date.parse("2025-01-07T23:59:59.999+08:00");
+
+    await cachedUsageSummaryFromPostgres(sql, "7d", historicalEnd, "all", false, "2025-01-07");
+    await cachedUsageSummaryFromPostgres(sql, "7d", historicalEnd, "all", false, "2025-01-07");
+    await cachedUsageSummaryFromPostgres(sql, "7d", historicalEnd, "all", false, "2025-01-14");
+
+    expect(aggregateReads).toBe(2);
+  });
 });

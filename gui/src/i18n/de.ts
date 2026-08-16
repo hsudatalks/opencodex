@@ -702,6 +702,8 @@ export const de: Record<TKey, string> = {
   "usage.historyTruncated": "Die Summen beziehen sich nur auf den verfügbaren Verlauf, da ältere Nutzungsdaten nicht geladen wurden.",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
+  "usage.window.older": "Vorherige 7 Tage",
+  "usage.window.newer": "Nächste 7 Tage",
   "usage.card.requests": "Anfragen",
   "usage.card.measured": "Gemessen",
   "usage.card.reported": "Gemeldet",

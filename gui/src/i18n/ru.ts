@@ -723,6 +723,8 @@ export const ru: Record<TKey, string> = {
   "usage.historyTruncated": "Итоги охватывают только доступную историю, поскольку старые данные не загружены.",
   "usage.range.30d": "30 дн.",
   "usage.range.7d": "7 дн.",
+  "usage.window.older": "Предыдущие 7 дней",
+  "usage.window.newer": "Следующие 7 дней",
   "usage.card.requests": "Запросы",
   "usage.card.measured": "Измерено",
   "usage.card.reported": "Сообщено",

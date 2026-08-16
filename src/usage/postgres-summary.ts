@@ -15,6 +15,7 @@ const DAY_MS = 86_400_000;
 const MAX_BREAKDOWN_ROWS = 256;
 const SUMMARY_CACHE_TTL_MS = 30_000;
 const SUMMARY_CACHE_STALE_MS = 5 * 60_000;
+const SUMMARY_CACHE_MAX_WINDOWS = 128;
 
 type SqlRow = Record<string, unknown>;
 interface SummaryCacheEntry {
@@ -855,16 +856,23 @@ export async function cachedUsageSummaryFromPostgres(
   now: number,
   surface: UsageSurface,
   forceRefresh = false,
+  windowKey = "latest",
 ): Promise<UsageSummary> {
   let cache = summaryCaches.get(sql);
   if (!cache) {
     cache = new Map();
     summaryCaches.set(sql, cache);
   }
-  const key = `${range}:${surface}`;
+  const key = windowKey === "latest"
+    ? `${range}:${surface}`
+    : `${range}:${surface}:${windowKey}`;
+  if (!cache.has(key) && cache.size >= SUMMARY_CACHE_MAX_WINDOWS) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) cache.delete(oldestKey);
+  }
   const entry = cache.get(key) ?? {};
   cache.set(key, entry);
-  const age = entry.loadedAt === undefined ? Number.POSITIVE_INFINITY : now - entry.loadedAt;
+  const age = entry.loadedAt === undefined ? Number.POSITIVE_INFINITY : Date.now() - entry.loadedAt;
   if (!forceRefresh && entry.value && age <= SUMMARY_CACHE_TTL_MS) return entry.value;
 
   if (!entry.inflight) {

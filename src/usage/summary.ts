@@ -119,12 +119,10 @@ function rangeWindow(range: UsageRange, now: number): { since: number | null; da
   return { since: null, days: 0 };
 }
 
-function localDateKey(ts: number): string {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function singaporeDateKey(ts: number): string {
+  // PostgreSQL dashboard rollups use Asia/Singapore. Keep the JSONL fallback on
+  // the same product calendar so a failover cannot move requests across days.
+  return new Date(ts + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10);
 }
 
 function dayCountForAllRange(entries: PersistedUsageEntry[], now: number): number {
@@ -325,11 +323,11 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
   for (let i = days - 1; i >= 0; i--) {
-    const key = localDateKey(now - i * DAY_MS);
+    const key = singaporeDateKey(now - i * DAY_MS);
     grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const entry of entries) {
-    const key = localDateKey(entry.timestamp);
+    const key = singaporeDateKey(entry.timestamp);
     let day = grid.get(key);
     if (!day) {
       day = { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] };
@@ -556,6 +554,7 @@ export function summarizeUsage(
   const { since } = rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    if (entry.timestamp > now) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every

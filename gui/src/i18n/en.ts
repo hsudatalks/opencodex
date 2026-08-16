@@ -733,6 +733,8 @@ export const en = {
   "usage.historyTruncated": "Totals cover available history only because older usage was not loaded.",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
+  "usage.window.older": "Previous 7 days",
+  "usage.window.newer": "Next 7 days",
   "usage.card.requests": "Requests",
   "usage.card.measured": "Measured",
   "usage.card.reported": "Reported",

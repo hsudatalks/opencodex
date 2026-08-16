@@ -168,6 +168,38 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("range=7d accepts a historical Singapore calendar window", async () => {
+    const rows = [
+      ["before", "2026-08-03T23:00:00+08:00", 1],
+      ["first", "2026-08-04T00:00:00+08:00", 2],
+      ["last", "2026-08-10T23:59:00+08:00", 3],
+      ["after", "2026-08-11T00:00:00+08:00", 4],
+    ].map(([requestId, timestamp, totalTokens]) => JSON.stringify({
+      requestId: `ocx-${requestId}`,
+      timestamp: Date.parse(String(timestamp)),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      usage: { inputTokens: Number(totalTokens), outputTokens: 0 },
+      totalTokens: Number(totalTokens),
+    }));
+    writeFileSync(join(testDir, "usage.jsonl"), `${rows.join("\n")}\n`, { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=7d&end=2026-08-10", server.url)).then(res => res.json());
+      expect(body.summary).toMatchObject({ requests: 2, totalTokens: 5 });
+      expect(body.generatedAt).toBe(Date.parse("2026-08-10T23:59:59.999+08:00"));
+      expect(body.days.map((day: { date: string }) => day.date)).toEqual([
+        "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+        "2026-08-08", "2026-08-09", "2026-08-10",
+      ]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("default range is 30d and includes the older entry", async () => {
     writeFixture(Date.now());
     const server = startServer(0);

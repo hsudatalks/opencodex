@@ -717,6 +717,8 @@ export const zh: Record<TKey, string> = {
   "usage.historyTruncated": "由于未加载较早的使用记录，合计仅涵盖可用历史。",
   "usage.range.30d": "30 天",
   "usage.range.7d": "7 天",
+  "usage.window.older": "前 7 天",
+  "usage.window.newer": "后 7 天",
   "usage.card.requests": "请求数",
   "usage.card.measured": "已计量",
   "usage.card.reported": "已上报",

@@ -87,6 +87,19 @@ import {
 } from "./usage-summary-cache";
 
 const USAGE_DAY_MS = 86_400_000;
+const SINGAPORE_UTC_OFFSET = "+08:00";
+
+function usageWindowEnd(range: UsageRange, input: string | null, now: number): { end: number; cacheKey: string; historical: boolean } {
+  if (range !== "7d" || !input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return { end: now, cacheKey: "latest", historical: false };
+  }
+  const parsed = Date.parse(`${input}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
+  if (!Number.isFinite(parsed) || parsed >= now) {
+    return { end: now, cacheKey: "latest", historical: false };
+  }
+  return { end: parsed, cacheKey: input, historical: true };
+}
+
 function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurface): boolean {
   if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
   if (surface === "grok") return entry.surface === "grok";
@@ -194,12 +207,20 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const forceRefresh = url.searchParams.get("refresh") === "1";
     const now = Date.now();
+    const window = usageWindowEnd(range, url.searchParams.get("end"), now);
     try {
       const postgres = usagePostgresClient();
       if (postgres) {
         try {
           return jsonResponse({
-            ...await cachedUsageSummaryFromPostgres(postgres, range, now, surface, forceRefresh),
+            ...await cachedUsageSummaryFromPostgres(
+              postgres,
+              range,
+              window.end,
+              surface,
+              forceRefresh,
+              window.cacheKey,
+            ),
             historyTruncated: false,
             truncatedPrefixBytes: 0,
             entriesTruncated: false,
@@ -210,18 +231,20 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
             error instanceof Error ? error.message : error);
         }
       }
-      const cacheKey = `${range}:${surface}`;
+      const cacheKey = window.historical
+        ? `${range}:${surface}:${window.cacheKey}`
+        : `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (!forceRefresh && cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
-        return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
+        return jsonResponse(refreshedUsageSummary(cached.summary, range, window.end));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
       const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
+        ...summarizeUsage(snapshot.entries, range, window.end, surface),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
@@ -229,7 +252,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       };
       setUsageSummaryCacheEntry(cacheKey, {
         revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
-        expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
+        expiresAt: window.historical
+          ? Number.MAX_SAFE_INTEGER
+          : usageSummaryExpiresAt(snapshot.entries, range, surface, now),
         revisionReadAt,
         summary,
       });
@@ -239,7 +264,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         range,
         surface,
         since: null,
-        generatedAt: now,
+        generatedAt: window.end,
         summary: {
           requests: 0,
           attemptCount: 0,
