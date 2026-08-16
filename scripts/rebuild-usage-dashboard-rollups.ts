@@ -1,4 +1,5 @@
 import { SQL } from "bun";
+import { statSync } from "node:fs";
 import { usageLedgerPaths } from "../src/usage/log";
 import {
   appendUsageDashboardRollups,
@@ -14,6 +15,7 @@ const sql = new SQL(databaseUrl, { max: 2, prepare: false });
 const seen = new Set<string>();
 let scanned = 0;
 let processed = 0;
+const ledgerSnapshot = usageLedgerPaths().map(path => ({ path, size: statSync(path).size }));
 
 async function existingRequestKeys(entries: Array<{ timestamp: number; requestId: string }>): Promise<Set<string>> {
   if (entries.length === 0) return new Set();
@@ -41,10 +43,13 @@ async function existingRequestKeys(entries: Array<{ timestamp: number; requestId
 
 try {
   await clearUsageDashboardRollups(sql);
-  for (const path of usageLedgerPaths()) {
+  for (const { path, size } of ledgerSnapshot) {
     let offset = 0;
-    while (true) {
-      const batch = readUsageLedgerBatch(path, offset, 500);
+    while (offset < size) {
+      // Freeze the rebuild at the byte boundary observed before clearing the
+      // projections. The live ingestion worker owns bytes appended afterwards,
+      // so online rebuilds cannot count a request through both paths.
+      const batch = readUsageLedgerBatch(path, offset, 500, Math.min(8 * 1024 * 1024, size - offset));
       if (!batch || batch.nextOffset === offset) break;
       offset = batch.nextOffset;
       scanned += batch.entries.length;
