@@ -4,7 +4,7 @@ import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
 import { estimateComboCost, estimateRequestCost, serviceTierContext } from "./cost";
 
-export type UsageRange = "7d" | "30d" | "all";
+export type UsageRange = "1d" | "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
 
 export interface UsageSummaryTotals {
@@ -104,7 +104,7 @@ function retainedBreakdownRows<T>(
 }
 
 export function parseRange(input: string | null | undefined): UsageRange {
-  if (input === "7d" || input === "30d" || input === "all") return input;
+  if (input === "1d" || input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
 }
 
@@ -114,6 +114,7 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
 }
 
 function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
+  if (range === "1d") return { since: now - DAY_MS + 1, days: 1 };
   if (range === "7d") return { since: now - 7 * DAY_MS, days: 7 };
   if (range === "30d") return { since: now - 30 * DAY_MS, days: 30 };
   return { since: null, days: 0 };

@@ -17,7 +17,7 @@ const USAGE = `Usage:
   ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
-  ocx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
+  ocx observe usage [--range <1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
   ocx observe storage [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -131,7 +131,7 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const wantsJson = takeFlag(args, "--json");
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
-  if (!["7d", "30d", "all"].includes(range)) throw new CliUsageError("--range must be 7d, 30d, or all", USAGE);
+  if (!["1d", "7d", "30d", "all"].includes(range)) throw new CliUsageError("--range must be 1d, 7d, 30d, or all", USAGE);
   if (!["all", "codex", "claude", "grok"].includes(surface)) throw new CliUsageError("--surface must be all, codex, claude, or grok", USAGE);
   rejectArgs(args, USAGE);
   const result = await runtimeRequest(`/api/usage${query({ range, surface })}`, {}, deps);

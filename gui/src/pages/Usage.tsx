@@ -12,7 +12,7 @@ import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { IconChevron, IconRefresh } from "../icons";
 
-type Range = "all" | "30d" | "7d";
+type Range = "1d" | "7d" | "30d" | "all";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
 
 interface UsageSummaryTotals {
@@ -245,8 +245,8 @@ function UsageFilters({
         })}
       </div>
       <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-        {(["all", "30d", "7d"] as Range[]).map(choice => {
-          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
+        {(["7d", "1d", "30d", "all"] as Range[]).map(choice => {
+          const label = t(`usage.range.${choice}`);
           return (
             <button
               key={choice}
@@ -322,29 +322,33 @@ function UsageSummaryCards({
   );
 }
 
-function WeekDayBars({
-  weekBars,
+function UsageDayBars({
+  dayBars,
   locale,
+  showWindowNavigation,
   canMoveNewer,
   onMove,
   t,
 }: {
-  weekBars: UsageDay[];
+  dayBars: UsageDay[];
   locale: Locale;
+  showWindowNavigation: boolean;
   canMoveNewer: boolean;
   onMove: (direction: "older" | "newer") => void;
   t: TFn;
 }) {
   const [hoverDay, setHoverDay] = useState<string | null>(null);
   const dragStart = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const max = Math.max(1, ...weekBars.map(day => day.totalTokens));
+  const max = Math.max(1, ...dayBars.map(day => day.totalTokens));
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!showWindowNavigation) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     dragStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!showWindowNavigation) return;
     const start = dragStart.current;
     dragStart.current = null;
     if (!start || start.pointerId !== event.pointerId) return;
@@ -357,37 +361,40 @@ function WeekDayBars({
 
   return (
     <>
-      <div className="usage-week-window-head">
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon"
-          aria-label={t("usage.window.older")}
-          title={t("usage.window.older")}
-          onClick={() => onMove("older")}
-        >
-          <IconChevron aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
-        </button>
-        <span className="usage-week-window-label" aria-live="polite">{formatWeekWindow(weekBars, locale)}</span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon"
-          aria-label={t("usage.window.newer")}
-          title={t("usage.window.newer")}
-          disabled={!canMoveNewer}
-          onClick={() => onMove("newer")}
-        >
-          <IconChevron aria-hidden="true" />
-        </button>
-      </div>
+      {showWindowNavigation && (
+        <div className="usage-week-window-head">
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-label={t("usage.window.older")}
+            title={t("usage.window.older")}
+            onClick={() => onMove("older")}
+          >
+            <IconChevron aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
+          </button>
+          <span className="usage-week-window-label" aria-live="polite">{formatWeekWindow(dayBars, locale)}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-label={t("usage.window.newer")}
+            title={t("usage.window.newer")}
+            disabled={!canMoveNewer}
+            onClick={() => onMove("newer")}
+          >
+            <IconChevron aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <div
-        className="daybars usage-week-swipe"
+        className={`daybars${showWindowNavigation ? " usage-week-swipe" : ""}`}
         role="img"
-        aria-label={`${t("usage.section.heatmap")}: ${formatWeekWindow(weekBars, locale)}`}
+        aria-label={`${t("usage.section.heatmap")}: ${formatWeekWindow(dayBars, locale)}`}
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, dayBars.length)}, minmax(0, 1fr))` }}
         onPointerDown={onPointerDown}
         onPointerUp={finishPointer}
         onPointerCancel={() => { dragStart.current = null; }}
       >
-        {weekBars.map(day => {
+        {dayBars.map(day => {
           const percentage = Math.round((day.totalTokens / max) * 100);
           const label = day.date.slice(5);
           return (
@@ -439,7 +446,7 @@ function WeekDayBars({
 function UsageHeatmapPanel({
   range,
   heatmap,
-  weekBars,
+  periodBars,
   weekOffset,
   onMoveWeek,
   locale,
@@ -447,7 +454,7 @@ function UsageHeatmapPanel({
 }: {
   range: Range;
   heatmap: ReturnType<typeof buildHeatmap>;
-  weekBars: UsageDay[];
+  periodBars: UsageDay[];
   weekOffset: number;
   onMoveWeek: (direction: "older" | "newer") => void;
   locale: Locale;
@@ -469,8 +476,15 @@ function UsageHeatmapPanel({
   return (
     <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
       <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
-      {range === "7d" ? (
-        <WeekDayBars weekBars={weekBars} locale={locale} canMoveNewer={weekOffset < 0} onMove={onMoveWeek} t={t} />
+      {range === "7d" || range === "1d" ? (
+        <UsageDayBars
+          dayBars={periodBars}
+          locale={locale}
+          showWindowNavigation={range === "7d"}
+          canMoveNewer={weekOffset < 0}
+          onMove={onMoveWeek}
+          t={t}
+        />
       ) : (
         <div className="heatmap" ref={heatmapRef} role="img" aria-labelledby="usage-heatmap-title">
           <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
@@ -722,7 +736,7 @@ function UsageCoveragePanel({
 function UsageWorkspaceBody({
   data,
   heatmap,
-  weekBars,
+  periodBars,
   activeDays,
   filteredModels,
   modelQuery,
@@ -736,7 +750,7 @@ function UsageWorkspaceBody({
 }: {
   data: UsageResponse | null;
   heatmap: ReturnType<typeof buildHeatmap>;
-  weekBars: UsageDay[];
+  periodBars: UsageDay[];
   activeDays: number;
   filteredModels: UsageModel[];
   modelQuery: string;
@@ -762,7 +776,7 @@ function UsageWorkspaceBody({
           <UsageHeatmapPanel
             range={range}
             heatmap={heatmap}
-            weekBars={weekBars}
+            periodBars={periodBars}
             weekOffset={weekOffset}
             onMoveWeek={onMoveWeek}
             locale={locale}
@@ -842,7 +856,7 @@ function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, we
 
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [range, setRange] = useState<Range>("30d");
+  const [range, setRange] = useState<Range>("7d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [weekOffset, setWeekOffset] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
@@ -882,7 +896,10 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   }, [resource]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
-  const weekBars = useMemo(() => (data?.days ?? []).slice(-7), [data?.days]);
+  const periodBars = useMemo(
+    () => (data?.days ?? []).slice(range === "1d" ? -1 : -7),
+    [data?.days, range],
+  );
   const moveWeek = useCallback((direction: "older" | "newer") => {
     setWeekOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
   }, []);
@@ -940,7 +957,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           <UsageWorkspaceBody
             data={data}
             heatmap={heatmap}
-            weekBars={weekBars}
+            periodBars={periodBars}
             activeDays={activeDays}
             filteredModels={filteredModels}
             modelQuery={modelQuery}

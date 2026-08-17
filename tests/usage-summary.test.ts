@@ -23,7 +23,8 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
 }
 
 describe("parseRange", () => {
-  test("accepts 7d / 30d / all", () => {
+  test("accepts 1d / 7d / 30d / all", () => {
+    expect(parseRange("1d")).toBe("1d");
     expect(parseRange("7d")).toBe("7d");
     expect(parseRange("30d")).toBe("30d");
     expect(parseRange("all")).toBe("all");
@@ -320,6 +321,18 @@ describe("summarizeUsage", () => {
     expect(nonZero).toHaveLength(1);
     expect(nonZero[0].totalTokens).toBe(2);
     expect(sum.days.every(d => typeof d.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.date))).toBe(true);
+  });
+
+  test("1d range contains only the current Singapore calendar day", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: FIXED_NOW - 1000, usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
+      entry({ ts: FIXED_NOW - 86_400_000, usageStatus: "reported", usage: { inputTokens: 4, outputTokens: 1 }, totalTokens: 5 }),
+    ];
+    const day = summarizeUsage(entries, "1d", FIXED_NOW);
+    expect(day.summary).toMatchObject({ requests: 1, totalTokens: 3 });
+    expect(day.days).toEqual([
+      expect.objectContaining({ date: "2026-06-28", requests: 1, totalTokens: 3 }),
+    ]);
   });
 
   test("range filter drops entries outside the window", () => {

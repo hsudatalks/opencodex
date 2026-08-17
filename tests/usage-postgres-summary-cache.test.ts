@@ -94,6 +94,32 @@ describe("PostgreSQL usage summary cache", () => {
     ]);
   });
 
+  test("1d reads exactly one Singapore calendar day", async () => {
+    const factWindows: unknown[][] = [];
+    const rollupWindows: unknown[][] = [];
+    const tx = {
+      unsafe: async (query: string, params: unknown[] = []) => {
+        if (query.includes("dashboard_read_model_state")) return [{ ready: true }];
+        if (query.includes("SELECT count(*) requests")) factWindows.push(params);
+        if (query.includes("dashboard_request_hourly") && !query.includes("GROUP BY")) rollupWindows.push(params);
+        return [];
+      },
+    };
+    const sql = { begin: async (_mode: string, run: (transaction: typeof tx) => Promise<unknown>) => run(tx) } as unknown as SQL;
+    const endOfSingaporeDay = Date.parse("2026-08-12T23:59:59.999+08:00");
+
+    const result = await summarizeUsageFromPostgres(sql, "1d", endOfSingaporeDay, "all");
+
+    expect(result.since).toBe(Date.parse("2026-08-12T00:00:00.000+08:00"));
+    expect(result.days.map(day => day.date)).toEqual(["2026-08-12"]);
+    expect(factWindows).toEqual([
+      ["2026-08-12T15:00:00.000Z", 0, "2026-08-12T15:59:59.999Z"],
+    ]);
+    expect(rollupWindows[0]).toEqual([
+      "2026-08-11T16:00:00.000Z", 0, "2026-08-12T14:59:59.999Z",
+    ]);
+  });
+
   test("explicit refresh waits for and stores a fresh aggregate", async () => {
     let requests = 1;
     let aggregateReads = 0;

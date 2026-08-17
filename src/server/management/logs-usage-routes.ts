@@ -101,10 +101,13 @@ function singaporeDateKey(timestamp: number): string {
 }
 
 function usageWindow(range: UsageRange, input: string | null, now: number): UsageWindow {
-  if (range !== "7d") {
+  if (range !== "1d" && range !== "7d") {
     return { end: now, generatedAt: now, cacheKey: "latest", historical: false };
   }
   const latestEnd = Date.parse(`${singaporeDateKey(now)}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
+  if (range === "1d") {
+    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
+  }
   if (!input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) {
     return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
   }
@@ -134,7 +137,7 @@ function usageSummaryExpiresAt(
   now: number,
 ): number {
   let expiresAt = nextSingaporeMidnight(now);
-  const windowMs = range === "7d" ? 7 * USAGE_DAY_MS : range === "30d" ? 30 * USAGE_DAY_MS : null;
+  const windowMs = range === "1d" ? USAGE_DAY_MS : range === "7d" ? 7 * USAGE_DAY_MS : range === "30d" ? 30 * USAGE_DAY_MS : null;
   if (windowMs === null) return expiresAt;
   for (const entry of entries) {
     if (!usageEntryMatchesSurface(entry, surface)) continue;
@@ -150,7 +153,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   windowEnd: number,
   generatedAt: number,
 ): T {
-  const since = range === "7d" ? windowEnd - 7 * USAGE_DAY_MS : range === "30d" ? windowEnd - 30 * USAGE_DAY_MS : null;
+  const since = range === "1d" ? windowEnd - USAGE_DAY_MS + 1 : range === "7d" ? windowEnd - 7 * USAGE_DAY_MS : range === "30d" ? windowEnd - 30 * USAGE_DAY_MS : null;
   return { ...summary, since, generatedAt };
 }
 

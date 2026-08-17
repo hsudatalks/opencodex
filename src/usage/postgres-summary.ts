@@ -50,6 +50,7 @@ function surfaceMode(surface: UsageSurface): number {
 }
 
 function sinceForRange(range: UsageRange, now: number): number | null {
+  if (range === "1d") return now - DAY_MS + 1;
   if (range === "7d") return now - 7 * DAY_MS;
   if (range === "30d") return now - 30 * DAY_MS;
   return null;
@@ -164,7 +165,7 @@ function capDayModels(day: UsageDay): void {
 
 function dayGrid(range: UsageRange, now: number, oldest: number | undefined, rows: SqlRow[], modelRows: SqlRow[]): UsageDay[] {
   const byDate = new Map<string, UsageDay>();
-  let days = range === "7d" ? 7 : range === "30d" ? 30 : 1;
+  let days = range === "1d" ? 1 : range === "7d" ? 7 : range === "30d" ? 30 : 1;
   if (range === "all" && oldest !== undefined) {
     days = Math.max(1, Math.ceil((now - oldest) / DAY_MS) + 1);
   }

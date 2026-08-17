@@ -180,6 +180,36 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("range=1d is the current Singapore calendar day", async () => {
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+    const todayStart = Date.parse(`${today}T00:00:00+08:00`);
+    const rows = [
+      ["before", todayStart - 1, 2],
+      ["today", Math.max(todayStart, Date.now() - 1_000), 3],
+    ].map(([requestId, timestamp, totalTokens]) => JSON.stringify({
+      requestId: `ocx-${requestId}`,
+      timestamp: Number(timestamp),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      usage: { inputTokens: Number(totalTokens), outputTokens: 0 },
+      totalTokens: Number(totalTokens),
+    }));
+    writeFileSync(join(testDir, "usage.jsonl"), `${rows.join("\n")}\n`, { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=1d", server.url)).then(res => res.json());
+      expect(body.range).toBe("1d");
+      expect(body.summary).toMatchObject({ requests: 1, totalTokens: 3 });
+      expect(body.days).toEqual([expect.objectContaining({ date: today })]);
+      expect(body.generatedAt).toBeLessThanOrEqual(Date.now());
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("range=7d accepts a historical Singapore calendar window", async () => {
     const rows = [
       ["before", "2026-08-03T23:00:00+08:00", 1],

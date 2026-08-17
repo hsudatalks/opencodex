@@ -165,7 +165,7 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Inspect proxy requests, usage, storage, memory, and debug data.",
   },
   logs: { usage: "ocx logs [filters] [--follow] [--json|--jsonl]", summary: "Alias of ocx observe logs." },
-  usage: { usage: "ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]", summary: "Alias of ocx observe usage." },
+  usage: { usage: "ocx usage [--range <1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]", summary: "Alias of ocx observe usage." },
   storage: { usage: "ocx storage [--json]", summary: "Alias of ocx observe storage." },
   memory: { usage: "ocx memory [--json]", summary: "Alias of ocx observe memory." },
   access: {

@@ -67,6 +67,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
     expect(dict).toContain('"usage.workspace.sections":');
     expect(dict).toContain('"usage.workspace.report":');
     expect(dict).toContain('"usage.range.available":');
+    expect(dict).toContain('"usage.range.1d":');
     expect(dict).toContain('"usage.historyTruncated":');
     expect(dict).toContain('"usage.refresh":');
     expect(dict).toContain('"usage.refreshing":');
@@ -126,7 +127,12 @@ test("Usage manual refresh asks the server to bypass its aggregate cache", async
     }
 
     expect(new URL(requests[0]!).searchParams.has("refresh")).toBe(false);
+    expect(new URL(requests[0]!).searchParams.get("range")).toBe("7d");
     expect(new URL(requests[1]!).searchParams.get("refresh")).toBe("1");
+    const rangeGroup = container.querySelector('[role="group"][aria-label="Usage"]');
+    expect([...rangeGroup!.querySelectorAll("button")].map(button => button.textContent)).toEqual([
+      "Week", "Day", "Month", "All",
+    ]);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -139,7 +145,7 @@ test("Usage manual refresh asks the server to bypass its aggregate cache", async
   }
 });
 
-test("Usage renders Available history and a persistent qualification when history is capped", async () => {
+test("Usage renders All and a persistent qualification when history is capped", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -196,7 +202,7 @@ test("Usage renders Available history and a persistent qualification when histor
       });
     }
 
-    expect(container.querySelector('button[aria-label="Available history"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="All"]')).not.toBeNull();
     expect(container.textContent).toContain("Totals cover available history only because older usage was not loaded.");
   } finally {
     await act(async () => { root.unmount(); });
