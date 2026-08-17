@@ -447,7 +447,7 @@ function UsageHeatmapPanel({
   range,
   heatmap,
   periodBars,
-  weekOffset,
+  windowDayOffset,
   onMoveWeek,
   locale,
   t,
@@ -455,7 +455,7 @@ function UsageHeatmapPanel({
   range: Range;
   heatmap: ReturnType<typeof buildHeatmap>;
   periodBars: UsageDay[];
-  weekOffset: number;
+  windowDayOffset: number;
   onMoveWeek: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
@@ -481,7 +481,7 @@ function UsageHeatmapPanel({
           dayBars={periodBars}
           locale={locale}
           showWindowNavigation={range === "7d"}
-          canMoveNewer={weekOffset < 0}
+          canMoveNewer={windowDayOffset < 0}
           onMove={onMoveWeek}
           t={t}
         />
@@ -743,7 +743,7 @@ function UsageWorkspaceBody({
   onModelQuery,
   sortedProviders,
   range,
-  weekOffset,
+  windowDayOffset,
   onMoveWeek,
   locale,
   t,
@@ -757,7 +757,7 @@ function UsageWorkspaceBody({
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
   range: Range;
-  weekOffset: number;
+  windowDayOffset: number;
   onMoveWeek: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
@@ -777,7 +777,7 @@ function UsageWorkspaceBody({
             range={range}
             heatmap={heatmap}
             periodBars={periodBars}
-            weekOffset={weekOffset}
+            windowDayOffset={windowDayOffset}
             onMoveWeek={onMoveWeek}
             locale={locale}
             t={t}
@@ -858,11 +858,11 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("7d");
   const [surface, setSurface] = useState<UsageSurface>("all");
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [windowDayOffset, setWindowDayOffset] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const forceRefreshRef = useRef(false);
-  const weekEnd = range === "7d" && weekOffset < 0
-    ? singaporeDateOffset(weekOffset * 7)
+  const weekEnd = range === "7d" && windowDayOffset < 0
+    ? singaporeDateOffset(windowDayOffset)
     : null;
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
@@ -901,11 +901,11 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     [data?.days, range],
   );
   const moveWeek = useCallback((direction: "older" | "newer") => {
-    setWeekOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
+    setWindowDayOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
   }, []);
   const changeRange = useCallback((next: Range) => {
     setRange(next);
-    if (next !== "7d") setWeekOffset(0);
+    if (next !== "7d") setWindowDayOffset(0);
   }, []);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
@@ -964,7 +964,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
             range={range}
-            weekOffset={weekOffset}
+            windowDayOffset={windowDayOffset}
             onMoveWeek={moveWeek}
             locale={locale}
             t={t}

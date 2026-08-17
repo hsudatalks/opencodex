@@ -75,7 +75,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
   }
 });
 
-test("Usage manual refresh asks the server to bypass its aggregate cache", async () => {
+test("Usage refresh bypasses the cache and week navigation moves one day", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -129,6 +129,20 @@ test("Usage manual refresh asks the server to bypass its aggregate cache", async
     expect(new URL(requests[0]!).searchParams.has("refresh")).toBe(false);
     expect(new URL(requests[0]!).searchParams.get("range")).toBe("7d");
     expect(new URL(requests[1]!).searchParams.get("refresh")).toBe("1");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Move back one day"]')!.click();
+    });
+    const navigationDeadline = Date.now() + 1_000;
+    while (requests.length < 3) {
+      if (Date.now() >= navigationDeadline) throw new Error("Usage window navigation request did not run");
+      await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
+    }
+    const yesterday = new Date(Date.now() + 8 * 60 * 60 * 1_000 - 24 * 60 * 60 * 1_000)
+      .toISOString()
+      .slice(0, 10);
+    expect(new URL(requests[2]!).searchParams.get("end")).toBe(yesterday);
+
     const rangeGroup = container.querySelector('[role="group"][aria-label="Usage"]');
     expect([...rangeGroup!.querySelectorAll("button")].map(button => button.textContent)).toEqual([
       "Week", "Day", "Month", "All",
