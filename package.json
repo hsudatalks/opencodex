@@ -1,6 +1,6 @@
 {
   "name": "univers-gateway",
-  "version": "2.11.0-univers.39",
+  "version": "2.11.0-univers.40",
   "description": "Univers Gateway — a production AI model gateway for Codex, Pi, Claude Code, and OpenAI-compatible clients",
   "type": "module",
   "main": "./bin/package-main.mjs",
