@@ -528,6 +528,31 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.prompt_cache_retention).toBe("24h");
   });
 
+  test("strips legacy prompt_cache_retention from GPT-5.6 requests", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-luna"]) {
+      const request = adapter.buildRequest({
+        modelId: model,
+        context: { messages: [] },
+        stream: true,
+        options: {},
+        _rawBody: {
+          model,
+          input: "hi",
+          prompt_cache_retention: "24h",
+          prompt_cache_options: { ttl: "30m" },
+        },
+      }, { headers: new Headers({ authorization: "Bearer token" }) });
+      const body = JSON.parse(request.body) as {
+        prompt_cache_retention?: string;
+        prompt_cache_options?: { ttl?: string };
+      };
+
+      expect(body.prompt_cache_retention).toBeUndefined();
+      expect(body.prompt_cache_options).toEqual({ ttl: "30m" });
+    }
+  });
+
   const expandedRawBody = {
     model: "gpt-5.5",
     previous_response_id: "resp_1",

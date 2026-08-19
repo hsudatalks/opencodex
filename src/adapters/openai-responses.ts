@@ -100,6 +100,24 @@ function stripUnsupportedReasoningSummaryDelivery(body: unknown, modelId: string
   return next;
 }
 
+/**
+ * GPT-5.6 replaced the legacy 24-hour cache-retention field with
+ * `prompt_cache_options`. Older Codex clients can keep sending the deprecated
+ * field from their cached model metadata, which makes the entire turn fail
+ * before inference. Keep this compatibility repair at the final Responses wire
+ * boundary so every client benefits without changing other model families.
+ */
+function stripLegacyPromptCacheRetention(body: unknown, modelId: string): unknown {
+  if (!isPlainObject(body)) return body;
+  const wireModel = typeof body.model === "string" ? body.model : modelId;
+  if (!/^gpt-5\.6(?:-|$)/.test(wireModel)) return body;
+  if (!Object.hasOwn(body, "prompt_cache_retention")) return body;
+
+  const next = { ...body };
+  delete next.prompt_cache_retention;
+  return next;
+}
+
 function stripInvalidItemIds(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
@@ -1183,6 +1201,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         );
         outBody = normalizeImageGenClientTools(outBody);
       }
+      outBody = stripLegacyPromptCacheRetention(outBody, parsed.modelId);
       if (forward || parsed._previousResponseInputExpanded === true) {
         outBody = repairOversizedReplayCallIds(outBody);
       }
