@@ -33,6 +33,7 @@ import {
   isCodexAccountInCooldown,
   isCodexAccountSoftAvoided,
   isCodexAccountModelCapacityAvoided,
+  isCodexAccountModelCapacityRecovering,
   pickLowestUsageCodexAccount,
   parseRetryAfterMs,
   previewCodexAccountForRequest,
@@ -198,13 +199,16 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread(threadId, config)).toBe("b");
   });
 
-  test("model capacity rebinds only the affected quota scope on the next request", () => {
+  test("model capacity evicts every affinity in the affected quota scope", () => {
     const config = makeConfig();
     const now = Date.now();
     const threadId = "capacity-rebind-thread";
+    const peerThreadId = "capacity-rebind-peer";
 
     expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
     expect(resolveCodexAccountForThread(threadId, config, now, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread(peerThreadId, config, now, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread(peerThreadId, config, now, "spark")).toBe("a");
 
     recordCodexUpstreamOutcome(config, "a", "model_capacity", {
       threadId,
@@ -218,7 +222,9 @@ describe("codex routing", () => {
       .toBe(now + CODEX_MODEL_CAPACITY_AVOID_MS);
     expect(isCodexAccountModelCapacityAvoided("a", "spark", now)).toBe(false);
     expect(resolveCodexAccountForThread(threadId, config, now + 1, "shared")).toBe("b");
+    expect(resolveCodexAccountForThread(peerThreadId, config, now + 1, "shared")).toBe("b");
     expect(resolveCodexAccountForThread(threadId, config, now + 1, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread(peerThreadId, config, now + 1, "spark")).toBe("a");
 
     // A success from an older concurrent request must not erase the retry hint.
     recordCodexUpstreamOutcome(config, "a", 200, {
@@ -232,6 +238,63 @@ describe("codex routing", () => {
       "shared",
       now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
     )).toBe(false);
+    expect(isCodexAccountModelCapacityRecovering(
+      "a",
+      "shared",
+      now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
+    )).toBe(true);
+  });
+
+  test("an expired capacity circuit retains its backoff history", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now,
+    });
+
+    const secondFailureAt = now + CODEX_MODEL_CAPACITY_AVOID_MS + 1;
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", secondFailureAt)).toBeNull();
+    expect(isCodexAccountModelCapacityRecovering("a", "shared", secondFailureAt)).toBe(true);
+
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now: secondFailureAt,
+    });
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", secondFailureAt))
+      .toBe(secondFailureAt + CODEX_MODEL_CAPACITY_BACKOFF_MS[1]!);
+  });
+
+  test("a recovering capacity circuit admits only one active probe turn", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now,
+    });
+    const probeAt = now + CODEX_MODEL_CAPACITY_AVOID_MS + 1;
+    const idle = {
+      canClaimAccount: () => true,
+      accountTurnCount: () => 0,
+    };
+    expect(resolveCodexAccountForThreadDetailed("capacity-probe", config, probeAt, "shared", idle))
+      .toEqual({ status: "selected", accountId: "a" });
+
+    const probeBusy = {
+      canClaimAccount: () => true,
+      accountTurnCount: (accountId: string) => accountId === "a" ? 1 : 0,
+    };
+    expect(resolveCodexAccountForThreadDetailed("capacity-probe", config, probeAt + 1, "shared", probeBusy))
+      .toEqual({ status: "selected", accountId: "b" });
+
+    recordCodexUpstreamOutcome(config, "a", 200, {
+      modelId: "gpt-5.6-sol",
+      now: probeAt + 2,
+    });
+    expect(isCodexAccountModelCapacityRecovering("a", "shared", probeAt + 2)).toBe(false);
   });
 
   test("repeated model capacity failures back off adaptively and recover on later success", () => {

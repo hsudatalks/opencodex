@@ -109,13 +109,13 @@ export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
 /** First model-capacity isolation interval; repeated hits back off adaptively. */
 export const CODEX_MODEL_CAPACITY_AVOID_MS = 15_000;
-export const CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS = 10 * 60_000;
+export const CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS = 60 * 60_000;
 export const CODEX_MODEL_CAPACITY_BACKOFF_MS = [
   CODEX_MODEL_CAPACITY_AVOID_MS,
-  30_000,
   60_000,
-  2 * 60_000,
   5 * 60_000,
+  15 * 60_000,
+  30 * 60_000,
 ] as const;
 const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
   CODEX_TRANSIENT_SOFT_AVOID_MS,
@@ -326,6 +326,18 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
     for (const [scope, entry] of affinities) {
       if (entry.accountId === accountId) affinities.delete(scope);
     }
+    if (affinities.size === 0) threadAccountMap.delete(threadId);
+  }
+}
+
+function clearThreadAccountMapForAccountScope(
+  accountId: string,
+  quotaScope?: CodexQuotaScope,
+): void {
+  const scope = threadAffinityScope(quotaScope);
+  for (const [threadId, affinities] of threadAccountMap) {
+    const entry = affinities.get(scope);
+    if (entry?.accountId === accountId) affinities.delete(scope);
     if (affinities.size === 0) threadAccountMap.delete(threadId);
   }
 }
@@ -975,11 +987,23 @@ export function getCodexModelCapacityAvoidUntil(
   now = Date.now(),
 ): number | null {
   const scopes = modelCapacityAvoids.get(accountId);
-  const avoidUntil = scopes?.get(quotaScope)?.avoidUntil;
+  const state = scopes?.get(quotaScope);
+  const avoidUntil = state?.avoidUntil;
   if (typeof avoidUntil === "number" && Number.isFinite(avoidUntil) && avoidUntil > now) {
     return avoidUntil;
   }
-  if (scopes?.delete(quotaScope) && scopes.size === 0) modelCapacityAvoids.delete(accountId);
+  // Keep an expired circuit long enough to remember its escalation history and
+  // admit only one half-open recovery turn. Deleting it at avoidUntil made every
+  // later failure look like the first one and reopened the account to a herd of
+  // previously affined Workbenches.
+  if (
+    state
+    && now - state.lastFailureAt > CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS
+    && scopes?.delete(quotaScope)
+    && scopes.size === 0
+  ) {
+    modelCapacityAvoids.delete(accountId);
+  }
   return null;
 }
 
@@ -989,6 +1013,20 @@ export function isCodexAccountModelCapacityAvoided(
   now = Date.now(),
 ): boolean {
   return getCodexModelCapacityAvoidUntil(accountId, quotaScope, now) !== null;
+}
+
+export function isCodexAccountModelCapacityRecovering(
+  accountId: string,
+  quotaScope: CodexQuotaScope = "shared",
+  now = Date.now(),
+): boolean {
+  const scopes = modelCapacityAvoids.get(accountId);
+  const state = scopes?.get(quotaScope);
+  if (!state) return false;
+  if (state.avoidUntil > now) return false;
+  // Reuse the expiry/pruning policy from the public avoid accessor.
+  getCodexModelCapacityAvoidUntil(accountId, quotaScope, now);
+  return modelCapacityAvoids.get(accountId)?.has(quotaScope) ?? false;
 }
 
 function recordCodexModelCapacityAvoid(
@@ -1036,10 +1074,15 @@ function isCodexAccountSelectable(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): boolean {
+  const capacityScope = quotaScope ?? "shared";
+  const recovering = isCodexAccountModelCapacityRecovering(accountId, capacityScope, now);
+  const recoveryProbeAvailable = !recovering
+    || (selectionOptions?.accountTurnCount?.(accountId) ?? 0) === 0;
   return !isCodexAccountPaused(config, accountId)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(accountId, now)
-    && !isCodexAccountModelCapacityAvoided(accountId, quotaScope ?? "shared", now)
+    && !isCodexAccountModelCapacityAvoided(accountId, capacityScope, now)
+    && recoveryProbeAvailable
     && isCodexAccountUsable(config, accountId, selectionOptions);
 }
 
@@ -1969,7 +2012,13 @@ export function previewCodexAccountForRequest(
   const quotaRoutingOptions = selectionOptions;
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
-    const stableOptions = withoutTransientAccountCapacity(selectionOptions);
+    const stableOptions = isCodexAccountModelCapacityRecovering(
+      entry.accountId,
+      quotaScope ?? "shared",
+      now,
+    )
+      ? selectionOptions
+      : withoutTransientAccountCapacity(selectionOptions);
     if (
       !isThreadAffinityExpired(entry, now)
       && isThreadAffinityGenerationLive(entry)
@@ -2042,7 +2091,13 @@ export function resolveCodexAccountForThreadDetailed(
       deleteThreadAffinity(threadId, quotaScope);
       return { status: "expired", accountId: entry.accountId };
     }
-    const stableOptions = withoutTransientAccountCapacity(selectionOptions);
+    const stableOptions = isCodexAccountModelCapacityRecovering(
+      entry.accountId,
+      quotaScope ?? "shared",
+      now,
+    )
+      ? selectionOptions
+      : withoutTransientAccountCapacity(selectionOptions);
     if (
       isThreadAffinityGenerationLive(entry)
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, stableOptions)
@@ -2222,9 +2277,7 @@ export function recordCodexUpstreamOutcome(
     if (outcome === "model_capacity" && meta.retryableModelCapacity && !meta.fixedAccount) {
       const capacityScope = quotaScope ?? "shared";
       recordCodexModelCapacityAvoid(accountId, capacityScope, now);
-      if (meta.threadId) {
-        deleteThreadAffinityForAccount(meta.threadId, accountId, capacityScope);
-      }
+      clearThreadAccountMapForAccountScope(accountId, capacityScope);
     }
     return;
   }
