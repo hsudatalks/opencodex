@@ -16,6 +16,7 @@ import {
   finishRequestAttempt,
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
+  inspectResponseLogSsePayload,
   noteAttemptSend,
   recordAdapterReasoning,
   recordFirstOutput,
@@ -54,6 +55,38 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("capacity classification is independent from TTFT callbacks and prior status writes", () => {
+    const capacity = JSON.stringify({
+      type: "response.failed",
+      response: {
+        error: {
+          type: "server_error",
+          code: "server_is_overloaded",
+          message: "busy",
+        },
+      },
+    });
+
+    const preOutput: RequestLogContext = {
+      model: "gpt-test",
+      provider: "openai",
+      terminalHttpStatus: 503,
+    };
+    inspectResponseLogSsePayload(preOutput, JSON.stringify({ type: "response.created" }));
+    inspectResponseLogSsePayload(preOutput, capacity);
+    expect(preOutput.terminalModelCapacity).toBe(true);
+    expect(preOutput.preOutputModelCapacity).toBe(true);
+
+    const afterOutput: RequestLogContext = { model: "gpt-test", provider: "openai" };
+    inspectResponseLogSsePayload(afterOutput, JSON.stringify({
+      type: "response.output_text.delta",
+      delta: "partial",
+    }));
+    inspectResponseLogSsePayload(afterOutput, capacity);
+    expect(afterOutput.terminalModelCapacity).toBe(true);
+    expect(afterOutput.preOutputModelCapacity).toBeUndefined();
+  });
+
   test("creates one ordinary attempt after the final adapter is resolved", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({

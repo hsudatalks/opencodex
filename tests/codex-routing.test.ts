@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY,
   CODEX_FAILURE_WINDOW_MS,
+  CODEX_MODEL_CAPACITY_AVOID_MS,
   CODEX_QUOTA_AFFINITY_RELEASE_GAP,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
@@ -25,9 +26,11 @@ import {
   getCodexQuotaAllocatorMetrics,
   getCodexQuotaRoutingSnapshot,
   getCodexAccountSoftAvoidUntil,
+  getCodexModelCapacityAvoidUntil,
   getCodexUpstreamHealth,
   isCodexAccountInCooldown,
   isCodexAccountSoftAvoided,
+  isCodexAccountModelCapacityAvoided,
   pickLowestUsageCodexAccount,
   parseRetryAfterMs,
   previewCodexAccountForRequest,
@@ -191,6 +194,74 @@ describe("codex routing", () => {
     clearAccountNeedsReauth("a");
     clearCodexUpstreamHealthForAccount("a");
     expect(resolveCodexAccountForThread(threadId, config)).toBe("b");
+  });
+
+  test("model capacity rebinds only the affected quota scope on the next request", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    const threadId = "capacity-rebind-thread";
+
+    expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread(threadId, config, now, "spark")).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      threadId,
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now,
+    });
+
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", now))
+      .toBe(now + CODEX_MODEL_CAPACITY_AVOID_MS);
+    expect(isCodexAccountModelCapacityAvoided("a", "spark", now)).toBe(false);
+    expect(resolveCodexAccountForThread(threadId, config, now + 1, "shared")).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, now + 1, "spark")).toBe("a");
+
+    // A success from an older concurrent request must not erase the retry hint.
+    recordCodexUpstreamOutcome(config, "a", 200, {
+      threadId: "older-success",
+      modelId: "gpt-5.6-sol",
+      now: now + 2,
+    });
+    expect(isCodexAccountModelCapacityAvoided("a", "shared", now + 2)).toBe(true);
+    expect(isCodexAccountModelCapacityAvoided(
+      "a",
+      "shared",
+      now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
+    )).toBe(false);
+  });
+
+  test("model capacity does not mutate exact-account routing", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    const threadId = "fixed-capacity-thread";
+    expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      fixedAccount: true,
+      threadId,
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now,
+    });
+
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", now)).toBeNull();
+    expect(resolveCodexAccountForThread(threadId, config, now + 1, "shared")).toBe("a");
+  });
+
+  test("model capacity avoidance degrades open when every account is affected", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    for (const accountId of ["a", "b"]) {
+      recordCodexUpstreamOutcome(config, accountId, "model_capacity", {
+        modelId: "gpt-5.6-sol",
+        retryableModelCapacity: true,
+        now,
+      });
+    }
+
+    expect(resolveCodexAccountForThread("all-capacity", config, now + 1, "shared")).toBe("a");
   });
 
   test("go and free plans use only the 30d quota window", () => {

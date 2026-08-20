@@ -107,6 +107,8 @@ export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
+/** Long enough for Codex's native bounded retry to choose another pool account. */
+export const CODEX_MODEL_CAPACITY_AVOID_MS = 15_000;
 const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   2 * 60_000,
@@ -170,6 +172,14 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  * from account-wide Retry-After/default throttles and transient health.
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
+/**
+ * Short-lived scheduler evidence for an upstream model-capacity terminal.
+ *
+ * This stays separate from account health: capacity is not a bad credential,
+ * exhausted quota, or proof that the account is unhealthy. It also prevents a
+ * concurrent successful turn from erasing the hint before Codex retries.
+ */
+const modelCapacityAvoids = new Map<string, Map<CodexQuotaScope, number>>();
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
@@ -244,6 +254,8 @@ export type CodexUpstreamOutcomeMeta = {
   lastFailureCode?: string;
   /** Native model selected for this request; used only for confirmed scoped quotas. */
   modelId?: string;
+  /** Capacity terminal occurred before meaningful output, so the client can safely retry. */
+  retryableModelCapacity?: boolean;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
   /**
@@ -308,12 +320,14 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
   quotaScopedHealth.clear();
+  modelCapacityAvoids.clear();
   runtimeActiveCodexAccountId = undefined;
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
+  modelCapacityAvoids.delete(accountId);
 }
 
 export function reconcileCodexRoutingHealth(context: GenerationContext): number {
@@ -327,6 +341,11 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
   for (const accountId of quotaScopedHealth.keys()) {
     if (context.codexAccountIds.has(accountId)) continue;
     quotaScopedHealth.delete(accountId);
+    removed += 1;
+  }
+  for (const accountId of modelCapacityAvoids.keys()) {
+    if (context.codexAccountIds.has(accountId)) continue;
+    modelCapacityAvoids.delete(accountId);
     removed += 1;
   }
   liveHealthAccountIds = new Set(context.codexAccountIds);
@@ -937,6 +956,44 @@ export function isCodexAccountSoftAvoided(accountId: string, now = Date.now()): 
   return getCodexAccountSoftAvoidUntil(accountId, now) !== null;
 }
 
+export function getCodexModelCapacityAvoidUntil(
+  accountId: string,
+  quotaScope: CodexQuotaScope = "shared",
+  now = Date.now(),
+): number | null {
+  const scopes = modelCapacityAvoids.get(accountId);
+  const avoidUntil = scopes?.get(quotaScope);
+  if (typeof avoidUntil === "number" && Number.isFinite(avoidUntil) && avoidUntil > now) {
+    return avoidUntil;
+  }
+  if (scopes?.delete(quotaScope) && scopes.size === 0) modelCapacityAvoids.delete(accountId);
+  return null;
+}
+
+export function isCodexAccountModelCapacityAvoided(
+  accountId: string,
+  quotaScope: CodexQuotaScope = "shared",
+  now = Date.now(),
+): boolean {
+  return getCodexModelCapacityAvoidUntil(accountId, quotaScope, now) !== null;
+}
+
+function recordCodexModelCapacityAvoid(
+  accountId: string,
+  quotaScope: CodexQuotaScope,
+  now: number,
+): void {
+  let scopes = modelCapacityAvoids.get(accountId);
+  if (!scopes) {
+    scopes = new Map();
+    modelCapacityAvoids.set(accountId, scopes);
+  }
+  scopes.set(
+    quotaScope,
+    Math.max(scopes.get(quotaScope) ?? 0, now + CODEX_MODEL_CAPACITY_AVOID_MS),
+  );
+}
+
 function isCodexAccountSelectable(
   config: OcxConfig,
   accountId: string,
@@ -947,6 +1004,7 @@ function isCodexAccountSelectable(
   return !isCodexAccountPaused(config, accountId)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(accountId, now)
+    && !isCodexAccountModelCapacityAvoided(accountId, quotaScope ?? "shared", now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
 }
 
@@ -980,6 +1038,16 @@ function deleteThreadAffinitiesForAccount(threadId: string, accountId: string): 
     if (entry.accountId === accountId) affinities.delete(scope);
   }
   if (affinities.size === 0) threadAccountMap.delete(threadId);
+}
+
+/** Remove only the failed account's affinity in the affected model quota scope. */
+function deleteThreadAffinityForAccount(
+  threadId: string,
+  accountId: string,
+  quotaScope?: CodexQuotaScope,
+): void {
+  const entry = getThreadAffinity(threadId, quotaScope);
+  if (entry?.accountId === accountId) deleteThreadAffinity(threadId, quotaScope);
 }
 
 function threadAffinityEntryCount(): number {
@@ -1290,6 +1358,7 @@ function getEligiblePoolAccounts(
       && !isAccountNeedsReauth(account.id))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
+    .filter(account => !isCodexAccountModelCapacityAvoided(account.id, quotaScope ?? "shared", now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
     .filter(account => selectionOptions?.canClaimAccount?.(account.id) ?? true)
     .map(account => account.id);
@@ -1301,6 +1370,7 @@ function getEligiblePoolAccounts(
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    && !isCodexAccountModelCapacityAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope ?? "shared", now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
     && (selectionOptions?.canClaimAccount?.(MAIN_CODEX_ACCOUNT_ID) ?? true)
   ) {
@@ -2100,11 +2170,9 @@ export function recordCodexUpstreamOutcome(
   }
 
   if (outcomeClass === "neutral") {
-    // A proven pre-connection reachability failure (DNS / TCP refusal) or a
-    // relayed 3xx is host-level, not account evidence: rotation cannot repair
-    // it and must not happen (#914). Conclude any owned probe lease, record the
-    // failure under the (provider, host) ledger when one is named, and leave
-    // account health, thread affinity, and the active account untouched.
+    // Neutral outcomes never penalize account health. Host reachability and 3xx
+    // evidence leave routing untouched (#914); model capacity adds only a short,
+    // scope-local scheduling hint so Codex's next native retry can rebind.
     const current = upstreamHealth.get(accountId);
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
@@ -2114,6 +2182,13 @@ export function recordCodexUpstreamOutcome(
     }
     if (ownsProbeLease(current, meta)) {
       upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
+    }
+    if (outcome === "model_capacity" && meta.retryableModelCapacity && !meta.fixedAccount) {
+      const capacityScope = quotaScope ?? "shared";
+      recordCodexModelCapacityAvoid(accountId, capacityScope, now);
+      if (meta.threadId) {
+        deleteThreadAffinityForAccount(meta.threadId, accountId, capacityScope);
+      }
     }
     return;
   }

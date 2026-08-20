@@ -94,6 +94,12 @@ export interface RequestLogContext {
   upstreamError?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Internal: terminal carried an upstream model-capacity code. */
+  terminalModelCapacity?: boolean;
+  /** Internal: a non-lifecycle Responses event preceded the terminal. */
+  sawMeaningfulResponseOutput?: boolean;
+  /** Internal: a model-capacity terminal arrived before any meaningful output. */
+  preOutputModelCapacity?: boolean;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
   affinity?: "reused" | "new_bind" | "rebound" | "cleared";
@@ -620,6 +626,20 @@ export function inspectResponseLogSsePayloadParsed(
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
   captureUpstreamErrorParsed(logCtx, payload, parsed);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const type = typeof (parsed as { type?: unknown }).type === "string"
+      ? (parsed as { type: string }).type
+      : "";
+    if (
+      type
+      && type !== "response.failed"
+      && type !== "response.created"
+      && type !== "response.in_progress"
+      && type !== "response.queued"
+    ) {
+      logCtx.sawMeaningfulResponseOutput = true;
+    }
+  }
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
       logCtx.usageDebugBodyKind = "sse";
@@ -718,10 +738,14 @@ function captureTerminalHttpStatus(
     response?: { error?: { type?: unknown; code?: unknown; message?: unknown } };
   },
 ): void {
-  if (logCtx.terminalHttpStatus !== undefined) return;
   if (json.type !== "response.failed") return;
   const error = json.response?.error;
   if (!error || typeof error !== "object") return;
+  if (error.code === "server_is_overloaded" || error.code === "slow_down") {
+    logCtx.terminalModelCapacity = true;
+    if (!logCtx.sawMeaningfulResponseOutput) logCtx.preOutputModelCapacity = true;
+  }
+  if (logCtx.terminalHttpStatus !== undefined) return;
   logCtx.terminalHttpStatus = httpStatusFromTerminalError({
     type: typeof error.type === "string" ? error.type : undefined,
     code: error.code === null || typeof error.code === "string" ? error.code : undefined,

@@ -156,7 +156,12 @@ export {
   jsonResponse,
   safeConfigDTO,
 } from "./auth-cors";
-import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";
+import {
+  disableResponsesRequestTimeout,
+  handleResponses,
+  handleResponsesCompact,
+  type CodexTerminalOutcomeRecorder,
+} from "./responses";
 export { disableResponsesRequestTimeout, linkAbortSignal } from "./responses";
 import { handleClaudeCountTokens, handleClaudeMessages } from "./claude-messages";
 import { handleChatCompletions } from "./chat-completions";
@@ -1443,7 +1448,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             body: JSON.stringify({ ...payload, stream: true }),
           });
           try {
-            let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+            let terminalRecorder: CodexTerminalOutcomeRecorder | undefined;
             const response = await handleResponses(req, config, logCtx, {
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
@@ -1459,7 +1464,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             await sendResponseToWebSocket(ws, response, isCurrent, {
               onSsePayload: payload => inspectResponseLogSsePayload(logCtx, payload),
               onTerminal: status => {
-                terminalRecorder?.(status, logCtx.terminalHttpStatus);
+                terminalRecorder?.(status, logCtx.terminalHttpStatus, {
+                  modelCapacity: logCtx.terminalModelCapacity,
+                  retryableModelCapacity: logCtx.preOutputModelCapacity,
+                });
                 finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {
                   terminalStatus: status,
                   closeReason: "terminal",

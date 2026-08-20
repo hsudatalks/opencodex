@@ -547,6 +547,24 @@ async function retryCodexPoolOnAlternateAccount(
 
 
 
+export type CodexTerminalEvidence = {
+  modelCapacity?: boolean;
+  retryableModelCapacity?: boolean;
+};
+
+export type CodexTerminalOutcomeRecorder = (
+  status: ResponsesTerminalStatus,
+  httpStatusOverride?: number,
+  evidence?: CodexTerminalEvidence,
+) => void;
+
+function codexTerminalEvidence(logCtx?: RequestLogContext): CodexTerminalEvidence {
+  return {
+    modelCapacity: logCtx?.terminalModelCapacity,
+    retryableModelCapacity: logCtx?.preOutputModelCapacity,
+  };
+}
+
 export function codexForwardTerminalOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
@@ -554,9 +572,9 @@ export function codexForwardTerminalOutcomeRecorder(
   modelId?: string,
   logCtx?: RequestLogContext,
   threadId?: string | null,
-): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
+): CodexTerminalOutcomeRecorder | undefined {
   if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
-  return (status, httpStatusOverride) => {
+  return (status, httpStatusOverride, evidence) => {
     if (status === "incomplete") {
       // Normal limit/content-filter/stall terminal — the account served the
       // request. Don't penalize account health; record success to clear any
@@ -583,13 +601,15 @@ export function codexForwardTerminalOutcomeRecorder(
     const terminalOutcome = status === "completed"
       ? 200
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
-    const outcome: CodexUpstreamOutcome = terminalOutcome === 503
+    const terminalEvidence = evidence ?? codexTerminalEvidence(logCtx);
+    const outcome: CodexUpstreamOutcome = terminalOutcome === 503 && terminalEvidence.modelCapacity
       ? "model_capacity"
       : terminalOutcome;
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
       fixedAccount: authCtx.fixedAccount,
       modelId,
+      retryableModelCapacity: terminalEvidence.retryableModelCapacity,
       probeLeaseId: codexProbeLeaseId(authCtx),
       probeQuotaScope: codexProbeQuotaScope(authCtx),
       writerGeneration: authCtx.writerGeneration,
@@ -649,7 +669,7 @@ export interface HandleResponsesOptions {
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
   recordTerminalOutcomes?: boolean;
-  setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined) => void;
+  setTerminalOutcomeRecorder?: (recorder: CodexTerminalOutcomeRecorder | undefined) => void;
   onNativePassthroughTerminal?: (
     status: ResponsesTerminalStatus,
     httpStatusOverride?: number,
@@ -1168,7 +1188,7 @@ export async function handleComboResponses(
       body: JSON.stringify(childBody),
     });
     let resolvedAuth: CodexAuthContext | undefined;
-    let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+    let terminalRecorder: CodexTerminalOutcomeRecorder | undefined;
     const started = Date.now();
     const attempt = beginRequestAttempt(
       (logCtx.attempts?.length ?? 0) + 1,
@@ -2218,8 +2238,8 @@ async function handleResponsesInner(
         authCtx.writerGeneration,
       );
       if (terminalBodyWillRecord) {
-        options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
-          terminalRecorder(status, httpStatusOverride);
+        options.setTerminalOutcomeRecorder?.((status, httpStatusOverride, evidence) => {
+          terminalRecorder(status, httpStatusOverride, evidence ?? codexTerminalEvidence(logCtx));
           if (status === "failed") {
             const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
               || logCtx.terminalHttpStatus === 429
@@ -2292,6 +2312,7 @@ async function handleResponsesInner(
             threadId: req.headers.get("x-codex-parent-thread-id"),
             fixedAccount: authCtx.fixedAccount,
             modelId: route.modelId,
+            retryableModelCapacity: outcome === "model_capacity",
             probeLeaseId: codexProbeLeaseId(authCtx),
             probeQuotaScope: codexProbeQuotaScope(authCtx),
             writerGeneration: authCtx.writerGeneration,
@@ -2385,7 +2406,7 @@ async function handleResponsesInner(
         registerTurn(turnAc, options.turnAdmissionLease);
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
-            terminalRecorder?.(status, httpStatusOverride);
+            terminalRecorder?.(status, httpStatusOverride, codexTerminalEvidence(logCtx));
             if (status === "failed") {
               const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
                 || logCtx.terminalHttpStatus === 429
@@ -2468,7 +2489,7 @@ async function handleResponsesInner(
         // it must log as completed/failed, not be dropped or downgraded to a cancel (#44). A pure
         // client-cancel (no terminal seen) is finalized separately via consumeForInspection's onCancel.
         const reportNativeTerminal = (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
-          terminalRecorder?.(status, httpStatusOverride);
+          terminalRecorder?.(status, httpStatusOverride, codexTerminalEvidence(logCtx));
           if (status === "failed") {
             const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
               || logCtx.terminalHttpStatus === 429

@@ -157,6 +157,7 @@ type PoolRetryHarness = {
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
     serviceTier?: string;
+    threadId?: string;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -295,11 +296,13 @@ async function startPoolRetryHarness(
       path = "/v1/responses",
       callerBearer = true,
       serviceTier,
+      threadId,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
+        ...(threadId ? { "x-codex-parent-thread-id": threadId } : {}),
       },
       body: JSON.stringify({
         model,
@@ -2503,7 +2506,7 @@ describe("server local API auth", () => {
   }, { timeout: SERVER_BUDGET_MS });
 
   test.each(["legacy-tee", "eager-relay"] as const)(
-    "model capacity SSE becomes client-retryable without rotating accounts (%s)",
+    "model capacity SSE makes the next client retry use another account (%s)",
     async (streamMode) => {
       const harness = await startPoolRetryHarness(() => new Response(
         [
@@ -2516,7 +2519,8 @@ describe("server local API auth", () => {
         { headers: { "content-type": "text/event-stream" } },
       ), { streamMode });
       try {
-        const text = await (await harness.request({ stream: true })).text();
+        const threadId = `capacity-${streamMode}`;
+        const text = await (await harness.request({ stream: true, threadId })).text();
         expect(text).toContain('"code":"upstream_server_error"');
         expect(text).toContain("try again in 2s");
         expect(harness.dispatches).toEqual(["acct-pool-a"]);
@@ -2532,12 +2536,91 @@ describe("server local API auth", () => {
           errorCode: "server_is_overloaded",
           upstreamError: "Our servers are currently overloaded. Please try again later.",
         });
+
+        await (await harness.request({ stream: true, threadId })).text();
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
       } finally {
         await stopPoolRetryHarness(harness);
       }
     },
     { timeout: SERVER_BUDGET_MS },
   );
+
+  test.each(["legacy-tee", "eager-relay"] as const)(
+    "model capacity after meaningful output stays neutral without rebinding (%s)",
+    async (streamMode) => {
+      const harness = await startPoolRetryHarness(() => new Response(
+        [
+          'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+          "",
+          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"partial"}',
+          "",
+          'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ), { streamMode });
+      try {
+        const threadId = `capacity-after-output-${streamMode}`;
+        const text = await (await harness.request({ stream: true, threadId })).text();
+        expect(text).toContain('"code":"server_is_overloaded"');
+        expect(text).not.toContain('"code":"upstream_server_error"');
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+
+        await (await harness.request({ stream: true, threadId })).text();
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+    { timeout: SERVER_BUDGET_MS },
+  );
+
+  test("WebSocket model-capacity retry re-resolves pool auth on the next turn", async () => {
+    const harness = await startPoolRetryHarness(() => new Response(
+      [
+        'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+        "",
+        'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+        "",
+        "",
+      ].join("\n"),
+      { headers: { "content-type": "text/event-stream" } },
+    ), { websockets: true });
+    const wsUrl = new URL("/v1/responses", harness.server.url);
+    wsUrl.protocol = "ws:";
+    const ws = new WebSocket(wsUrl);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("websocket capacity retry timed out")), INTERNAL_DEADLINE_MS);
+        let failures = 0;
+        ws.addEventListener("open", () => {
+          ws.send(JSON.stringify({ type: "response.create", model: POOL_RETRY_MODEL, input: "hello" }));
+        }, { once: true });
+        ws.addEventListener("message", event => {
+          const text = String(event.data);
+          if (!text.includes('"type":"response.failed"')) return;
+          expect(text).toContain('"code":"upstream_server_error"');
+          failures += 1;
+          if (failures === 1) {
+            setTimeout(() => {
+              ws.send(JSON.stringify({ type: "response.create", model: POOL_RETRY_MODEL, input: "retry" }));
+            }, 10);
+            return;
+          }
+          clearTimeout(timer);
+          resolve();
+        });
+        ws.addEventListener("error", () => reject(new Error("websocket capacity retry failed")), { once: true });
+      });
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      ws.close();
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: 30_000 });
 
   test("oversized 400 body never authorizes a pool retry", async () => {
     const body = `${unsupportedModelBody()}${"x".repeat(65_536)}`;

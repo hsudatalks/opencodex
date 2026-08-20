@@ -6,5 +6,6 @@ export { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace } from
 export { COMPACT_RESPONSE_MAX_BYTES, bufferCompactResponse, handleResponsesCompact } from "./responses/compact";
 export { disableResponsesRequestTimeout, safeHostLabel, fetchWithHeaderTimeout } from "./responses/fetch-helpers";
 export { sidecarOutcomeRecorder, isShadowSourceModel, codexLogAccountId, usesCodexForwardPoolAuth, codexForwardTerminalOutcomeRecorder, decodeRequestErrorResponse, buildComboChildHeaders, linkAbortSignal } from "./responses/core";
+export type { CodexTerminalEvidence, CodexTerminalOutcomeRecorder } from "./responses/core";
 export { handleResponses, handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "./responses/policy-fallback";
 export { adapterNeedsForcedContinuation } from "./responses/core";
