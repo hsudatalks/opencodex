@@ -199,7 +199,7 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread(threadId, config)).toBe("b");
   });
 
-  test("model capacity evicts every affinity in the affected quota scope", () => {
+  test("model capacity reroutes active turns without evicting idle peer affinity", () => {
     const config = makeConfig();
     const now = Date.now();
     const threadId = "capacity-rebind-thread";
@@ -222,7 +222,7 @@ describe("codex routing", () => {
       .toBe(now + CODEX_MODEL_CAPACITY_AVOID_MS);
     expect(isCodexAccountModelCapacityAvoided("a", "spark", now)).toBe(false);
     expect(resolveCodexAccountForThread(threadId, config, now + 1, "shared")).toBe("b");
-    expect(resolveCodexAccountForThread(peerThreadId, config, now + 1, "shared")).toBe("b");
+    expect(previewCodexAccountForRequest(peerThreadId, config, now + 1, "shared")).toBe("b");
     expect(resolveCodexAccountForThread(threadId, config, now + 1, "spark")).toBe("a");
     expect(resolveCodexAccountForThread(peerThreadId, config, now + 1, "spark")).toBe("a");
 
@@ -243,6 +243,24 @@ describe("codex routing", () => {
       "shared",
       now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
     )).toBe(true);
+
+    // The peer never sent a turn during isolation, so its affinity remains intact.
+    // Changing the global active account proves the recovery probe follows that
+    // retained affinity rather than selecting a fresh account.
+    config.activeCodexAccountId = "b";
+    const idle = {
+      canClaimAccount: () => true,
+      accountTurnCount: () => 0,
+    };
+    expect(resolveCodexAccountForThreadDetailed(
+      peerThreadId,
+      config,
+      now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
+      "shared",
+      idle,
+    )).toEqual({ status: "selected", accountId: "a" });
+    expect(resolveCodexAccountForThread(threadId, config, now + CODEX_MODEL_CAPACITY_AVOID_MS + 1, "shared"))
+      .toBe("b");
   });
 
   test("an expired capacity circuit retains its backoff history", () => {

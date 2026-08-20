@@ -330,18 +330,6 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
   }
 }
 
-function clearThreadAccountMapForAccountScope(
-  accountId: string,
-  quotaScope?: CodexQuotaScope,
-): void {
-  const scope = threadAffinityScope(quotaScope);
-  for (const [threadId, affinities] of threadAccountMap) {
-    const entry = affinities.get(scope);
-    if (entry?.accountId === accountId) affinities.delete(scope);
-    if (affinities.size === 0) threadAccountMap.delete(threadId);
-  }
-}
-
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
   quotaScopedHealth.clear();
@@ -2277,7 +2265,9 @@ export function recordCodexUpstreamOutcome(
     if (outcome === "model_capacity" && meta.retryableModelCapacity && !meta.fixedAccount) {
       const capacityScope = quotaScope ?? "shared";
       recordCodexModelCapacityAvoid(accountId, capacityScope, now);
-      clearThreadAccountMapForAccountScope(accountId, capacityScope);
+      if (meta.threadId) {
+        deleteThreadAffinityForAccount(meta.threadId, accountId, capacityScope);
+      }
     }
     return;
   }
