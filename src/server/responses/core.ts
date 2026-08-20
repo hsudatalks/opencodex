@@ -213,6 +213,7 @@ import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-resp
 import {
   createResponsesCapacityRetryBlockRewrite,
   isResponsesCapacityErrorBody,
+  probeResponsesPreOutputCapacity,
 } from "../responses-capacity-retry";
 import { responsesJsonToSseBody } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
@@ -330,6 +331,23 @@ async function shouldRetryCodexPoolAccountModel400(
   }
 }
 
+async function shouldRetryCodexPoolAccountCapacityBody(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (response.status !== 503) return false;
+  const contentType = response.headers.get("content-type")?.toLowerCase();
+  if (contentType && !contentType.includes("json")) return false;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe
+      && !body.truncated
+      && isResponsesCapacityErrorBody(body.text);
+  } catch {
+    return false;
+  }
+}
+
 /** Pre-stream quota/billing rejections that warrant one alternate-account attempt (#584). */
 export function shouldRetryCodexPoolAccountQuota(response: Response): boolean {
   return response.status === 402 || response.status === 429;
@@ -354,7 +372,8 @@ interface CodexPoolAccountRetryArgs {
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
-  outcomeStatus: number;
+  outcomeStatus: CodexUpstreamOutcome;
+  retryableModelCapacity?: boolean;
   upstream: AbortController;
   connectMs: number;
   passthroughEstimate?: number;
@@ -411,7 +430,7 @@ async function retryCodexPoolOnAlternateAccount(
 ): Promise<CodexPoolAccountRetryResult> {
   const {
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
-    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    outcomeStatus, retryableModelCapacity, upstream, connectMs, passthroughEstimate, stream,
     passthroughServiceTier,
   } = args;
   // Defense in depth: exact account selectors must never reach alternate-account resolution,
@@ -459,6 +478,7 @@ async function retryCodexPoolOnAlternateAccount(
       ...quotaMeta,
       threadId: req.headers.get("x-codex-parent-thread-id"),
       modelId: route.modelId,
+      retryableModelCapacity,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
       writerGeneration: firstAuthCtx.writerGeneration,
@@ -2095,7 +2115,14 @@ async function handleResponsesInner(
               return res;
             });
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        {
+          abortSignal: upstream.signal,
+          label: safeHostLabel(request.url),
+          shouldRetryResponse: response => shouldRetryCodexPoolAccountCapacityBody(
+            response,
+            options.abortSignal,
+          ).then(isCapacity => !isCapacity),
+        },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -2154,7 +2181,14 @@ async function handleResponsesInner(
                 return res;
               });
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+          {
+            abortSignal: upstream.signal,
+            label: safeHostLabel(request.url),
+            shouldRetryResponse: response => shouldRetryCodexPoolAccountCapacityBody(
+              response,
+              options.abortSignal,
+            ).then(isCapacity => !isCapacity),
+          },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -2162,13 +2196,18 @@ async function handleResponsesInner(
     }
 
     if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
-      let poolRetryOutcome: number | undefined;
+      let poolRetryOutcome: CodexUpstreamOutcome | undefined;
       if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
       )) {
         poolRetryOutcome = 400;
+      } else if (await shouldRetryCodexPoolAccountCapacityBody(
+        upstreamResponse,
+        options.abortSignal,
+      )) {
+        poolRetryOutcome = "model_capacity";
       } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
         // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
         poolRetryOutcome = upstreamResponse.status;
@@ -2185,6 +2224,7 @@ async function handleResponsesInner(
           firstAuthCtx: authCtx,
           firstResponse: upstreamResponse,
           outcomeStatus: poolRetryOutcome,
+          retryableModelCapacity: poolRetryOutcome === "model_capacity",
           upstream,
           connectMs,
           passthroughEstimate,
@@ -2204,6 +2244,58 @@ async function handleResponsesInner(
           subagentFallbackAccountId = retry.authCtx.accountId;
         }
       }
+    }
+
+    // ChatGPT sometimes reports model capacity inside an HTTP-200 SSE terminal.
+    // Probe only the bounded lifecycle prefix, then retry on one other
+    // pool account before any model/tool output reaches the client. This keeps
+    // one unstable account from stopping many Workbenches without risking a
+    // duplicate tool side effect after meaningful output.
+    const MAX_MODEL_CAPACITY_ALTERNATE_ATTEMPTS = 1;
+    let modelCapacityAlternateAttempts = 0;
+    while (
+      usesCodexForwardPoolAuth(authCtx, route.provider)
+      && !authCtx.fixedAccount
+      && parsed.stream
+      && upstreamResponse.ok
+      && upstreamResponse.body
+      && modelCapacityAlternateAttempts <= MAX_MODEL_CAPACITY_ALTERNATE_ATTEMPTS
+    ) {
+      const contentType = upstreamResponse.headers.get("content-type")?.toLowerCase();
+      if (contentType && !contentType.includes("text/event-stream")) break;
+      const probe = await probeResponsesPreOutputCapacity(upstreamResponse);
+      upstreamResponse = probe.response;
+      if (!probe.capacityError) break;
+      if (modelCapacityAlternateAttempts >= MAX_MODEL_CAPACITY_ALTERNATE_ATTEMPTS) break;
+
+      const retry = await retryCodexPoolOnAlternateAccount({
+        req,
+        config,
+        route,
+        parsed,
+        logCtx,
+        options,
+        firstAuthCtx: authCtx,
+        firstResponse: upstreamResponse,
+        outcomeStatus: "model_capacity",
+        retryableModelCapacity: true,
+        upstream,
+        connectMs,
+        passthroughEstimate,
+        stream: parsed.stream,
+        passthroughServiceTier: accountFastModePassthroughServiceTier,
+      });
+      if (retry.kind === "transport") {
+        authCtx = retry.authCtx;
+        return transportFailureResponse(retry.error);
+      }
+      if (retry.kind !== "retried") break;
+      modelCapacityAlternateAttempts += 1;
+      authCtx = retry.authCtx;
+      request = retry.request;
+      upstreamResponse = retry.upstreamResponse;
+      selectedForwardHeaders = retry.selectedForwardHeaders;
+      subagentFallbackAccountId = retry.authCtx.accountId;
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();

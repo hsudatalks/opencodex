@@ -44,6 +44,21 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(400);
   });
 
+  test("lets a semantic recovery layer veto same-target 5xx retries", async () => {
+    const first = bodyResponse(503) as Response & { __wasCancelled: () => boolean };
+    let calls = 0;
+    const res = await fetchWithTransientRetry(async () => {
+      calls += 1;
+      return first;
+    }, {
+      slowAttemptMs: 60_000,
+      shouldRetryResponse: () => false,
+    });
+    expect(calls).toBe(1);
+    expect(res).toBe(first);
+    expect(first.__wasCancelled()).toBe(false);
+  });
+
   test("honors Retry-After header for the backoff delay", async () => {
     let calls = 0;
     const started = Date.now();

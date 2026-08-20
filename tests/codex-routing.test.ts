@@ -5,6 +5,8 @@ import {
   CODEX_FULL_CAPACITY_BOOTSTRAP_URGENCY,
   CODEX_FAILURE_WINDOW_MS,
   CODEX_MODEL_CAPACITY_AVOID_MS,
+  CODEX_MODEL_CAPACITY_BACKOFF_MS,
+  CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS,
   CODEX_QUOTA_AFFINITY_RELEASE_GAP,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
@@ -230,6 +232,54 @@ describe("codex routing", () => {
       "shared",
       now + CODEX_MODEL_CAPACITY_AVOID_MS + 1,
     )).toBe(false);
+  });
+
+  test("repeated model capacity failures back off adaptively and recover on later success", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    for (let index = 0; index < 3; index++) {
+      const failedAt = now + index;
+      recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+        modelId: "gpt-5.6-sol",
+        retryableModelCapacity: true,
+        now: failedAt,
+      });
+      expect(getCodexModelCapacityAvoidUntil("a", "shared", failedAt))
+        .toBe(failedAt + CODEX_MODEL_CAPACITY_BACKOFF_MS[index]!);
+    }
+
+    const recoveredAt = now + 2 + CODEX_MODEL_CAPACITY_BACKOFF_MS[2]! + 1;
+    recordCodexUpstreamOutcome(config, "a", 200, {
+      modelId: "gpt-5.6-sol",
+      now: recoveredAt,
+    });
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", recoveredAt)).toBeNull();
+
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now: recoveredAt + 1,
+    });
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", recoveredAt + 1))
+      .toBe(recoveredAt + 1 + CODEX_MODEL_CAPACITY_AVOID_MS);
+  });
+
+  test("a stale model capacity streak restarts at the base isolation interval", () => {
+    const config = makeConfig();
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now,
+    });
+    const later = now + CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS + 1;
+    recordCodexUpstreamOutcome(config, "a", "model_capacity", {
+      modelId: "gpt-5.6-sol",
+      retryableModelCapacity: true,
+      now: later,
+    });
+    expect(getCodexModelCapacityAvoidUntil("a", "shared", later))
+      .toBe(later + CODEX_MODEL_CAPACITY_AVOID_MS);
   });
 
   test("model capacity does not mutate exact-account routing", () => {

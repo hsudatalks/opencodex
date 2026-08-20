@@ -2506,24 +2506,26 @@ describe("server local API auth", () => {
   }, { timeout: SERVER_BUDGET_MS });
 
   test.each(["legacy-tee", "eager-relay"] as const)(
-    "model capacity SSE makes the next client retry use another account (%s)",
+    "pre-output model capacity retries another account inside the same request (%s)",
     async (streamMode) => {
-      const harness = await startPoolRetryHarness(() => new Response(
-        [
-          'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
-          "",
-          'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
-          "",
-          "",
-        ].join("\n"),
+      const harness = await startPoolRetryHarness(accountId => new Response(
+        accountId === "acct-pool-a"
+          ? [
+              'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+              "",
+              'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+              "",
+              "",
+            ].join("\n")
+          : 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"capacity-recovered","status":"completed","output":[]}}\n\n',
         { headers: { "content-type": "text/event-stream" } },
       ), { streamMode });
       try {
         const threadId = `capacity-${streamMode}`;
         const text = await (await harness.request({ stream: true, threadId })).text();
-        expect(text).toContain('"code":"upstream_server_error"');
-        expect(text).toContain("try again in 2s");
-        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+        expect(text).toContain('"id":"capacity-recovered"');
+        expect(text).not.toContain("server_is_overloaded");
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
         expect(getCodexUpstreamHealth("pool-a")).toBeNull();
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
 
@@ -2532,19 +2534,50 @@ describe("server local API auth", () => {
           { headers: managementHeaders() },
         ).then(response => response.json()));
         expect(logs.at(-1)).toMatchObject({
-          status: 503,
-          errorCode: "server_is_overloaded",
-          upstreamError: "Our servers are currently overloaded. Please try again later.",
+          status: 200,
         });
-
-        await (await harness.request({ stream: true, threadId })).text();
-        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
       } finally {
         await stopPoolRetryHarness(harness);
       }
     },
     { timeout: SERVER_BUDGET_MS },
   );
+
+  test("pre-stream JSON model capacity retries another account inside the same request", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(JSON.stringify({ error: {
+          type: "server_error",
+          code: "server_is_overloaded",
+          message: "The selected model is at capacity.",
+        } }), { status: 503, headers: { "content-type": "application/json" } })
+      : Response.json({ id: "json-capacity-recovered", status: "completed", output: [] }));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: "json-capacity-recovered" });
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("all-capacity SSE is bounded to one alternate account and remains retryable", async () => {
+    const harness = await startPoolRetryHarness(() => new Response([
+      'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+      "",
+      'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+      "",
+      "",
+    ].join("\n"), { headers: { "content-type": "text/event-stream" } }));
+    try {
+      const text = await (await harness.request({ stream: true })).text();
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(text).toContain('"code":"upstream_server_error"');
+      expect(text).toContain("try again in 2s");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
 
   test.each(["legacy-tee", "eager-relay"] as const)(
     "model capacity after meaningful output stays neutral without rebinding (%s)",
@@ -2578,15 +2611,17 @@ describe("server local API auth", () => {
     { timeout: SERVER_BUDGET_MS },
   );
 
-  test("WebSocket model-capacity retry re-resolves pool auth on the next turn", async () => {
-    const harness = await startPoolRetryHarness(() => new Response(
-      [
-        'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
-        "",
-        'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
-        "",
-        "",
-      ].join("\n"),
+  test("WebSocket model-capacity retry switches account inside the same turn", async () => {
+    const harness = await startPoolRetryHarness(accountId => new Response(
+      accountId === "acct-pool-a"
+        ? [
+            'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
+            "",
+            'event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}',
+            "",
+            "",
+          ].join("\n")
+        : 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"ws-capacity-recovered","status":"completed","output":[]}}\n\n',
       { headers: { "content-type": "text/event-stream" } },
     ), { websockets: true });
     const wsUrl = new URL("/v1/responses", harness.server.url);
@@ -2595,21 +2630,13 @@ describe("server local API auth", () => {
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("websocket capacity retry timed out")), INTERNAL_DEADLINE_MS);
-        let failures = 0;
         ws.addEventListener("open", () => {
           ws.send(JSON.stringify({ type: "response.create", model: POOL_RETRY_MODEL, input: "hello" }));
         }, { once: true });
         ws.addEventListener("message", event => {
           const text = String(event.data);
-          if (!text.includes('"type":"response.failed"')) return;
-          expect(text).toContain('"code":"upstream_server_error"');
-          failures += 1;
-          if (failures === 1) {
-            setTimeout(() => {
-              ws.send(JSON.stringify({ type: "response.create", model: POOL_RETRY_MODEL, input: "retry" }));
-            }, 10);
-            return;
-          }
+          if (!text.includes('"type":"response.completed"')) return;
+          expect(text).toContain('"id":"ws-capacity-recovered"');
           clearTimeout(timer);
           resolve();
         });

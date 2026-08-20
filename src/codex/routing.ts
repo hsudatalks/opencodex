@@ -107,8 +107,16 @@ export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
-/** Long enough for Codex's native bounded retry to choose another pool account. */
+/** First model-capacity isolation interval; repeated hits back off adaptively. */
 export const CODEX_MODEL_CAPACITY_AVOID_MS = 15_000;
+export const CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS = 10 * 60_000;
+export const CODEX_MODEL_CAPACITY_BACKOFF_MS = [
+  CODEX_MODEL_CAPACITY_AVOID_MS,
+  30_000,
+  60_000,
+  2 * 60_000,
+  5 * 60_000,
+] as const;
 const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   2 * 60_000,
@@ -179,7 +187,12 @@ const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHeal
  * exhausted quota, or proof that the account is unhealthy. It also prevents a
  * concurrent successful turn from erasing the hint before Codex retries.
  */
-const modelCapacityAvoids = new Map<string, Map<CodexQuotaScope, number>>();
+type CodexModelCapacityState = {
+  avoidUntil: number;
+  lastFailureAt: number;
+  consecutiveFailures: number;
+};
+const modelCapacityAvoids = new Map<string, Map<CodexQuotaScope, CodexModelCapacityState>>();
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
@@ -962,7 +975,7 @@ export function getCodexModelCapacityAvoidUntil(
   now = Date.now(),
 ): number | null {
   const scopes = modelCapacityAvoids.get(accountId);
-  const avoidUntil = scopes?.get(quotaScope);
+  const avoidUntil = scopes?.get(quotaScope)?.avoidUntil;
   if (typeof avoidUntil === "number" && Number.isFinite(avoidUntil) && avoidUntil > now) {
     return avoidUntil;
   }
@@ -988,10 +1001,32 @@ function recordCodexModelCapacityAvoid(
     scopes = new Map();
     modelCapacityAvoids.set(accountId, scopes);
   }
-  scopes.set(
-    quotaScope,
-    Math.max(scopes.get(quotaScope) ?? 0, now + CODEX_MODEL_CAPACITY_AVOID_MS),
-  );
+  const prior = scopes.get(quotaScope);
+  const stale = !prior || now - prior.lastFailureAt > CODEX_MODEL_CAPACITY_FAILURE_WINDOW_MS;
+  const consecutiveFailures = stale ? 1 : prior.consecutiveFailures + 1;
+  const backoffMs = CODEX_MODEL_CAPACITY_BACKOFF_MS[
+    Math.min(consecutiveFailures - 1, CODEX_MODEL_CAPACITY_BACKOFF_MS.length - 1)
+  ]!;
+  scopes.set(quotaScope, {
+    avoidUntil: Math.max(prior?.avoidUntil ?? 0, now + backoffMs),
+    lastFailureAt: now,
+    consecutiveFailures,
+  });
+}
+
+function clearExpiredCodexModelCapacityOnSuccess(
+  accountId: string,
+  quotaScope: CodexQuotaScope,
+  now: number,
+): void {
+  const scopes = modelCapacityAvoids.get(accountId);
+  const state = scopes?.get(quotaScope);
+  // A concurrent success must not erase a newer active hint. Once the isolation
+  // interval has elapsed, a real successful terminal is recovery evidence and
+  // resets the adaptive streak.
+  if (!state || state.avoidUntil > now) return;
+  scopes!.delete(quotaScope);
+  if (scopes!.size === 0) modelCapacityAvoids.delete(accountId);
 }
 
 function isCodexAccountSelectable(
@@ -2112,6 +2147,7 @@ export function recordCodexUpstreamOutcome(
   const outcomeClass = classifyCodexUpstreamOutcome(outcome);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
   if (outcomeClass === "success") {
+    clearExpiredCodexModelCapacityOnSuccess(accountId, quotaScope ?? "shared", now);
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
       : undefined;
