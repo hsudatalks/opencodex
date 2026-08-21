@@ -1,3 +1,5 @@
+import { universGatewayOpenAiRequestHeaders } from "../openai-request-identity";
+
 export class CodexWarmupError extends Error {
   code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "invalid_sse" | "no_terminal" | "transport";
   status?: number;
@@ -136,6 +138,7 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
     res = await fetch(CODEX_RESPONSES_URL, {
       method: "POST",
       headers: {
+        ...universGatewayOpenAiRequestHeaders(),
         Authorization: `Bearer ${options.accessToken}`,
         "ChatGPT-Account-Id": options.chatgptAccountId,
         "Content-Type": "application/json",

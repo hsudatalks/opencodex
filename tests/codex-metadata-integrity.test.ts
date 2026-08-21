@@ -35,6 +35,7 @@ describe("Codex metadata integrity", () => {
   test("FORWARD_HEADERS includes client metadata allowlist entries", () => {
     for (const name of [
       "originator",
+      "user-agent",
       "session_id",
       "session-id",
       "thread-id",
@@ -61,6 +62,33 @@ describe("Codex metadata integrity", () => {
     });
     const headers = headersForCodexAuthContext(incoming, poolAuthContext);
     expect(headers.get("originator")).toBe("codex_cli_rs");
+  });
+
+  test("preserves Codex caller identity without turning it into gateway identity", () => {
+    const incoming = new Headers({
+      originator: "codex_cli_rs",
+      "user-agent": "codex_cli_rs/0.148.0 (macOS; arm64)",
+      session_id: "codex-session",
+      "x-client-request-id": "codex-request",
+    });
+    const headers = headersForCodexAuthContext(incoming, poolAuthContext);
+    expect(headers.get("originator")).toBe("codex_cli_rs");
+    expect(headers.get("user-agent")).toBe("codex_cli_rs/0.148.0 (macOS; arm64)");
+    expect(headers.get("session_id")).toBe("codex-session");
+    expect(headers.get("x-client-request-id")).toBe("codex-request");
+  });
+
+  test("preserves Pi caller identity without fabricating Codex metadata", () => {
+    const headers = headersForCodexAuthContext(new Headers({
+      originator: "pi",
+      "user-agent": "pi (darwin 25.6.0; arm64)",
+      session_id: "pi-session",
+    }), poolAuthContext);
+    expect(headers.get("originator")).toBe("pi");
+    expect(headers.get("user-agent")).toBe("pi (darwin 25.6.0; arm64)");
+    expect(headers.get("session_id")).toBe("pi-session");
+    expect(headers.get("thread-id")).toBeNull();
+    expect(headers.get("x-codex-parent-thread-id")).toBeNull();
   });
 
   test("preserves genuine session_id and thread-id", () => {
@@ -135,6 +163,7 @@ describe("Codex metadata integrity", () => {
     expect(request).not.toBeInstanceOf(Promise);
     const sync = request as { headers: Record<string, string> };
     expect(sync.headers.originator).toBeUndefined();
+    expect(sync.headers["user-agent"]).toBeUndefined();
     expect(sync.headers["chatgpt-account-id"]).toBe(accountA.chatgptAccountId);
     expect(sync.headers.authorization).toBe(`Bearer ${accountA.accessToken}`);
   });
@@ -150,6 +179,7 @@ describe("Codex metadata integrity", () => {
       headers: new Headers({
         authorization: "Bearer caller-token",
         originator: "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.148.0 (macOS; arm64)",
         session_id: "sess-real-2",
         "thread-id": "thread-real-2",
       }),
@@ -157,8 +187,30 @@ describe("Codex metadata integrity", () => {
     const sync = request as { headers: Record<string, string> };
     expect(sync.headers.authorization).toBe("Bearer caller-token");
     expect(sync.headers.originator).toBe("codex_cli_rs");
+    expect(sync.headers["user-agent"]).toBe("codex_cli_rs/0.148.0 (macOS; arm64)");
     expect(sync.headers.session_id).toBe("sess-real-2");
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
+  });
+
+  test("derives Accept from the final Responses transport instead of trusting the caller", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.test/backend-api/codex",
+      authMode: "forward",
+    };
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const nonStream = adapter.buildRequest(minimalParsed(), {
+      headers: new Headers({ accept: "text/event-stream", authorization: "Bearer caller-token" }),
+    }) as { headers: Record<string, string> };
+    const streaming = minimalParsed();
+    streaming.stream = true;
+    streaming._rawBody = { model: "gpt-5.4", input: [], stream: true };
+    const stream = adapter.buildRequest(streaming, {
+      headers: new Headers({ accept: "application/json", authorization: "Bearer caller-token" }),
+    }) as { headers: Record<string, string> };
+
+    expect(nonStream.headers.Accept).toBe("application/json");
+    expect(stream.headers.Accept).toBe("text/event-stream");
   });
 
   test("canonical ChatGPT forward mode derives the native Codex routing hint from the final body", () => {

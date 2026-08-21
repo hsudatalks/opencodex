@@ -16,11 +16,19 @@ describe("codex warmup", () => {
     let body: Record<string, unknown> | undefined;
     let auth: string | null = null;
     let account: string | null = null;
+    let originator: string | null = null;
+    let userAgent: string | null = null;
+    let requestId: string | null = null;
+    let accept: string | null = null;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       const headers = new Headers(init?.headers);
       auth = headers.get("authorization");
       account = headers.get("chatgpt-account-id");
+      originator = headers.get("originator");
+      userAgent = headers.get("user-agent");
+      requestId = headers.get("x-client-request-id");
+      accept = headers.get("accept");
       return sseResponse('event: response.completed\ndata: {"type":"response.completed"}\n\n');
     }) as typeof fetch;
 
@@ -28,6 +36,10 @@ describe("codex warmup", () => {
 
     expect(auth).toBe("Bearer access-test");
     expect(account).toBe("acct-test");
+    expect(originator).toBe("univers_gateway");
+    expect(userAgent).toBe("univers-gateway");
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(accept).toBe("text/event-stream");
     expect(body).toMatchObject({
       model: "gpt-5.4-mini",
       instructions: "Reply with OK.",

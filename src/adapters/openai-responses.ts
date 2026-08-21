@@ -10,28 +10,11 @@ import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { OPENAI_FORWARD_HEADERS } from "../openai-request-identity";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
-export const FORWARD_HEADERS = [
-  "authorization",
-  "chatgpt-account-id",
-  "openai-beta",
-  "originator",
-  "session_id",
-  "session-id",
-  "thread-id",
-  "x-client-request-id",
-  "x-codex-beta-features",
-  "x-codex-installation-id",
-  "x-codex-parent-thread-id",
-  "x-codex-turn-metadata",
-  "x-codex-turn-state",
-  "x-codex-window-id",
-  "x-oai-attestation",
-  "x-openai-subagent",
-  "x-responsesapi-include-timing-metrics",
-];
+export const FORWARD_HEADERS = OPENAI_FORWARD_HEADERS;
 
 const CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint";
 const ROUTING_HINT_VALUE = /^[a-zA-Z0-9._:/-]+$/;
@@ -1139,7 +1122,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: parsed.stream ? "text/event-stream" : "application/json",
+      };
       let url: string;
 
       if (provider.authMode === "forward") {

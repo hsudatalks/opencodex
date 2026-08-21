@@ -269,14 +269,20 @@ describe("WS endpoint re-framer (120/132)", () => {
     const inbound = new Headers({
       authorization: "Bearer secret",
       cookie: "session=secret",
+      "content-encoding": "zstd",
       "openai-beta": "responses=experimental",
+      originator: "pi",
+      "user-agent": "pi (darwin 25.6.0; arm64)",
       "x-codex-turn-state": "turn",
     });
     const selected = selectForwardHeaders(inbound);
     expect(selected.get("authorization")).toBe("Bearer secret");
     expect(selected.get("openai-beta")).toBe("responses=experimental");
+    expect(selected.get("originator")).toBe("pi");
+    expect(selected.get("user-agent")).toBe("pi (darwin 25.6.0; arm64)");
     expect(selected.get("x-codex-turn-state")).toBe("turn");
     expect(selected.get("cookie")).toBeNull();
+    expect(selected.get("content-encoding")).toBeNull();
 
     const outbound = safeResponseHeaders(new Headers({
       "retry-after": "2",
