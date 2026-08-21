@@ -17,6 +17,45 @@ export interface AdapterEventPreflight {
   empty: boolean;
 }
 
+export interface RetryPreOutputAdapterErrorOptions {
+  shouldRetry(error: Extract<AdapterEvent, { type: "error" }>): boolean;
+  retry(): Promise<AsyncIterable<AdapterEvent>>;
+  maxRetries?: number;
+}
+
+/**
+ * Replays a turn only when its first non-heartbeat event is a selected retryable error.
+ * Once any model output has been observed, the stream is committed and can never be replayed.
+ */
+export async function* retryPreOutputAdapterError(
+  initial: AsyncIterable<AdapterEvent>,
+  options: RetryPreOutputAdapterErrorOptions,
+): AsyncGenerator<AdapterEvent> {
+  const maxRetries = Math.max(0, Math.floor(options.maxRetries ?? 1));
+  let retries = 0;
+  let source = initial;
+
+  while (true) {
+    let committed = false;
+    let retry = false;
+    for await (const event of source) {
+      if (event.type === "heartbeat") {
+        yield event;
+        continue;
+      }
+      if (!committed && event.type === "error" && retries < maxRetries && options.shouldRetry(event)) {
+        retry = true;
+        break;
+      }
+      committed = true;
+      yield event;
+    }
+    if (!retry) return;
+    retries += 1;
+    source = await options.retry();
+  }
+}
+
 async function* replay(
   buffered: readonly AdapterEvent[],
   iterator: AsyncIterator<AdapterEvent>,

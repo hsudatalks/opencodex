@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createAdapterEventQueue, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../src/adapters/run-turn-queue";
+import { createAdapterEventQueue, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents, retryPreOutputAdapterError } from "../src/adapters/run-turn-queue";
 import type { AdapterEvent } from "../src/types";
 
 const text = (value: string): AdapterEvent => ({ type: "text_delta", text: value });
@@ -167,5 +167,56 @@ describe("run-turn adapter event preflight", () => {
     expect(cancelled).toBe(1);
     expect(await collect(preflight.stream)).toEqual([{ type: "error", message: "stop" }]);
     expect(cancelled).toBe(1);
+  });
+});
+
+describe("pre-output adapter retry", () => {
+  const emptyError: AdapterEvent = {
+    type: "error",
+    code: "upstream_empty_response",
+    message: "empty",
+    retryable: true,
+  };
+
+  test("retries one leading empty response without exposing the first failure", async () => {
+    let retries = 0;
+    const stream = retryPreOutputAdapterError(events([heartbeat, emptyError]), {
+      shouldRetry: event => event.code === "upstream_empty_response",
+      retry: async () => {
+        retries += 1;
+        return events([text("recovered"), done]);
+      },
+    });
+
+    expect(await collect(stream)).toEqual([heartbeat, text("recovered"), done]);
+    expect(retries).toBe(1);
+  });
+
+  test("never retries an empty-response error after model output", async () => {
+    let retries = 0;
+    const stream = retryPreOutputAdapterError(events([text("partial"), emptyError]), {
+      shouldRetry: event => event.code === "upstream_empty_response",
+      retry: async () => {
+        retries += 1;
+        return events([text("duplicate"), done]);
+      },
+    });
+
+    expect(await collect(stream)).toEqual([text("partial"), emptyError]);
+    expect(retries).toBe(0);
+  });
+
+  test("bounds repeated empty responses to one retry", async () => {
+    let retries = 0;
+    const stream = retryPreOutputAdapterError(events([emptyError]), {
+      shouldRetry: event => event.code === "upstream_empty_response",
+      retry: async () => {
+        retries += 1;
+        return events([emptyError]);
+      },
+    });
+
+    expect(await collect(stream)).toEqual([emptyError]);
+    expect(retries).toBe(1);
   });
 });

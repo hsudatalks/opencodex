@@ -310,6 +310,50 @@ test("POST /v1/chat/completions streams OpenAI-shaped chunks end to end", async 
   }
 });
 
+test("POST /v1/chat/completions retries one empty upstream completion before stream commit", async () => {
+  let upstreamCalls = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return new Response(
+          'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response([
+        'data: {"choices":[{"index":0,"delta":{"content":"recovered"}}]}\n\n',
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+        "data: [DONE]\n\n",
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(2);
+    expect(text).toContain("recovered");
+    expect(text).not.toContain("upstream_empty_response");
+    expect(text).toContain("data: [DONE]");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("non-streaming /v1/chat/completions returns chat.completion JSON", async () => {
   const upstream = mockChatUpstream();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
@@ -598,7 +642,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
     fetch() {
       upstreamCalls += 1;
       if (upstreamCalls > 1) {
-        return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        return new Response('data: {"choices":[{"index":0,"delta":{"content":"recovered"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
           headers: { "content-type": "text/event-stream" },
         });
       }

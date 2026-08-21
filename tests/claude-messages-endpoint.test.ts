@@ -701,7 +701,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
     fetch() {
       upstreamCalls += 1;
       if (upstreamCalls > 1) {
-        return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        return new Response('data: {"choices":[{"index":0,"delta":{"content":"recovered"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
           headers: { "content-type": "text/event-stream" },
         });
       }

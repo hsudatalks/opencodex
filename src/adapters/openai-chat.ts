@@ -919,7 +919,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const flushToolCalls = function* (): Generator<AdapterEvent> {
         // Do not treat flushed tool calls as user-facing output for the finish-less EOF
         // fallback — incomplete tool args must stay on the truncation path.
-        for (const call of closeToolCalls()) {
+        const calls = closeToolCalls();
+        if (calls.length > 0) sawActionableOutput = true;
+        for (const call of calls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
           yield { type: "tool_call_start", id: call.id, name: call.name };
           if (call.args.length > 0) yield { type: "tool_call_delta", arguments: call.args };
@@ -941,7 +943,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       let finishReason: string | undefined;
       // Only answer text enables the finish-less EOF fallback. Reasoning-only streams can be
       // suppressed by hideThinkingSummary and must not complete as empty successful turns.
-      let sawUserFacingOutput = false;
+      let sawActionableOutput = false;
+      const emptyResponseError = (): Extract<AdapterEvent, { type: "error" }> => ({
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        code: "upstream_empty_response",
+        message: "upstream completed without answer text or a tool call",
+        ...(pendingUsage ? { usage: pendingUsage } : {}),
+        retryable: true,
+      });
 
       // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
       // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
@@ -957,6 +968,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (payload === "[DONE]") {
           yield* flushToolCalls();
           const stopReason = stopReasonFor(finishReason);
+          if (!sawActionableOutput && !stopReason) {
+            yield emptyResponseError();
+            return "terminate";
+          }
           yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
           return "terminate";
         }
@@ -1031,7 +1046,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             yield { type: "reasoning_raw_delta", text: reasoningText };
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
-            sawUserFacingOutput = true;
+            sawActionableOutput = true;
             yield { type: "text_delta", text: delta.content };
           }
 
@@ -1145,7 +1160,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // Finish-less EOF is only safe when answer text was emitted. Reasoning-only / usage-only
         // truncations must stay on the error path (hideThinkingSummary can suppress reasoning).
         // Trailing usage alone is not a terminal signal for this adapter (#735 / restore #773).
-        if (!sawFinish && !sawUserFacingOutput) {
+        if (!sawFinish && !sawActionableOutput) {
           debugProviderDiagnostic("openai-chat", "stream-truncated", {
             finishReason: finishReason ?? null,
             hadUsage: pendingUsage !== undefined,
@@ -1154,8 +1169,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return;
         }
         yield* flushToolCalls();
-        // Graceful close that omitted [DONE] but delivered finish_reason and/or answer text.
         const stopReason = stopReasonFor(finishReason);
+        if (!sawActionableOutput && !stopReason) {
+          debugProviderDiagnostic("openai-chat", "empty-response", {
+            finishReason: finishReason ?? null,
+            hadUsage: pendingUsage !== undefined,
+          });
+          yield emptyResponseError();
+          return;
+        }
+        // Graceful close that omitted [DONE] but delivered finish_reason and/or answer text.
         yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
       } catch (error) {
         if (isTranslatorBudgetExceededError(error)
@@ -1218,7 +1241,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (reasoningText !== undefined) {
         events.push({ type: "reasoning_raw_delta", text: reasoningText });
       }
-      if (typeof msg.content === "string") {
+      if (typeof msg.content === "string" && msg.content.length > 0) {
         events.push({ type: "text_delta", text: msg.content });
       }
       const toolCalls = msg.tool_calls as { id: string; function: { name: string; arguments: string } }[] | undefined;
@@ -1230,6 +1253,17 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
       }
       const stopReason = stopReasonFor(choice.finish_reason);
+      if (!stopReason && !events.some(event => event.type === "text_delta" || event.type === "tool_call_start")) {
+        return [{
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "upstream_empty_response",
+          message: "upstream completed without answer text or a tool call",
+          ...(usage ? { usage } : {}),
+          retryable: true,
+        }];
+      }
       events.push({
         type: "done",
         usage,

@@ -61,7 +61,7 @@ import {
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
-import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, retryPreOutputAdapterError } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCapacityError,
@@ -3665,15 +3665,82 @@ async function handleResponsesInner(
 
   if (parsed.stream) {
     const initialEventStream = activeAdapter.parseStream(upstreamResponse, translatorBudget);
+    const emptyResponseRetryStream = retryPreOutputAdapterError(initialEventStream, {
+      maxRetries: 1,
+      shouldRetry: event => event.code === "upstream_empty_response",
+      retry: async () => {
+        if (options.abortSignal?.aborted || upstream.signal.aborted) {
+          return (async function* (): AsyncGenerator<AdapterEvent> {
+            yield { type: "error", status: 499, message: "client closed request before empty-response retry" };
+          })();
+        }
+
+        const retryRequest = sameTargetRequest ?? builtInitialRequest;
+        let retryResponse: Response;
+        try {
+          if (activeAdapter.fetchResponse) {
+            noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
+            retryResponse = await activeAdapter.fetchResponse(retryRequest, {
+              abortSignal: upstream.signal,
+              timeoutMs: connectMs,
+              stream: true,
+            });
+          } else {
+            retryResponse = await fetchWithResetRetry(
+              recovery => {
+                noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
+                return fetchWithHeaderTimeout(retryRequest.url, applyUpstreamRecoveryInit({
+                  method: retryRequest.method,
+                  headers: retryRequest.headers,
+                  body: retryRequest.body,
+                }, recovery), upstream.signal, connectMs, true, providerFetch(route.provider));
+              },
+              { abortSignal: upstream.signal, label: safeHostLabel(retryRequest.url) },
+            );
+          }
+        } catch (error) {
+          return (async function* (): AsyncGenerator<AdapterEvent> {
+            yield {
+              type: "error",
+              status: options.abortSignal?.aborted ? 499 : 502,
+              errorType: "upstream_error",
+              code: "upstream_empty_response_retry_failed",
+              message: options.abortSignal?.aborted
+                ? "client closed request during empty-response retry"
+                : describeUpstreamConnectFailure(error, connectMs),
+              retryable: !options.abortSignal?.aborted,
+            };
+          })();
+        }
+
+        if (!retryResponse.ok) {
+          const status = retryResponse.status;
+          const errorText = await retryResponse.text().catch(() => "unknown error");
+          return (async function* (): AsyncGenerator<AdapterEvent> {
+            yield {
+              type: "error",
+              status,
+              errorType: "upstream_error",
+              code: "upstream_empty_response_retry_failed",
+              message: `Provider error ${status} after empty-response retry: ${redactSecretString(errorText.slice(0, 500))}`,
+              retryable: status >= 500 || status === 429,
+            };
+          })();
+        }
+
+        cancelBodyOnAbort(retryResponse.body, upstream.signal);
+        return activeAdapter.parseStream(retryResponse, translatorBudget);
+      },
+    });
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
-          firstEvents: initialEventStream,
+          firstEvents: emptyResponseRetryStream,
           adapterName: activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: fetchTerminalGuardContinuation,
         })
-      : initialEventStream;
+      : emptyResponseRetryStream;
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
       eventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,

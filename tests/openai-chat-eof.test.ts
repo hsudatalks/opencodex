@@ -146,7 +146,7 @@ describe("openai-chat stream EOF fail-closed", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
-  test("empty deltas followed by a finish-only chunk complete without phantom output", async () => {
+  test("empty deltas followed by a finish-only chunk fail as a retryable empty response", async () => {
     const response = new Response([
       'data: {"choices":[{"delta":{"content":"","reasoning_content":""}}]}\n\n',
       'data: {"choices":[{"delta":{}}]}\n\n',
@@ -154,7 +154,47 @@ describe("openai-chat stream EOF fail-closed", () => {
     ].join(""));
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
 
-    expect(events).toEqual([{ type: "done", usage: undefined }]);
+    expect(events).toEqual([expect.objectContaining({
+      type: "error",
+      status: 502,
+      code: "upstream_empty_response",
+      retryable: true,
+    })]);
+  });
+
+  test("a bare [DONE] fails as a retryable empty response", async () => {
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(
+      new Response("data: [DONE]\n\n"),
+    ));
+
+    expect(events).toEqual([expect.objectContaining({
+      type: "error",
+      code: "upstream_empty_response",
+      retryable: true,
+    })]);
+  });
+
+  test("reasoning followed by a clean terminal still fails without actionable output", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events[0]).toEqual({ type: "reasoning_raw_delta", text: "thinking..." });
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "upstream_empty_response" });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("an empty content-filter terminal remains incomplete instead of retrying", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events).toEqual([{ type: "done", usage: undefined, stopReason: "content_filter" }]);
   });
 
   test("final frame WITHOUT a trailing newline still emits its content and is accepted as done", async () => {

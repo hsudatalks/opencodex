@@ -110,6 +110,30 @@ describe("openai-chat non-stream response hardening", () => {
     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
   });
 
+  test("rejects a non-streaming completion with no answer or tool call", async () => {
+    const response = new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3 },
+    }));
+
+    const events = await createOpenAIChatAdapter(provider).parseResponse(response);
+    expect(events).toEqual([expect.objectContaining({
+      type: "error",
+      status: 502,
+      code: "upstream_empty_response",
+      retryable: true,
+    })]);
+  });
+
+  test("keeps an empty non-streaming content filter as an incomplete terminal", async () => {
+    const response = new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "" }, finish_reason: "content_filter" }],
+    }));
+
+    const events = await createOpenAIChatAdapter(provider).parseResponse(response);
+    expect(events).toEqual([{ type: "done", usage: undefined, stopReason: "content_filter" }]);
+  });
+
   test("rejects a null choice without throwing", async () => {
     const adapter = createOpenAIChatAdapter(provider());
     const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [null] })));

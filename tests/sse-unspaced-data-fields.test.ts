@@ -111,13 +111,13 @@ describe("openai-chat adapter (#1170)", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
-  test("accepts an unspaced [DONE] sentinel", async () => {
+  test("recognizes an unspaced [DONE] sentinel as an empty terminal", async () => {
     // Sentinel only: a preceding answer frame would let the finish-less EOF fallback emit
     // `done` even if unspaced [DONE] handling were broken, so this test must not carry one.
     const response = new Response("data:[DONE]\n\n");
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
-    expect(events.at(-1)?.type).toBe("done");
-    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "upstream_empty_response" });
+    expect(events.some(e => e.type === "done")).toBe(false);
   });
 
   test("a bare data: line is ignored, not reported as a malformed frame", async () => {
