@@ -926,6 +926,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
           };
         };
+        const modalityFields = (modalities?: readonly string[]) =>
+          modalities && modalities.length > 0 ? { input_modalities: [...modalities] } : {};
         const nativeModelRow = (id: string, metadataId = id) => ({
             id,
             object: "model",
@@ -935,6 +937,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               nativeReasoningEfforts(metadataId),
               nativeDefaultReasoningEffort(metadataId),
             ),
+            ...modalityFields(nativeInputModalities(metadataId)),
           });
         // Selector-active discovery follows the same complete supported set as the Codex catalog
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
@@ -962,6 +965,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             created: 0,
             owned_by: m.owned_by ?? m.provider,
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+            ...modalityFields(m.inputModalities),
           })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);
