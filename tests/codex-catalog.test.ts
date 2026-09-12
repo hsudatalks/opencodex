@@ -233,6 +233,45 @@ describe("combo catalog capability intersection", () => {
     expect(empty).not.toHaveProperty("defaultReasoningEffort");
   });
 
+  test("univers deepseek-flash combo intersects member ladders to the shared tiers", () => {
+    // Regression for the live gateway: opencode-go's bare `deepseek-flash` row and
+    // command-code's V4.1 flash must intersect to the tiers every member can emit,
+    // while an unrecovered member (undefined ladder) stays a wildcard.
+    const derived = deriveComboCatalogModel("deepseek-flash", normalizedCombo({
+      targets: [
+        { provider: "opencode-go", model: "deepseek-flash", weight: 1 },
+        { provider: "command-code", model: "deepseek/deepseek-v4.1-flash", weight: 1 },
+        { provider: "deepseek-official", model: "deepseek-flash", weight: 1 },
+      ],
+    }), [
+      {
+        provider: "opencode-go",
+        id: "deepseek-flash",
+        contextWindow: 1_048_576,
+        maxInputTokens: 1_048_576,
+        inputModalities: ["text"],
+        reasoningEfforts: ["low", "high", "max"],
+      },
+      {
+        provider: "command-code",
+        id: "deepseek/deepseek-v4.1-flash",
+        contextWindow: 1_048_576,
+        maxInputTokens: 1_048_576,
+        inputModalities: ["text"],
+        reasoningEfforts: ["high", "max"],
+      },
+      {
+        provider: "deepseek-official",
+        id: "deepseek-flash",
+        contextWindow: 128_000,
+        maxInputTokens: 128_000,
+        inputModalities: ["text"],
+        reasoningEfforts: undefined,
+      },
+    ]);
+    expect(derived?.reasoningEfforts).toEqual(["high", "max"]);
+  });
+
   test("fails closed for missing members, unknown context, duplicate targets, and empty modalities", () => {
     expect(deriveComboCatalogModel("missing", normalizedCombo(), [memberA])).toBeNull();
     expect(deriveComboCatalogModel("context", normalizedCombo(), [
@@ -3808,7 +3847,12 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
+      // Registry per-key backfill now contributes every other key it knows; the
+      // assertion that matters is the operator's explicit false surviving.
       "deepseek-v4-pro": true,
+      "deepseek-v4.1-pro": true,
+      "deepseek-v4.1-flash": true,
+      "deepseek-flash": true,
     });
   });
 

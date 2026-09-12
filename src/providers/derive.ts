@@ -270,15 +270,33 @@ function applyReasoningSummaryDefaults(
  * #1100 was reported against a hand-added provider called "GLM" pointing at a vendor endpoint
  * we recognize. Routing worked, so the row looked healthy, but every piece of registry metadata
  * was skipped and the reasoning ladder was advertised without summary support — exactly the
- * inconsistency that makes Codex drop the inbound reasoning object.
+ * inconsistency that makes Codex drop the inbound reasoning object. A renamed row (e.g. the
+ * live gateway's "kimi-code" key row vs the oauth "kimi" entry) has the same gap for the
+ * reasoning ladder itself.
  *
- * Deliberately narrow: only the reasoning-summary map, and only via
- * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
- * templated or overridable base URLs. A custom row keeps its own identity for everything else.
+ * Deliberately narrow: only the reasoning capability maps (ladder, per-model defaults, wire
+ * map, summary support), and only via `registryEntryForProviderDestination`, which matches
+ * fixed key destinations and refuses templated or overridable base URLs. A custom row keeps
+ * its own identity for everything else; user keys still win over the backfill.
  */
-function enrichReasoningSummariesByDestination(prov: OcxProviderConfig): void {
+function enrichReasoningCapabilitiesByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (destination?.modelReasoningEfforts) {
+    prov.modelReasoningEfforts = fillRecordOfArrays(destination.modelReasoningEfforts, prov.modelReasoningEfforts);
+  }
+  if (destination?.modelDefaultReasoningEfforts) {
+    prov.modelDefaultReasoningEfforts = {
+      ...destination.modelDefaultReasoningEfforts,
+      ...(prov.modelDefaultReasoningEfforts ?? {}),
+    };
+  }
+  if (destination?.modelReasoningEffortMap) {
+    prov.modelReasoningEffortMap = {
+      ...cloneNestedRecord(destination.modelReasoningEffortMap),
+      ...(prov.modelReasoningEffortMap ? cloneNestedRecord(prov.modelReasoningEffortMap) : {}),
+    };
+  }
 }
 
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
@@ -290,7 +308,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     // `registryEntryForProviderDestination` answers the question that actually matters here —
     // which vendor endpoint is this row talking to — and is already restricted to fixed key
     // destinations, so a templated or overridable base URL cannot be claimed by it.
-    enrichReasoningSummariesByDestination(prov);
+    enrichReasoningCapabilitiesByDestination(prov);
     return;
   }
   const seed = providerConfigSeed(entry);
@@ -307,7 +325,10 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
   if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
-  if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
+  // Per-key fill: a persisted map predates newer registry entries (DeepSeek V4.1,
+  // GLM 5.3), and the all-or-nothing fill left those models without any advertised
+  // ladder forever. Operator keys still win; only missing keys are backfilled.
+  if (seed.modelReasoningEfforts) prov.modelReasoningEfforts = fillRecordOfArrays(seed.modelReasoningEfforts, prov.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);

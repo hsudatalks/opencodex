@@ -433,6 +433,14 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 const DEEPSEEK_V41_MODELS = ["deepseek-v4.1-pro", "deepseek-v4.1-flash"];
 const DEEPSEEK_ALL_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, ...DEEPSEEK_V41_MODELS];
 /**
+ * `deepseek-flash` is a live upstream ALIAS the official API resolves itself (the
+ * Responses row echoes back model="deepseek-flash" with reasoning attached). It stays
+ * out of the thinking-models list on purpose — that list doubles as the catalog model
+ * enum and the alias must not become a second catalog entry — but the capability maps
+ * below do fold it in so the id still advertises the V4 flash ladder.
+ */
+const DEEPSEEK_FLASH_ALIAS = "deepseek-flash";
+/**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
  * `tests/provider-registry-parity.test.ts` enumerates every id the registry
@@ -1098,7 +1106,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
-    modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
+    modelContextWindows: {
+      "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
+      // Zen Go's bare `deepseek-flash` row is the V4 flash alias: 1M context, same as
+      // the official API's V4 ids (see DEEPSEEK_FLASH_ALIAS).
+      [DEEPSEEK_FLASH_ALIAS]: 1_048_576,
+    },
     modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
@@ -1109,6 +1122,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+      // Zen Go resolves the bare `deepseek-flash` id upstream (live /models row; it is the
+      // V4 flash alias, same ladder — see DEEPSEEK_FLASH_ALIAS).
+      [DEEPSEEK_FLASH_ALIAS]: deepseekThinkingEffortsFor(DEEPSEEK_FLASH_ALIAS),
     },
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
@@ -1117,6 +1133,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORT_MAP,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP])),
       ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+      [DEEPSEEK_FLASH_ALIAS]: deepseekReasoningMapFor(DEEPSEEK_FLASH_ALIAS),
     },
     modelSupportsReasoningSummaries: {
       "glm-5.2": true,
@@ -1125,6 +1142,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.1": true,
       "glm-5": true,
       ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
+      [DEEPSEEK_FLASH_ALIAS]: true,
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
     thinkingBudgetModels: THINKING_BUDGET_MODELS,
@@ -1378,9 +1396,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
     - 선택 근거: DeepSeek V4 thinking mode requires history replay, while older DeepSeek reasoner has different compatibility rules. A model-scoped registry flag fixes built-in and stale saved configs without broad provider regressions.
     */
-    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
-    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
-    modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
+    modelReasoningEfforts: {
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+      // Live upstream alias; advertises the same V4 flash ladder (see DEEPSEEK_FLASH_ALIAS).
+      [DEEPSEEK_FLASH_ALIAS]: deepseekThinkingEffortsFor(DEEPSEEK_FLASH_ALIAS),
+    },
+    modelReasoningEffortMap: {
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+      [DEEPSEEK_FLASH_ALIAS]: deepseekReasoningMapFor(DEEPSEEK_FLASH_ALIAS),
+    },
+    modelSupportsReasoningSummaries: {
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
+      [DEEPSEEK_FLASH_ALIAS]: true,
+    },
     preserveReasoningContentModels: DEEPSEEK_ALL_THINKING_MODELS,
     // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
     // vision sidecar describes attached images for them, and the catalog advertises image input

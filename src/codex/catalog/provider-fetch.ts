@@ -927,12 +927,22 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
           : ["low", "medium", "high", "xhigh"])
         : [])
       : undefined;
+  // When the live row carries no ladder, fall back to the registry-enriched
+  // provider config so a registry capability fact (DeepSeek V4.1, GLM 5.3)
+  // still advertises. A live row that DOES name a ladder wins — live metadata
+  // is the fresher authority for the same model id.
+  const hintedReasoningEfforts = reasoningEfforts
+    ?? configuredReasoningEfforts(
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define -- hoisted function scope; call site runs after module init
+      providerConfigForHints(providerName),
+      item.id,
+    );
   const capabilities = modelCapabilities(item);
   const inputModalities = modelInputModalities(item, capabilities);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
-    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(hintedReasoningEfforts !== undefined ? { reasoningEfforts: hintedReasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
   };
@@ -945,6 +955,17 @@ function boundedOwnedBy(value: unknown): string | undefined {
 }
 
 const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
+
+/**
+ * Registry-enriched provider config for live-row capability fallback, keyed by
+ * provider name. Populated at gather time; reads outside a gather yield an
+ * empty config so no stale hint survives a config change.
+ */
+const hintsProviderConfigs = new Map<string, OcxProviderConfig>();
+
+function providerConfigForHints(name: string): OcxProviderConfig {
+  return hintsProviderConfigs.get(name) ?? {};
+}
 
 function observedModelsAuthResolver(
   authStoreBuffer: Uint8Array | null,
@@ -977,6 +998,8 @@ async function fetchProviderModelsWithAuth(
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
   const { name, provider: prov, discovery, request } = captured;
+  // Register the enriched config for this gather's live-row hint fallback.
+  hintsProviderConfigs.set(name, prov);
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
