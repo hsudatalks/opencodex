@@ -1,6 +1,6 @@
 {
   "name": "univers-gateway",
-  "version": "2.11.0-univers.47",
+  "version": "2.11.0-univers.56",
   "description": "Univers Gateway — a production AI model gateway for Codex, Pi, Claude Code, and OpenAI-compatible clients",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -47,7 +47,7 @@
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",
     "build:gui": "bun scripts/build-gui.ts",
     "prepare:package": "bun scripts/prepare-package.ts",
-    "prepack": "node_modules/bun/bin/bun.exe scripts/build-gui.ts",
+    "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run audit:high && bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
