@@ -112,6 +112,48 @@ describe("raw /v1/models list reasoning-effort advertisement (Grok Build discove
     }
   });
 
+  test("a combo of graduated-ladder members advertises the intersected ladder", async () => {
+    // Mirrors the production deepseek-flash combo: every member registry entry now
+    // carries a graduated ladder, so the combo must intersect them instead of
+    // advertising no effort control (the pre-fix fleet symptom).
+    const config: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "opencode-go",
+      providers: {
+        "opencode-go": { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", models: ["deepseek-v4.1-flash"] },
+        "command-code": { adapter: "openai-chat", baseUrl: "https://api.commandcode.ai/v1", models: ["deepseek/deepseek-v4.1-flash"] },
+        "deepseek-official": { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", models: ["deepseek-v4.1-flash"] },
+      },
+      combos: {
+        "deepseek-flash": {
+          strategy: "failover",
+          alias: "univers/deepseek-flash",
+          targets: [
+            { provider: "opencode-go", model: "deepseek-v4.1-flash" },
+            { provider: "command-code", model: "deepseek/deepseek-v4.1-flash" },
+            { provider: "deepseek-official", model: "deepseek-v4.1-flash" },
+          ],
+        },
+      },
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/models", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { data: Array<Record<string, unknown>> };
+      const combo = body.data.find(m => m.id === "univers/deepseek-flash");
+      expect(combo).toBeDefined();
+      expect(combo!.supports_reasoning_effort).toBe(true);
+      expect(combo!.reasoning_effort).toBe("high");
+      expect((combo!.reasoning_efforts as Array<{ value: string }>).map(option => option.value))
+        .toEqual(["high", "max"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("a ladder without a configured default uses the canonical medium default", async () => {
     const config = effortConfig();
     config.providers.kimi!.modelDefaultReasoningEfforts = {};

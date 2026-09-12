@@ -327,6 +327,10 @@ const THINKING_TOGGLE_MAP: Record<string, string> = {
   xhigh: "enabled",
   max: "enabled",
 };
+// GLM 5.3 is the first Zhipu generation with a verified graduated ladder (low..max)
+// instead of the binary thinking toggle — it maps effort labels 1:1 like glm-5.2.
+// Verified against BigModel Coding Plan live metadata 2026-09-12.
+const ZHIPU_GRADUATED_REASONING_MODELS = ["glm-5.3", "glm-5.3-flash"];
 const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
   "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro", "glm-5", "glm-5.1",
 ];
@@ -421,6 +425,13 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
   xhigh: "high",
   max: "max",
 };
+/**
+ * DeepSeek V4.1 ids keep the V4 thinking ladder. `DEEPSEEK_THINKING_MODELS` is an
+ * exact-match list elsewhere (vision/noVision/catalog enums), so V4.1 members are
+ * folded in explicitly rather than renaming the constant.
+ */
+const DEEPSEEK_V41_MODELS = ["deepseek-v4.1-pro", "deepseek-v4.1-flash"];
+const DEEPSEEK_ALL_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, ...DEEPSEEK_V41_MODELS];
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
@@ -1091,12 +1102,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      ...Object.fromEntries(ZHIPU_GRADUATED_REASONING_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     },
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
@@ -1104,13 +1116,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: {
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORT_MAP,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     },
     modelSupportsReasoningSummaries: {
       "glm-5.2": true,
+      "glm-5.3": true,
+      "glm-5.3-flash": true,
       "glm-5.1": true,
       "glm-5": true,
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
+      ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
     thinkingBudgetModels: THINKING_BUDGET_MODELS,
@@ -1310,7 +1324,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // keep validating and routing (they previously mapped to v4-flash; devlog
     // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
     // the V4 ids — defaultModel and the model-specific wiring above use them.
-    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
+    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_ALL_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
@@ -1364,14 +1378,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
     - 선택 근거: DeepSeek V4 thinking mode requires history replay, while older DeepSeek reasoner has different compatibility rules. A model-scoped registry flag fixes built-in and stale saved configs without broad provider regressions.
     */
-    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
-    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
-    modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
-    preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
+    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+    modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
+    preserveReasoningContentModels: DEEPSEEK_ALL_THINKING_MODELS,
     // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
     // vision sidecar describes attached images for them, and the catalog advertises image input
     // on their behalf (same treatment as opencode-go's DeepSeek V4 entries above).
-    noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
+    noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_ALL_THINKING_MODELS],
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
@@ -1749,14 +1763,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.2",
-    models: ["glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
+    models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
     jawcodeBundle: "zai",
-    modelContextWindows: { "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    modelContextWindows: { "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000 },
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_52_MODELS,
-    modelReasoningEfforts: Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
-    modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, true])),
-    preserveReasoningContentModels: ZAI_GLM_52_MODELS,
+    modelReasoningEfforts: {
+      ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
+      ...Object.fromEntries(ZHIPU_GRADUATED_REASONING_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
+      "glm-5.3[1m]": ZAI_GLM_52_REASONING_EFFORTS,
+    },
+    modelSupportsReasoningSummaries: {
+      ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, true])),
+      ...Object.fromEntries(ZHIPU_GRADUATED_REASONING_MODELS.map(id => [id, true])),
+      "glm-5.3[1m]": true,
+    },
+    preserveReasoningContentModels: [...ZAI_GLM_52_MODELS, ...ZHIPU_GRADUATED_REASONING_MODELS, "glm-5.3[1m]"],
     // No liveModels: the same reasoning as the pay-as-you-go row — an unverified live claim
     // yields an empty picker at runtime.
     note: "Domestic BigModel Coding Plan endpoint (open.bigmodel.cn)",

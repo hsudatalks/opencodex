@@ -9,6 +9,16 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
   },
+  // V4.1 ids carry the same advertised ladders as their V4 counterparts
+  // (Command Code model profiles, verified 2026-09-12).
+  "deepseek/deepseek-v4.1-pro": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/deepseek-v4-pro",
+  },
+  "deepseek/deepseek-v4.1-flash": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
+  },
   "zai-org/glm-5.2": {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-2",
