@@ -582,6 +582,10 @@ const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
 const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
+// `k3-256k` is the upstream alias for the 1M-context K3 row the kimi-code /models
+// endpoint actually returns; capability maps fold it in WITHOUT making it a second
+// catalog entry (it is not in KIMI_CODING_MODELS / the model enum).
+const KIMI_CODING_K3_256K_ALIAS = "k3-256k";
 const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
 const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
@@ -597,15 +601,24 @@ const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
   xhigh: "max",
   max: "max",
 };
-const KIMI_CODING_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, KIMI_CODING_K3_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
-);
-const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, "max"]),
-);
-const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
-);
+const KIMI_CODING_REASONING_EFFORTS = {
+  ...Object.fromEntries(
+    KIMI_CODING_MODELS.map(id => [id, KIMI_CODING_K3_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
+  ),
+  [KIMI_CODING_K3_256K_ALIAS]: KIMI_CODING_K3_REASONING_EFFORTS,
+};
+const KIMI_CODING_DEFAULT_REASONING_EFFORTS = {
+  ...Object.fromEntries(
+    KIMI_CODING_K3_MODELS.map(id => [id, "max"]),
+  ),
+  [KIMI_CODING_K3_256K_ALIAS]: "max",
+};
+const KIMI_CODING_REASONING_EFFORT_MAPS = {
+  ...Object.fromEntries(
+    KIMI_CODING_K3_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
+  ),
+  [KIMI_CODING_K3_256K_ALIAS]: KIMI_CODING_K3_REASONING_EFFORT_MAP,
+};
 const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
 );
@@ -692,12 +705,18 @@ const NVIDIA_NIM_NO_VISION_MODELS = [
   "openai/gpt-oss-120b", "openai/gpt-oss-20b",
   "poolside/laguna-xs-2.1", "z-ai/glm-5.2",
 ];
-const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
-);
-const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),
-);
+const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  ...Object.fromEntries(
+    KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  ),
+  [KIMI_CODING_K3_256K_ALIAS]: KIMI_K3_1M_CONTEXT_WINDOW,
+};
+const KIMI_CODING_MODEL_INPUT_MODALITIES = {
+  ...Object.fromEntries(
+    KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),
+  ),
+  [KIMI_CODING_K3_256K_ALIAS]: ["text", "image"],
+};
 const NEURALWATT_REASONING_HISTORY_MODELS = [
   "glm-5.2", "glm-5.2-short",
   "kimi-k2.6", "kimi-k2.7-code",
