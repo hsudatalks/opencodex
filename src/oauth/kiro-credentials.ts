@@ -3,6 +3,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, openSync, readFi
 import { homedir } from "node:os";
 import { isAbsolute, join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
+import { KIRO_BUILDER_ID_PROFILE_ARN } from "../providers/kiro-profiles";
 
 const DEFAULT_EXPIRES_MS = 3600_000;
 const KIRO_CLI_RECOVERY_SUFFIX = ".opencodex-recovery";
@@ -24,7 +25,6 @@ const REGISTRATION_KEYS = [
   "kirocli:oidc:device-registration",
   "codewhisperer:odic:device-registration",
 ];
-
 export type KiroAuthType = "kiro_desktop" | "aws_sso_oidc";
 export type KiroCredentialSource = "json" | "sqlite";
 export type KiroDiagnosticStatus =
@@ -266,7 +266,7 @@ function kiroCliImportSelectorConfigured(): boolean {
   return Boolean(process.env.KIROCLI_DB_PATH?.trim() || process.env.KIRO_CLI_DB_FILE?.trim());
 }
 
-function selectTokenRow(db: Database): { value: string } | null | "ambiguous" | "selected_missing" {
+function selectTokenRow(db: Database): { key: string; value: string } | null | "ambiguous" | "selected_missing" {
   const rows = db.query("SELECT key, value FROM auth_kv WHERE key LIKE ? ORDER BY key ASC").all("%:token") as Array<{ key: string; value: string }>;
   const selectedKey = process.env.KIROCLI_TOKEN_KEY?.trim();
   if (selectedKey) return rows.find(row => row.key === selectedKey) ?? "selected_missing";
@@ -277,6 +277,20 @@ function selectTokenRow(db: Database): { value: string } | null | "ambiguous" | 
   if (rows.length === 0) return null;
   if (rows.length === 1) return rows[0];
   return "ambiguous";
+}
+
+function isBuilderIdTokenRow(key: string, data: JsonObject): boolean {
+  if (!/(?:^|:)(?:odic|oidc):token$/i.test(key)) return false;
+  const startUrl = stringField(data, "startUrl", "start_url");
+  if (!startUrl) return false;
+  try {
+    const url = new URL(startUrl);
+    return url.protocol === "https:"
+      && url.hostname.toLowerCase() === "view.awsapps.com"
+      && url.pathname.replace(/\/+$/, "") === "/start";
+  } catch {
+    return false;
+  }
 }
 
 function credentialFromJson(data: JsonObject, source: KiroCredentialSource): ImportedKiroCredential | undefined {
@@ -414,6 +428,12 @@ function readSqliteCredentials(
       }
       const profile = readStateProfile(db);
       const merged = { ...registrationData, ...tokenData, ...profile };
+      // Kiro CLI 2.19 uses the fixed Builder ID streaming profile even though its state table may
+      // contain the Social profile ARN. Sending that state ARN with the valid Builder token makes
+      // runtime.kiro.dev report the misleading "bearer token ... invalid" AccessDenied response.
+      if (isBuilderIdTokenRow(row.key, tokenData)) {
+        merged.profileArn = KIRO_BUILDER_ID_PROFILE_ARN;
+      }
       const credential = credentialFromJson(merged, "sqlite");
       diagnostics.push({ location, status: credential ? "token_found" : "token_missing" });
       if (credential) {

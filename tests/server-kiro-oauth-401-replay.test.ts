@@ -176,7 +176,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
     try {
       const response = await post(server);
       expect(response.status).toBe(200);
-      expect(observed).toEqual({ url: "https://runtime.eu-west-1.kiro.dev/", profileHeader: profileArn, profileBody: profileArn });
+      expect(observed).toEqual({ url: "https://runtime.eu-west-1.kiro.dev/", profileHeader: null, profileBody: profileArn });
     } finally {
       await server.stop(true);
     }
@@ -211,14 +211,16 @@ describe("Kiro OAuth upstream 401 replay", () => {
       kiro: { profileArn: oldProfile, apiRegion: "us-east-1", ssoRegion: "us-east-1" },
     });
     saveConfig(config());
-    const observed: Array<{ url: string; auth: string; profile: string | null }> = [];
+    const observed: Array<{ url: string; auth: string; profileHeader: string | null; profileBody?: string }> = [];
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url === CHAT_ENDPOINT) {
+        const body = JSON.parse(String(init?.body)) as { profileArn?: string };
         observed.push({
           url,
           auth: new Headers(init?.headers).get("authorization") ?? "",
-          profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+          profileHeader: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+          profileBody: body.profileArn,
         });
         await saveCredential("kiro", {
           access: "concurrent-access",
@@ -231,10 +233,12 @@ describe("Kiro OAuth upstream 401 replay", () => {
         return new Response("rejected", { status: 401 });
       }
       if (url === "https://runtime.eu-west-1.kiro.dev/") {
+        const body = JSON.parse(String(init?.body)) as { profileArn?: string };
         observed.push({
           url,
           auth: new Headers(init?.headers).get("authorization") ?? "",
-          profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+          profileHeader: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+          profileBody: body.profileArn,
         });
         return new Response(eventStream("updated account"), {
           headers: { "content-type": "application/vnd.amazon.eventstream" },
@@ -251,8 +255,8 @@ describe("Kiro OAuth upstream 401 replay", () => {
       const response = await post(server);
       expect(response.status).toBe(200);
       expect(observed).toEqual([
-        { url: CHAT_ENDPOINT, auth: "Bearer rejected-access", profile: oldProfile },
-        { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer concurrent-access", profile: newProfile },
+        { url: CHAT_ENDPOINT, auth: "Bearer rejected-access", profileHeader: null, profileBody: oldProfile },
+        { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer concurrent-access", profileHeader: null, profileBody: newProfile },
       ]);
     } finally {
       await server.stop(true);

@@ -100,14 +100,21 @@ function kiroCliDbLocation(): "kiro-cli-windows-data" | "kiro-cli-data" | "kiro-
 }
 
 function seedKiroCliDb(
-  token: { access_token: string; refresh_token?: string; expires_at?: string; profile_arn?: string; region?: string },
-  opts: { registration?: Record<string, unknown>; stateArn?: string } = {},
+  token: {
+    access_token: string;
+    refresh_token?: string;
+    expires_at?: string;
+    profile_arn?: string;
+    region?: string;
+    start_url?: string;
+  },
+  opts: { registration?: Record<string, unknown>; stateArn?: string; tokenKey?: string } = {},
 ) {
   const dir = kiroCliDbDir();
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
-  db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", ["kirocli:social:token", JSON.stringify(token)]);
+  db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", [opts.tokenKey ?? "kirocli:social:token", JSON.stringify(token)]);
   if (opts.registration) {
     db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", ["kirocli:odic:device-registration", JSON.stringify(opts.registration)]);
   }
@@ -173,6 +180,25 @@ describe("kiro oauth — import-first", () => {
     expect(t?.access).toBe("aoa-abc");
     expect(t?.refresh).toBe("rt-1");
     expect(t?.expires).toBe(new Date("2099-01-01T00:00:00Z").getTime());
+  });
+
+  test("Builder ID imports use the native streaming profile instead of the misleading state profile", async () => {
+    seedKiroCliDb({
+      access_token: "aoa-builder",
+      refresh_token: "rt-builder",
+      expires_at: "2099-01-01T00:00:00Z",
+      region: "us-east-1",
+      start_url: "https://view.awsapps.com/start",
+    }, {
+      tokenKey: "kirocli:odic:token",
+      stateArn: "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK",
+    });
+
+    const credential = await loginKiro({}, { cliRunner: async () => ({ exitCode: 1, stdout: "" }) });
+
+    expect(credential.accountId).toBe("arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX");
+    expect(credential.kiro?.clientMode).toBe("cli");
+    expect(credential.kiro?.profileArn).toBe(credential.accountId);
   });
 
   test("KIROCLI_DB_PATH selects a nonstandard read-only database without creating missing paths", () => {
@@ -658,6 +684,7 @@ describe("kiro oauth — import-first", () => {
     expect(cred.source).toBe("credential-file");
     expect(cred.accountId).toBe("arn:aws:codewhisperer:ap-northeast-1:123456789012:profile/demo");
     expect(cred.kiro).toMatchObject({
+      clientMode: "ide",
       profileArn: "arn:aws:codewhisperer:ap-northeast-1:123456789012:profile/demo",
       ssoRegion: "us-west-2",
       apiRegion: "eu-central-1",

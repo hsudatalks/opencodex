@@ -3,6 +3,7 @@ export type OAuthCredentialSource = "oauth" | "local-cli" | "credential-file" | 
 
 /** Account-scoped Kiro data required for refresh and request routing. */
 export interface KiroOAuthMetadata {
+  clientMode?: "cli" | "ide";
   profileArn?: string;
   ssoRegion?: string;
   apiRegion?: string;

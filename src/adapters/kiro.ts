@@ -56,6 +56,7 @@ const AMZ_TARGET = "AmazonCodeWhispererStreamingService.GenerateAssistantRespons
 const SDK_VERSION = "1.0.27";
 const NODE_VERSION = "22.21.1";
 const KIRO_IDE_VERSION = "1.0.0";
+const KIRO_CLI_VERSION = "2.19.1";
 const KIRO_FALLBACK_SERIALIZATION_ENVELOPE_BYTES = 64 * 1024;
 type KiroWireClient = "ide" | "cli";
 
@@ -70,8 +71,8 @@ function kiroCliUserAgent(includeAppVersion: boolean): string {
     "api/codewhispererstreaming/0.1.17975",
     `os/${kiroCliPlatform()}`,
     "lang/rust/1.92.0",
-    ...(includeAppVersion ? ["md/appVersion-2.14.2"] : []),
-    "m/F",
+    ...(includeAppVersion ? [`md/appVersion-${KIRO_CLI_VERSION}`] : []),
+    ...(!includeAppVersion ? ["m/F"] : []),
     "app/AmazonQ-For-CLI",
   ].join(" ");
 }
@@ -94,6 +95,7 @@ interface KiroUserInputMessage {
   userInputMessageContext?: {
     tools?: unknown[];
     toolResults?: KiroToolResult[];
+    envState?: { operatingSystem: string; currentWorkingDirectory: string };
   };
   images?: KiroImage[];
 }
@@ -427,7 +429,7 @@ export function buildKiroPayload(
   parsed: OcxParsedRequest,
   profileArn: string | undefined,
   forcedCompletionMode?: KiroCompletionMode,
-  wireClient: KiroWireClient = "ide",
+  wireClient: KiroWireClient = "cli",
 ): {
   payload: Record<string, unknown>;
   nameMap: Map<string, string>;
@@ -576,7 +578,23 @@ export function buildKiroPayload(
           modelId,
           origin: wireClient === "cli" ? "KIRO_CLI" : "AI_EDITOR",
           ...(turn.images.length > 0 ? { images: turn.images } : {}),
-          ...(turn.toolResults.length > 0 ? { userInputMessageContext: { toolResults: turn.toolResults } } : {}),
+          ...(
+            wireClient === "cli" || turn.toolResults.length > 0
+              ? {
+                  userInputMessageContext: {
+                    ...(wireClient === "cli"
+                      ? {
+                          envState: {
+                            operatingSystem: kiroCliPlatform(),
+                            currentWorkingDirectory: process.cwd(),
+                          },
+                        }
+                      : {}),
+                    ...(turn.toolResults.length > 0 ? { toolResults: turn.toolResults } : {}),
+                  },
+                }
+              : {}
+          ),
         },
       };
   const history = turns.map(toEntry);
@@ -604,10 +622,9 @@ export function buildKiroPayload(
   const payload: Record<string, unknown> = {
     conversationState: {
       chatTriggerType: "MANUAL",
-      ...(wireClient === "cli" ? {
-        agentContinuationId: crypto.randomUUID(),
-        agentTaskType: "vibe",
-      } : {}),
+      ...(wireClient === "cli"
+        ? { agentContinuationId: crypto.randomUUID(), agentTaskType: "vibe" }
+        : {}),
       conversationId,
       currentMessage: { userInputMessage: currentUim },
       ...(history.length > 0 ? { history } : {}),
@@ -1724,18 +1741,18 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     const resolvedProfileArn = resolveKiroProfileArn(parsed._kiroAuthContext);
     const isApiKey = provider.apiKey.trim().startsWith("ksk_");
     const profileArn = isApiKey ? undefined : resolvedProfileArn;
-    // Builder ID and Kiro API keys have no profile ARN and are accepted only on Kiro's CLI
-    // request path. Enterprise profiles retain the existing IDE-shaped request.
-    const wireClient: KiroWireClient = isApiKey || !profileArn ? "cli" : "ide";
+    const wireClient: KiroWireClient = isApiKey
+      ? "cli"
+      : parsed._kiroAuthContext?.clientMode ?? "cli";
     const fp = fingerprint().slice(0, 64);
     const headers: Record<string, string> = wireClient === "cli" ? {
       authorization: `Bearer ${provider.apiKey}`,
       "content-type": "application/x-amz-json-1.0",
-      accept: "*/*",
       "x-amz-target": AMZ_TARGET,
       "user-agent": kiroCliUserAgent(true),
       "x-amz-user-agent": kiroCliUserAgent(false),
-      "x-amzn-codewhisperer-optout": "true",
+      "x-amzn-codewhisperer-optout": "false",
+      "x-kiro-attempt": "1;max=3",
       "amz-sdk-request": "attempt=1; max=3",
       "amz-sdk-invocation-id": invocationId(),
       ...(isApiKey ? { tokentype: "API_KEY" } : {}),
@@ -1750,7 +1767,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       "x-amzn-kiro-agent-mode": "vibe",
       "amz-sdk-invocation-id": invocationId(),
     };
-    if (profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
+    if (wireClient === "ide" && profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
     const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode, wireClient);
     await normalizeKiroImages(built.payload);
     const contextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);

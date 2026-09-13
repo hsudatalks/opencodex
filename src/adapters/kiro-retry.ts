@@ -5,6 +5,10 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { parseRetryAfterMs } from "../combos";
 import {
+  KIRO_BUILDER_ID_PROFILE_ARN,
+  KIRO_SOCIAL_PROFILE_ARN,
+} from "../providers/kiro-profiles";
+import {
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
@@ -265,6 +269,45 @@ async function fetchKiroAttempt(
   return response;
 }
 
+function builderIdProfileFallbackRequest(request: AdapterRequest): AdapterRequest | undefined {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(request.body) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (payload.profileArn !== KIRO_SOCIAL_PROFILE_ARN) return undefined;
+  return {
+    ...request,
+    body: JSON.stringify({ ...payload, profileArn: KIRO_BUILDER_ID_PROFILE_ARN }),
+  };
+}
+
+async function inspectLegacyBuilderIdProfileFailure(
+  request: AdapterRequest,
+  response: Response,
+  signal?: AbortSignal,
+): Promise<{ response: Response; fallbackRequest?: AdapterRequest }> {
+  if (response.status !== 403) return { response };
+  const fallbackRequest = builderIdProfileFallbackRequest(request);
+  if (!fallbackRequest) return { response };
+
+  const body = await readBoundedResponseBody(response, { signal });
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  const rebuilt = new Response(body.displaySafe ? body.text : "", {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+  const message = body.displaySafe ? body.text.toLowerCase() : "";
+  const invalidBearer = message.includes("accessdeniedexception")
+    && message.includes("bearer token")
+    && message.includes("invalid");
+  return invalidBearer ? { response: rebuilt, fallbackRequest } : { response: rebuilt };
+}
+
 /**
  * Kiro owns replay-safe reset recovery, one endpoint fallback, and bounded process-wide transient
  * throttle recovery. The shared probe starts only after a 429, so healthy parallel traffic remains
@@ -278,7 +321,13 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFe
       if (!probeToken) probeToken = await enterKiroThrottleGate(ctx.abortSignal);
       else await waitForKiroCooldown(ctx.abortSignal);
 
-      const response = await fetchKiroAttempt(request, ctx, timeoutMs);
+      let response = await fetchKiroAttempt(request, ctx, timeoutMs);
+      const profileRecovery = await inspectLegacyBuilderIdProfileFailure(request, response, ctx.abortSignal);
+      response = profileRecovery.response;
+      if (profileRecovery.fallbackRequest) {
+        cancelResponseBodyBestEffort(response);
+        response = await fetchKiroAttempt(profileRecovery.fallbackRequest, ctx, timeoutMs);
+      }
       const throttle = await inspectKiroThrottle(response, ctx.abortSignal);
       if (!throttle || !throttle.transient) {
         releaseKiroThrottleProbe(probeToken);

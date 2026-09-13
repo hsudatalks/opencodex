@@ -268,12 +268,14 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
       return trimmed && trimmed.length <= max && !/[\x00-\x1f\x7f]/.test(trimmed) ? trimmed : undefined;
     };
     const profileArn = clean(kiro.profileArn, 1024);
+    const clientMode = kiro.clientMode === "cli" || kiro.clientMode === "ide" ? kiro.clientMode : undefined;
     const ssoRegion = clean(kiro.ssoRegion, 64);
     const apiRegion = clean(kiro.apiRegion, 64);
     const clientId = clean(kiro.clientId, 4096);
     const clientSecret = clean(kiro.clientSecret, 4096);
-    if (profileArn || ssoRegion || apiRegion || clientId || clientSecret) {
+    if (clientMode || profileArn || ssoRegion || apiRegion || clientId || clientSecret) {
       normalized.kiro = {
+        ...(clientMode ? { clientMode } : {}),
         ...(profileArn ? { profileArn } : {}),
         ...(ssoRegion ? { ssoRegion } : {}),
         ...(apiRegion ? { apiRegion } : {}),

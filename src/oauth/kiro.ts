@@ -210,6 +210,7 @@ async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal):
 
 function metadataFromImported(imported: ImportedKiroCredential): KiroOAuthMetadata | undefined {
   const metadata: KiroOAuthMetadata = {
+    clientMode: imported.source === "sqlite" ? "cli" : "ide",
     ...(imported.profileArn ? { profileArn: imported.profileArn } : {}),
     ...(imported.ssoRegion ? { ssoRegion: imported.ssoRegion } : {}),
     ...(imported.apiRegion ? { apiRegion: imported.apiRegion } : {}),

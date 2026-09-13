@@ -87,7 +87,7 @@ describe("kiro adapter — buildRequest", () => {
     }
   });
 
-  test("Builder ID requests without a profile ARN use the Kiro CLI wire contract", async () => {
+  test("OAuth requests mirror the native Kiro CLI wire contract without a profile ARN", async () => {
     const { url, method, headers, body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
     const payload = JSON.parse(body) as {
       profileArn?: string;
@@ -101,11 +101,14 @@ describe("kiro adapter — buildRequest", () => {
     expect(method).toBe("POST");
     expect(headers.authorization).toBe("Bearer tok-123");
     expect(headers["x-amz-target"]).toBe("AmazonCodeWhispererStreamingService.GenerateAssistantResponse");
-    expect(headers.accept).toBe("*/*");
-    expect(headers["user-agent"]).toContain("app/AmazonQ-For-CLI");
-    expect(headers["x-amzn-kiro-agent-mode"]).toBeUndefined();
+    expect(headers["content-type"]).toBe("application/x-amz-json-1.0");
+    expect(headers.accept).toBeUndefined();
+    expect(headers["user-agent"]).toContain("md/appVersion-2.19.1 app/AmazonQ-For-CLI");
+    expect(headers["user-agent"]).not.toContain("m/F");
+    expect(headers["x-amz-user-agent"]).toContain("m/F app/AmazonQ-For-CLI");
     expect(headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
-    expect(headers["x-amzn-codewhisperer-optout"]).toBe("true");
+    expect(headers["x-amzn-codewhisperer-optout"]).toBe("false");
+    expect(headers["x-kiro-attempt"]).toBe("1;max=3");
     expect(headers.tokentype).toBeUndefined();
     expect(payload.profileArn).toBeUndefined();
     expect(payload.conversationState.agentTaskType).toBe("vibe");
@@ -113,6 +116,35 @@ describe("kiro adapter — buildRequest", () => {
     expect(payload.conversationState.currentMessage.userInputMessage).toMatchObject({
       content: "hi",
       origin: "KIRO_CLI",
+    });
+    expect(payload.conversationState.currentMessage.userInputMessage).toHaveProperty("userInputMessageContext.envState");
+  });
+
+  test("explicit IDE credentials retain the IDE wire contract", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/IDE";
+    const parsed = parsedWith([{ role: "user", content: "hi" }]);
+    parsed._kiroAuthContext = { clientMode: "ide", profileArn, apiRegion: "eu-west-1" };
+
+    const request = await createKiroAdapter(provider).buildRequest(parsed);
+    const payload = JSON.parse(request.body) as {
+      profileArn?: string;
+      conversationState: {
+        agentContinuationId?: string;
+        agentTaskType?: string;
+        currentMessage: { userInputMessage: Record<string, unknown> };
+      };
+    };
+
+    expect(request.url).toBe("https://runtime.eu-west-1.kiro.dev/");
+    expect(request.headers["user-agent"]).toContain("KiroIDE-");
+    expect(request.headers["x-amzn-kiro-agent-mode"]).toBe("vibe");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(profileArn);
+    expect(payload.profileArn).toBe(profileArn);
+    expect(payload.conversationState.agentContinuationId).toBeUndefined();
+    expect(payload.conversationState.agentTaskType).toBeUndefined();
+    expect(payload.conversationState.currentMessage.userInputMessage).toMatchObject({
+      content: "hi",
+      origin: "AI_EDITOR",
     });
     expect(payload.conversationState.currentMessage.userInputMessage).not.toHaveProperty("userInputMessageContext.envState");
   });
@@ -126,14 +158,22 @@ describe("kiro adapter — buildRequest", () => {
     const request = await createKiroAdapter(apiKeyProvider).buildRequest(parsed);
     const body = JSON.parse(request.body) as {
       profileArn?: string;
-      conversationState: { currentMessage: { userInputMessage: { origin?: string } } };
+      conversationState: {
+        agentContinuationId?: string;
+        agentTaskType?: string;
+        currentMessage: { userInputMessage: { origin?: string; userInputMessageContext?: { envState?: unknown } } };
+      };
     };
 
     expect(request.headers.authorization).toBe("Bearer ksk_example");
+    expect(request.url).toBe("https://runtime.us-east-1.kiro.dev/");
     expect(request.headers.tokentype).toBe("API_KEY");
     expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
     expect(body.profileArn).toBeUndefined();
+    expect(body.conversationState.agentContinuationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.conversationState.agentTaskType).toBe("vibe");
     expect(body.conversationState.currentMessage.userInputMessage.origin).toBe("KIRO_CLI");
+    expect(body.conversationState.currentMessage.userInputMessage.userInputMessageContext?.envState).toBeDefined();
   });
 
   test("runtime URL uses KIRO_API_REGION separately from auth region", async () => {
@@ -156,9 +196,9 @@ describe("kiro adapter — buildRequest", () => {
     const body = JSON.parse(request.body) as { profileArn?: string };
 
     expect(request.url).toBe("https://runtime.eu-central-1.kiro.dev/");
-    expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(parsed._kiroAuthContext.profileArn);
-    expect(request.headers.accept).toBe("application/vnd.amazon.eventstream");
-    expect(request.headers["x-amzn-kiro-agent-mode"]).toBe("vibe");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
+    expect(request.headers["content-type"]).toBe("application/x-amz-json-1.0");
+    expect(request.headers.accept).toBeUndefined();
     expect(body.profileArn).toBe(parsed._kiroAuthContext.profileArn);
   });
 
@@ -176,7 +216,7 @@ describe("kiro adapter — buildRequest", () => {
     });
 
     const snapshot = await getValidAccessTokenSnapshot("kiro");
-    expect(snapshot.kiro).toEqual({});
+    expect(snapshot.kiro).toEqual({ clientMode: "cli" });
     const parsed = parsedWith([{ role: "user", content: "hi" }]);
     parsed._kiroAuthContext = { ...snapshot.kiro };
     const request = await createKiroAdapter(provider).buildRequest(parsed);
@@ -185,6 +225,26 @@ describe("kiro adapter — buildRequest", () => {
     expect(request.url).toBe("https://runtime.us-east-1.kiro.dev/");
     expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
     expect(body.profileArn).toBeUndefined();
+  });
+
+  test("legacy credential-file accounts retain the IDE wire contract", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/legacy-ide";
+    await saveCredential("kiro", {
+      access: "legacy-ide-access",
+      refresh: "legacy-ide-refresh",
+      expires: Date.now() + 3_600_000,
+      source: "credential-file",
+      kiro: { profileArn, apiRegion: "eu-west-1" },
+    });
+
+    const snapshot = await getValidAccessTokenSnapshot("kiro");
+    expect(snapshot.kiro?.clientMode).toBe("ide");
+    const parsed = parsedWith([{ role: "user", content: "hi" }]);
+    parsed._kiroAuthContext = { ...snapshot.kiro };
+    const request = await createKiroAdapter(provider).buildRequest(parsed);
+
+    expect(request.headers["user-agent"]).toContain("KiroIDE-");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(profileArn);
   });
 
   test("genuinely accountless requests still honor Kiro environment overrides", async () => {
@@ -197,7 +257,8 @@ describe("kiro adapter — buildRequest", () => {
       expect(parsed._kiroAuthContext).toBeUndefined();
       const request = await createKiroAdapter(provider).buildRequest(parsed);
       expect(request.url).toBe("https://runtime.ap-northeast-1.kiro.dev/");
-      expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(process.env.KIRO_PROFILE_ARN);
+      expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
+      expect(JSON.parse(request.body).profileArn).toBe(process.env.KIRO_PROFILE_ARN);
     } finally {
       if (previousApiRegion === undefined) delete process.env.KIRO_API_REGION;
       else process.env.KIRO_API_REGION = previousApiRegion;
@@ -795,10 +856,14 @@ describe("kiro adapter — buildRequest", () => {
       { role: "user", content: "third" },
     ];
     const cs = JSON.parse((await createKiroAdapter(provider).buildRequest(parsedWith(messages))).body).conversationState;
-    expect(cs.history).toEqual([
-      { userInputMessage: { content: "first\n\nsecond", modelId: "claude-sonnet-4.5", origin: "KIRO_CLI" } },
-      { assistantResponseMessage: { content: "one\n\ntwo" } },
-    ]);
+    expect(cs.history).toHaveLength(2);
+    expect(cs.history[0].userInputMessage).toMatchObject({
+      content: "first\n\nsecond",
+      modelId: "claude-sonnet-4.5",
+      origin: "KIRO_CLI",
+    });
+    expect(cs.history[0].userInputMessage.userInputMessageContext.envState).toBeDefined();
+    expect(cs.history[1]).toEqual({ assistantResponseMessage: { content: "one\n\ntwo" } });
     expect(cs.currentMessage.userInputMessage.content).toBe("third");
     expect(JSON.stringify(cs)).not.toContain("(acknowledged)");
     expect(JSON.stringify(cs)).not.toContain("(continue)");

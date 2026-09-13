@@ -54,7 +54,7 @@ export interface OAuthAccessSnapshot {
   generation: string;
   accessToken: string;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
-  kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
+  kiro?: Pick<KiroOAuthMetadata, "clientMode" | "profileArn" | "apiRegion" | "ssoRegion">;
 }
 
 export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
@@ -279,7 +279,13 @@ export class OAuthLoginRequiredError extends Error {
 }
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
+  const legacyKiroClientMode = provider === "kiro" && !cred.kiro?.clientMode
+    ? cred.source === "credential-file" ? "ide" : "cli"
+    : undefined;
   const storedKiroRouting = {
+    ...(cred.kiro?.clientMode || legacyKiroClientMode
+      ? { clientMode: cred.kiro?.clientMode ?? legacyKiroClientMode }
+      : {}),
     ...(cred.kiro?.profileArn ? { profileArn: cred.kiro.profileArn } : {}),
     ...(cred.kiro?.apiRegion ? { apiRegion: cred.kiro.apiRegion } : {}),
     ...(cred.kiro?.ssoRegion ? { ssoRegion: cred.kiro.ssoRegion } : {}),

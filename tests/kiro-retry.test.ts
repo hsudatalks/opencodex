@@ -317,6 +317,31 @@ describe("kiro retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
+  test("legacy Builder ID accounts retry once with the native streaming profile", async () => {
+    const legacy = {
+      ...request,
+      body: JSON.stringify({
+        conversationState: { conversationId: "conversation" },
+        profileArn: "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK",
+      }),
+    };
+    const mock = mockFetch([
+      new Response(JSON.stringify({
+        __type: "AccessDeniedException",
+        message: "The bearer token included in the request is invalid.",
+      }), { status: 403 }),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const response = await fetchKiroWithRetry(legacy, { timeoutMs: 5_000 });
+
+    expect(response.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+    expect(JSON.parse(String(mock.calls[1]?.body)).profileArn).toBe(
+      "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX",
+    );
+  });
+
   test("normalizes final 400 validation/model body into an invalid request error", async () => {
     const mock = mockFetch([
       new Response(JSON.stringify({
