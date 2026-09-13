@@ -68,6 +68,7 @@ import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, pu
 import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
+import { readInputModalities } from "./model-routes";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -81,6 +82,70 @@ type ProviderPatchApplication =
       enablingOpenAi: boolean;
       headersTouched: boolean;
     };
+
+/**
+ * One value read out of a model-keyed capability map: the value, or the reason to refuse it.
+ */
+type ModelMapRead<V> = { value: V } | { error: string };
+
+function readPositiveTokenCount(value: unknown): ModelMapRead<number> {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? { value }
+    : { error: "values must be positive safe integers" };
+}
+
+function readEffortList(value: unknown): ModelMapRead<string[]> {
+  if (!Array.isArray(value)) return { error: "values must be arrays of effort names" };
+  const efforts: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || !entry.trim()) return { error: "values must be arrays of nonblank effort names" };
+    efforts.push(entry);
+  }
+  return { value: efforts };
+}
+
+function readEffortName(value: unknown): ModelMapRead<string> {
+  return typeof value === "string" && value.trim()
+    ? { value }
+    : { error: "values must be nonblank effort names" };
+}
+
+function readModalityList(value: unknown): ModelMapRead<string[]> {
+  const read = readInputModalities(value);
+  if (read.error !== undefined) return { error: read.error };
+  return { value: read.values ?? [] };
+}
+
+/**
+ * Merge one per-model capability map PATCH-style: a key mapped to `null` is removed, every key
+ * the request does not mention is preserved, and `null` for the whole field clears it so the
+ * route falls back to its registry defaults. Same contract `modelContextWindows` publishes,
+ * kept in one place so the capability maps cannot drift apart.
+ *
+ * The caller owns the assignment, because an empty result must delete the field rather than
+ * store `{}`.
+ */
+function mergedModelMap<V>(
+  raw: unknown,
+  current: Record<string, V> | undefined,
+  read: (value: unknown) => ModelMapRead<V>,
+  label: string,
+): { error: string } | { map?: Record<string, V> } {
+  if (raw === null) return {};
+  if (!isPlainRecord(raw)) return { error: `${label} must be a plain object or null` };
+  const merged: Record<string, V> = { ...(current ?? {}) };
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key.trim()) return { error: `${label} keys must be nonblank model ids` };
+    if (value === null) {
+      delete merged[key];
+      continue;
+    }
+    const outcome = read(value);
+    if ("error" in outcome) return { error: `${label}: ${outcome.error}` };
+    merged[key] = outcome.value;
+  }
+  return Object.keys(merged).length > 0 ? { map: merged } : {};
+}
 
 /**
  * Apply the recognized PATCH field mask onto a provider copy. The caller runs this once
@@ -218,6 +283,49 @@ function applyProviderPatchFields(
     touched = true;
   }
 
+  // The remaining per-model capability maps. These are the facts this gateway publishes in its
+  // own `/v1/models` answer and stamps into the Codex catalog, so maintaining them must not need
+  // a restart: each write lands on the in-memory config, persists, clears this provider's model
+  // cache, and re-converges the catalog below. Editing the server's `config.json` cannot do that
+  // — `startServer` holds the copy it loaded at boot, and the next write would overwrite the file
+  // with it. Same PATCH contract as `modelContextWindows`: per-key merge, `null` deletes a key,
+  // `null` for the field clears it back to the registry defaults.
+  if (Object.hasOwn(rawBody, "modelInputModalities")) {
+    const result = mergedModelMap(rawBody.modelInputModalities, next.modelInputModalities, readModalityList, "modelInputModalities");
+    if ("error" in result) return { error: result.error };
+    if (result.map) next.modelInputModalities = result.map;
+    else delete next.modelInputModalities;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelReasoningEfforts")) {
+    const result = mergedModelMap(rawBody.modelReasoningEfforts, next.modelReasoningEfforts, readEffortList, "modelReasoningEfforts");
+    if ("error" in result) return { error: result.error };
+    if (result.map) next.modelReasoningEfforts = result.map;
+    else delete next.modelReasoningEfforts;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelDefaultReasoningEfforts")) {
+    const result = mergedModelMap(rawBody.modelDefaultReasoningEfforts, next.modelDefaultReasoningEfforts, readEffortName, "modelDefaultReasoningEfforts");
+    if ("error" in result) return { error: result.error };
+    if (result.map) next.modelDefaultReasoningEfforts = result.map;
+    else delete next.modelDefaultReasoningEfforts;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelMaxInputTokens")) {
+    const result = mergedModelMap(rawBody.modelMaxInputTokens, next.modelMaxInputTokens, readPositiveTokenCount, "modelMaxInputTokens");
+    if ("error" in result) return { error: result.error };
+    if (result.map) next.modelMaxInputTokens = result.map;
+    else delete next.modelMaxInputTokens;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelMaxOutputTokens")) {
+    const result = mergedModelMap(rawBody.modelMaxOutputTokens, next.modelMaxOutputTokens, readPositiveTokenCount, "modelMaxOutputTokens");
+    if ("error" in result) return { error: result.error };
+    if (result.map) next.modelMaxOutputTokens = result.map;
+    else delete next.modelMaxOutputTokens;
+    touched = true;
+  }
+
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
   // without wiping the rest; null or an empty object clears user-managed headers.
@@ -303,6 +411,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      // The remaining capability maps are readable for the same reason they are writable:
+      // a surface can only correct a modality or ladder it can see, and a PATCH that cannot be
+      // read back is unauditable.
+      modelInputModalities: p.modelInputModalities,
+      modelReasoningEfforts: p.modelReasoningEfforts,
+      modelDefaultReasoningEfforts: p.modelDefaultReasoningEfforts,
+      modelMaxInputTokens: p.modelMaxInputTokens,
+      modelMaxOutputTokens: p.modelMaxOutputTokens,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,

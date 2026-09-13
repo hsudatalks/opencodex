@@ -2127,6 +2127,118 @@ describe("provider management validation", () => {
     expect(liveConfig.providers.relay.modelContextWindows).toBeUndefined();
   });
 
+  test("provider PATCH maintains the per-model capability maps a running gateway publishes", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example.test/v1",
+          apiKey: "sk-existing",
+          models: ["wide", "narrow"],
+          // A persisted map predating newer models is exactly the case that must stay patchable.
+          modelInputModalities: { narrow: ["text"] },
+        },
+      },
+    };
+    saveConfig(liveConfig);
+
+    const request = async (method: "GET" | "PATCH", body?: unknown) => {
+      const req = new Request("http://127.0.0.1/api/providers?name=relay", {
+        method,
+        headers: body === undefined ? undefined : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+      });
+    };
+
+    const listed = await request("GET");
+    expect(listed?.status).toBe(200);
+    const rows = await listed!.json() as Array<{ name: string; modelInputModalities?: Record<string, string[]> }>;
+    expect(rows.find(row => row.name === "relay")).toMatchObject({
+      modelInputModalities: { narrow: ["text"] },
+    });
+
+    // Every map the gateway publishes in /v1/models must be writable on a running gateway —
+    // otherwise a modality or ladder correction needs a repo edit, a release, and a restart.
+    const updated = await request("PATCH", {
+      modelInputModalities: { wide: ["text", "image"] },
+      modelReasoningEfforts: { wide: ["low", "high", "max"] },
+      modelDefaultReasoningEfforts: { wide: "high" },
+      modelMaxInputTokens: { wide: 900_000 },
+      modelMaxOutputTokens: { wide: 128_000 },
+    });
+    expect(updated?.status).toBe(200);
+    expect(liveConfig.providers.relay).toMatchObject({
+      // Per-key merge: the unmentioned `narrow` entry survives.
+      modelInputModalities: { narrow: ["text"], wide: ["text", "image"] },
+      modelReasoningEfforts: { wide: ["low", "high", "max"] },
+      modelDefaultReasoningEfforts: { wide: "high" },
+      modelMaxInputTokens: { wide: 900_000 },
+      modelMaxOutputTokens: { wide: 128_000 },
+    });
+    expect(loadConfig().providers.relay).toMatchObject({
+      modelInputModalities: { narrow: ["text"], wide: ["text", "image"] },
+      modelMaxInputTokens: { wide: 900_000 },
+    });
+
+    for (const invalid of [
+      // Codex parses input_modalities as a closed enum and one bad value rejects the whole
+      // catalog file, so the value is refused at ingress rather than stored.
+      { modelInputModalities: { wide: ["vision"] } },
+      { modelInputModalities: { wide: "text" } },
+      { modelInputModalities: { wide: [42] } },
+      { modelInputModalities: { "": ["text"] } },
+      { modelReasoningEfforts: { wide: [42] } },
+      { modelReasoningEfforts: { wide: [""] } },
+      { modelDefaultReasoningEfforts: { wide: "" } },
+      { modelDefaultReasoningEfforts: { wide: 7 } },
+      { modelMaxInputTokens: { wide: 0 } },
+      { modelMaxInputTokens: { wide: 1e100 } },
+      { modelMaxOutputTokens: { wide: -1 } },
+      { modelMaxOutputTokens: "128000" },
+    ]) {
+      expect((await request("PATCH", invalid))?.status).toBe(400);
+    }
+    // A rejected PATCH leaves every map exactly as it was.
+    expect(liveConfig.providers.relay).toMatchObject({
+      modelInputModalities: { narrow: ["text"], wide: ["text", "image"] },
+      modelReasoningEfforts: { wide: ["low", "high", "max"] },
+      modelMaxInputTokens: { wide: 900_000 },
+    });
+
+    expect((await request("PATCH", { modelInputModalities: { wide: null } }))?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelInputModalities).toEqual({ narrow: ["text"] });
+
+    // An explicit empty array is meaningful (this model has no effort control) and is kept,
+    // unlike a null, which removes the entry.
+    expect((await request("PATCH", { modelReasoningEfforts: { wide: [] } }))?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelReasoningEfforts).toEqual({ wide: [] });
+
+    const cleared = await request("PATCH", {
+      modelInputModalities: null,
+      modelReasoningEfforts: null,
+      modelDefaultReasoningEfforts: null,
+      modelMaxInputTokens: null,
+      modelMaxOutputTokens: null,
+    });
+    expect(cleared?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelInputModalities).toBeUndefined();
+    expect(liveConfig.providers.relay.modelReasoningEfforts).toBeUndefined();
+    expect(liveConfig.providers.relay.modelDefaultReasoningEfforts).toBeUndefined();
+    expect(liveConfig.providers.relay.modelMaxInputTokens).toBeUndefined();
+    expect(liveConfig.providers.relay.modelMaxOutputTokens).toBeUndefined();
+  });
+
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

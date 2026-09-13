@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
  */
 const ALLOWED_INPUT_MODALITIES = new Set(["text", "image", "audio"]);
 
-function readInputModalities(raw: unknown): { values?: string[]; error?: string } {
+export function readInputModalities(raw: unknown): { values?: string[]; error?: string } {
   if (raw === undefined) return {};
   if (!Array.isArray(raw)) return { error: "inputModalities must be an array" };
   // Reject non-strings rather than filtering them out. Dropping them silently accepted a
