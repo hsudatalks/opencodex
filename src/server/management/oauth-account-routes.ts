@@ -297,22 +297,6 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       experimental: false,
     });
   }
-  if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
-    const parsedBody = await readManagementJsonBodyOr(req, {});
-    if (isPlainRecord(parsedBody) && parsedBody.provider === "command-code") {
-      const enabled = parsedBody.enabled === undefined ? config.commandCodeAccountPool?.enabled !== false : parsedBody.enabled;
-      if (typeof enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
-      const strategy = parsedBody.strategy === undefined
-        ? normalizeAccountPoolStrategy(config.commandCodeAccountPool?.strategy)
-        : parseAccountPoolStrategy(parsedBody.strategy);
-      if (strategy === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
-      config.commandCodeAccountPool = { enabled, strategy };
-      saveConfigPreservingClaudeCode(config);
-      reconcileLiveStateStores();
-      return jsonResponse({ ok: true, provider: "command-code", enabled, strategy, experimental: false });
-    }
-  }
-
   // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
@@ -328,9 +312,26 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     });
   }
   if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
+    // The request body can only be read ONCE, so provider dispatch happens after a
+    // single read. Reading it in a provider-specific pre-check made every other
+    // provider's write fall through to an empty body and 400 (#294 regression).
     const parsedBody = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(parsedBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const requestedProvider = typeof parsedBody.provider === "string" ? parsedBody.provider.trim().toLowerCase() : "";
+    // Command Code OAuth account pool: quota-aware by default, with safe rotation fallbacks.
+    if (requestedProvider === "command-code") {
+      const enabled = parsedBody.enabled === undefined ? config.commandCodeAccountPool?.enabled !== false : parsedBody.enabled;
+      if (typeof enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+      const strategy = parsedBody.strategy === undefined
+        ? normalizeAccountPoolStrategy(config.commandCodeAccountPool?.strategy)
+        : parseAccountPoolStrategy(parsedBody.strategy);
+      if (strategy === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+      config.commandCodeAccountPool = { enabled, strategy };
+      saveConfigPreservingClaudeCode(config);
+      reconcileLiveStateStores();
+      return jsonResponse({ ok: true, provider: "command-code", enabled, strategy, experimental: false });
     }
     const body = parsedBody as {
       provider?: unknown;

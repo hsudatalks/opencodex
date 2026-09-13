@@ -400,3 +400,127 @@ describe("Anthropic account pool strategy management API", () => {
     }
   });
 });
+
+describe("Command Code account pool strategy management API", () => {
+  let testDir = "";
+  let previousHome: string | undefined;
+  let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+  function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+    return {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" },
+      },
+      ...overrides,
+    } as OcxConfig;
+  }
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    isolatedCodexHome = installIsolatedCodexHome("ocx-cc-pool-mgmt-codex-");
+    testDir = mkdtempSync(join(tmpdir(), "ocx-cc-pool-mgmt-"));
+    process.env.OPENCODEX_HOME = testDir;
+    saveConfig(baseConfig());
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    if (testDir) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test("GET surfaces Command Code pool defaults", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        provider: "command-code",
+        enabled: true,
+        strategy: "quota",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT persists strategy and GET reflects it", async () => {
+    const server = startServer(0);
+    try {
+      const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", enabled: true, strategy: "round-robin" }),
+      });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toMatchObject({
+        ok: true,
+        provider: "command-code",
+        enabled: true,
+        strategy: "round-robin",
+      });
+
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await get.json()).toMatchObject({ enabled: true, strategy: "round-robin" });
+
+      const persisted = JSON.parse(
+        await Bun.file(join(testDir, "config.json")).text(),
+      ) as { commandCodeAccountPool?: { enabled?: boolean; strategy?: string } };
+      expect(persisted.commandCodeAccountPool).toMatchObject({ enabled: true, strategy: "round-robin" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT rejects an unsupported strategy", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", enabled: true, strategy: "weighted" }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a Command Code write does not clobber the Anthropic pool, and vice versa", async () => {
+    const server = startServer(0);
+    try {
+      // Seed the Anthropic pool first; the shared route reads the body once, so a
+      // provider-specific pre-read used to 400 this write.
+      const anthropicPut = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "anthropic", enabled: true, strategy: "fill-first", stickyLimit: 3 }),
+      });
+      expect(anthropicPut.status).toBe(200);
+
+      const commandPut = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", enabled: true, strategy: "round-robin" }),
+      });
+      expect(commandPut.status).toBe(200);
+
+      const anthropicGet = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(await anthropicGet.json()).toMatchObject({
+        provider: "anthropic",
+        enabled: true,
+        strategy: "fill-first",
+        stickyLimit: 3,
+      });
+      const commandGet = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await commandGet.json()).toMatchObject({ enabled: true, strategy: "round-robin" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
