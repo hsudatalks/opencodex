@@ -36,6 +36,14 @@ the browser or password manager's decision.
 
 ## What you can do
 
+The Usage page uses Singapore time (`Asia/Singapore`). Week shows Monday through
+Sunday; Month shows the first through the last day of the calendar month. The
+arrows and horizontal chart swipes move by one whole week or month. The current
+period includes usage recorded so far, with the remaining dates shown as empty
+bars; navigation cannot move beyond the current period. Day shows today, and All
+includes the complete retained history. Totals and model/provider breakdowns use
+the same calendar boundaries as the chart.
+
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |

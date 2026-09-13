@@ -51,10 +51,9 @@ import {
   currentUsageLedgerRevision,
   readUsageSnapshotForManagement,
   usageLogRevisionKey,
-  type PersistedUsageEntry,
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary } from "../../usage/summary";
 import { usagePostgresClient } from "../../usage/postgres-ingest";
 import { cachedUsageSummaryFromPostgres } from "../../usage/postgres-summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
@@ -86,6 +85,8 @@ import {
   setUsageSummaryCacheEntry,
 } from "./usage-summary-cache";
 
+import { usageCalendarPeriod } from "../../usage/calendar";
+
 const USAGE_DAY_MS = 86_400_000;
 const SINGAPORE_UTC_OFFSET = "+08:00";
 
@@ -101,50 +102,28 @@ function singaporeDateKey(timestamp: number): string {
 }
 
 function usageWindow(range: UsageRange, input: string | null, now: number): UsageWindow {
-  if (range !== "1d" && range !== "7d") {
+  if (range === "all") {
     return { end: now, generatedAt: now, cacheKey: "latest", historical: false };
   }
-  const latestEnd = Date.parse(`${singaporeDateKey(now)}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
+  const current = usageCalendarPeriod(range, now);
+  const latest = { end: now, generatedAt: now, cacheKey: current.endDate, historical: false };
   if (range === "1d") {
-    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
+    return latest;
   }
   if (!input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) {
-    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
+    return latest;
   }
   const requestedEnd = Date.parse(`${input}T23:59:59.999${SINGAPORE_UTC_OFFSET}`);
-  if (!Number.isFinite(requestedEnd) || requestedEnd >= latestEnd) {
-    return { end: latestEnd, generatedAt: now, cacheKey: "latest", historical: false };
+  if (!Number.isFinite(requestedEnd) || singaporeDateKey(requestedEnd) !== input || requestedEnd >= current.start) {
+    return latest;
   }
-  return { end: requestedEnd, generatedAt: requestedEnd, cacheKey: input, historical: true };
-}
-
-function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurface): boolean {
-  if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
-  if (surface === "grok") return entry.surface === "grok";
-  if (surface === "codex") return entry.surface === undefined;
-  return true;
+  const period = usageCalendarPeriod(range, requestedEnd);
+  return { end: period.end, generatedAt: now, cacheKey: period.endDate, historical: true };
 }
 
 function nextSingaporeMidnight(now: number): number {
   const nextDate = singaporeDateKey(now + USAGE_DAY_MS);
   return Date.parse(`${nextDate}T00:00:00${SINGAPORE_UTC_OFFSET}`);
-}
-
-function usageSummaryExpiresAt(
-  entries: PersistedUsageEntry[],
-  range: UsageRange,
-  surface: UsageSurface,
-  now: number,
-): number {
-  let expiresAt = nextSingaporeMidnight(now);
-  const windowMs = range === "1d" ? USAGE_DAY_MS : range === "7d" ? 7 * USAGE_DAY_MS : range === "30d" ? 30 * USAGE_DAY_MS : null;
-  if (windowMs === null) return expiresAt;
-  for (const entry of entries) {
-    if (!usageEntryMatchesSurface(entry, surface)) continue;
-    const expiry = entry.timestamp + windowMs;
-    if (expiry > now && expiry < expiresAt) expiresAt = expiry;
-  }
-  return expiresAt;
 }
 
 function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: boolean }>(
@@ -153,7 +132,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   windowEnd: number,
   generatedAt: number,
 ): T {
-  const since = range === "1d" ? windowEnd - USAGE_DAY_MS + 1 : range === "7d" ? windowEnd - 7 * USAGE_DAY_MS : range === "30d" ? windowEnd - 30 * USAGE_DAY_MS : null;
+  const since = range === "all" ? null : usageCalendarPeriod(range, windowEnd).start;
   return { ...summary, since, generatedAt };
 }
 
@@ -278,7 +257,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
         expiresAt: window.historical
           ? Number.MAX_SAFE_INTEGER
-          : usageSummaryExpiresAt(snapshot.entries, range, surface, now),
+          : nextSingaporeMidnight(now),
         revisionReadAt,
         summary,
       });

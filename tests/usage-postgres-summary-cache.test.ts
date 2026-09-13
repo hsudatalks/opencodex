@@ -51,7 +51,7 @@ describe("PostgreSQL usage summary cache", () => {
     expect(result.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 3, estimatedCostUsd: 0.5 });
   });
 
-  test("reads partial first and current hours from facts around completed hourly rows", async () => {
+  test("reads calendar week from completed hours and only the current hour from facts", async () => {
     const factWindows: unknown[][] = [];
     const rollupWindows: unknown[][] = [];
     const tx = {
@@ -84,14 +84,28 @@ describe("PostgreSQL usage summary cache", () => {
 
     const result = await summarizeUsageFromPostgres(sql, "7d", now, "all");
 
-    expect(result.summary).toMatchObject({ requests: 4, attemptCount: 5, totalTokens: 20 });
+    expect(result.summary).toMatchObject({ requests: 3, attemptCount: 4, totalTokens: 15 });
     expect(factWindows).toEqual([
       ["2026-08-12T12:00:00.000Z", 0, "2026-08-12T12:30:00.000Z"],
-      ["2026-08-05T12:30:00.000Z", 0, "2026-08-05T12:59:59.999Z"],
     ]);
     expect(rollupWindows[0]).toEqual([
-      "2026-08-05T13:00:00.000Z", 0, "2026-08-12T11:59:59.999Z",
+      "2026-08-09T16:00:00.000Z", 0, "2026-08-12T11:59:59.999Z",
     ]);
+  });
+
+  test("month uses Singapore boundaries and a complete leap-month day grid", async () => {
+    const windows: unknown[][] = [];
+    const tx = { unsafe: async (query: string, params: unknown[] = []) => {
+      if (query.includes("dashboard_read_model_state")) return [{ ready: true }];
+      if (query.includes("dashboard_request_hourly") && !query.includes("GROUP BY")) windows.push(params);
+      return [];
+    } };
+    const sql = { begin: async (_mode: string, run: (transaction: typeof tx) => Promise<unknown>) => run(tx) } as unknown as SQL;
+    const result = await summarizeUsageFromPostgres(sql, "30d", Date.parse("2024-02-29T23:59:59.999+08:00"), "all");
+    expect(windows[0]?.[0]).toBe("2024-01-31T16:00:00.000Z");
+    expect(result.days).toHaveLength(29);
+    expect(result.days[0]?.date).toBe("2024-02-01");
+    expect(result.days.at(-1)?.date).toBe("2024-02-29");
   });
 
   test("1d reads exactly one Singapore calendar day", async () => {

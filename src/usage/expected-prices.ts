@@ -35,6 +35,7 @@ const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite:
 const GPT56_SOL: Cost4 = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
 const GPT56_TERRA: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 };
 const GPT56_LUNA: Cost4 = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
+const GPT6_ASTRA: Cost4 = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
 const GEMINI_36_FLASH: Cost4 = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
@@ -58,6 +59,7 @@ const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pric
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
+const OPENAI_GPT6_ASTRA_PRICING = "https://developers.openai.com/api/docs/pricing (GPT-6 Astra standard API: input $10/MTok, cached input $1/MTok, output $50/MTok, cache write $12.50/MTok)";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
@@ -75,6 +77,8 @@ const GPT_IMAGE_2_PRICING = "https://developers.openai.com/api/docs/pricing (sta
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
+  { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: OPENAI_GPT6_ASTRA_PRICING, verifiedAt: "2026-09-07", status: "verified" },
+  { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: OPENAI_GPT6_ASTRA_PRICING, verifiedAt: "2026-09-07", status: "verified" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one

@@ -32,7 +32,7 @@ function writeFixture(now: number): void {
   const lines = [
     JSON.stringify({
       requestId: "ocx-old",
-      timestamp: now - 10 * 86_400_000,
+      timestamp: Date.parse(`${new Date(now + 8 * 3_600_000).toISOString().slice(0, 7)}-01T00:00:00+08:00`) - 8 * 86_400_000,
       provider: "openai",
       model: "gpt-5.5",
       status: 200,
@@ -43,7 +43,7 @@ function writeFixture(now: number): void {
     }),
     JSON.stringify({
       requestId: "ocx-recent",
-      timestamp: now - 1 * 86_400_000,
+      timestamp: now,
       provider: "openai",
       model: "gpt-5.5",
       status: 200,
@@ -54,7 +54,7 @@ function writeFixture(now: number): void {
     }),
     JSON.stringify({
       requestId: "ocx-missing",
-      timestamp: now - 1 * 86_400_000,
+      timestamp: now,
       provider: "anthropic",
       model: "claude-x",
       surface: "claude",
@@ -173,7 +173,8 @@ describe("GET /api/usage", () => {
     try {
       const body = await fetch(new URL("/api/usage?range=7d", server.url)).then(res => res.json());
       expect(body.days).toHaveLength(7);
-      expect(body.days.at(-1)?.date).toBe(new Date(Date.now() + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10));
+      expect(new Date(`${body.days.at(0)?.date}T12:00:00Z`).getUTCDay()).toBe(1);
+      expect(new Date(`${body.days.at(-1)?.date}T12:00:00Z`).getUTCDay()).toBe(0);
       expect(body.generatedAt).toBeLessThanOrEqual(Date.now());
     } finally {
       await server.stop(true);
@@ -212,10 +213,10 @@ describe("GET /api/usage", () => {
 
   test("range=7d accepts a historical Singapore calendar window", async () => {
     const rows = [
-      ["before", "2026-08-03T23:00:00+08:00", 1],
-      ["first", "2026-08-04T00:00:00+08:00", 2],
-      ["last", "2026-08-10T23:59:00+08:00", 3],
-      ["after", "2026-08-11T00:00:00+08:00", 4],
+      ["before", "2026-08-02T23:59:59.999+08:00", 1],
+      ["first", "2026-08-03T00:00:00+08:00", 2],
+      ["last", "2026-08-09T23:59:59.999+08:00", 3],
+      ["after", "2026-08-10T00:00:00+08:00", 4],
     ].map(([requestId, timestamp, totalTokens]) => JSON.stringify({
       requestId: `ocx-${requestId}`,
       timestamp: Date.parse(String(timestamp)),
@@ -230,30 +231,50 @@ describe("GET /api/usage", () => {
     writeFileSync(join(testDir, "usage.jsonl"), `${rows.join("\n")}\n`, { mode: 0o600 });
     const server = startServer(0);
     try {
-      const body = await fetch(new URL("/api/usage?range=7d&end=2026-08-10", server.url)).then(res => res.json());
+      const body = await fetch(new URL("/api/usage?range=7d&end=2026-08-09", server.url)).then(res => res.json());
       expect(body.summary).toMatchObject({ requests: 2, totalTokens: 5 });
-      expect(body.generatedAt).toBe(Date.parse("2026-08-10T23:59:59.999+08:00"));
+      expect(body.since).toBe(Date.parse("2026-08-03T00:00:00+08:00"));
       expect(body.days.map((day: { date: string }) => day.date)).toEqual([
-        "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
-        "2026-08-08", "2026-08-09", "2026-08-10",
+        "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06",
+        "2026-08-07", "2026-08-08", "2026-08-09",
       ]);
     } finally {
       await server.stop(true);
     }
   });
 
-  test("default range is 30d and includes the older entry", async () => {
+  test("historical leap month includes both boundaries and excludes adjacent months", async () => {
+    const timestamps = ["2024-01-31T23:59:59.999+08:00", "2024-02-01T00:00:00+08:00",
+      "2024-02-29T23:59:59.999+08:00", "2024-03-01T00:00:00+08:00"];
+    writeFileSync(join(testDir, "usage.jsonl"), timestamps.map((timestamp, index) => JSON.stringify({
+      requestId: `month-${index}`, timestamp: Date.parse(timestamp), provider: "openai", model: "gpt-5.5",
+      status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 0 }, totalTokens: 1,
+    })).join("\n") + "\n");
+    const server = startServer(0);
+    try {
+      for (const suffix of ["", "&refresh=1"]) {
+        const body = await fetch(new URL(`/api/usage?range=30d&end=2024-02-29${suffix}`, server.url)).then(res => res.json());
+        expect(body.summary.requests).toBe(2);
+        expect(body.days).toHaveLength(29);
+        expect(body.days[0].date).toBe("2024-02-01");
+        expect(body.days.at(-1).date).toBe("2024-02-29");
+        expect(body.since).toBe(Date.parse("2024-02-01T00:00:00+08:00"));
+      }
+    } finally { await server.stop(true); }
+  });
+
+  test("default range is the natural month and excludes the previous month", async () => {
     writeFixture(Date.now());
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/api/usage", server.url));
       const body = await res.json();
       expect(body.range).toBe("30d");
-      expect(body.summary.requests).toBe(3);
-      expect(body.summary.measuredRequests).toBe(2);
-      expect(body.summary.reportedRequests).toBe(2);
+      expect(body.summary.requests).toBe(2);
+      expect(body.summary.measuredRequests).toBe(1);
+      expect(body.summary.reportedRequests).toBe(1);
       expect(body.summary.unreportedRequests).toBe(1);
-      expect(body.summary.totalTokens).toBe(165);
+      expect(body.summary.totalTokens).toBe(15);
     } finally {
       await server.stop(true);
     }

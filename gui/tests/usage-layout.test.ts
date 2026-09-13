@@ -75,7 +75,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
   }
 });
 
-test("Usage refresh bypasses the cache and week navigation moves one day", async () => {
+test("Usage refresh bypasses the cache and navigation moves whole calendar periods", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -131,22 +131,29 @@ test("Usage refresh bypasses the cache and week navigation moves one day", async
     expect(new URL(requests[1]!).searchParams.get("refresh")).toBe("1");
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('button[aria-label="Move back one day"]')!.click();
+      container.querySelector<HTMLButtonElement>('button[aria-label="Previous period"]')!.click();
     });
     const navigationDeadline = Date.now() + 1_000;
     while (requests.length < 3) {
       if (Date.now() >= navigationDeadline) throw new Error("Usage window navigation request did not run");
       await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
     }
-    const yesterday = new Date(Date.now() + 8 * 60 * 60 * 1_000 - 24 * 60 * 60 * 1_000)
-      .toISOString()
-      .slice(0, 10);
-    expect(new URL(requests[2]!).searchParams.get("end")).toBe(yesterday);
+    const currentEnd = Date.parse(`${new URL(requests[0]!).searchParams.get("end")}T12:00:00Z`);
+    expect(new URL(requests[2]!).searchParams.get("end")).toBe(new Date(currentEnd - 7 * 86_400_000).toISOString().slice(0, 10));
 
     const rangeGroup = container.querySelector('[role="group"][aria-label="Usage"]');
     expect([...rangeGroup!.querySelectorAll("button")].map(button => button.textContent)).toEqual([
       "Week", "Day", "Month", "All",
     ]);
+    await act(async () => { (rangeGroup!.querySelectorAll("button")[2] as HTMLButtonElement).click(); });
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+    const month = new URL(requests.at(-1)!);
+    expect(month.searchParams.get("range")).toBe("30d");
+    const end = new Date(`${month.searchParams.get("end")}T12:00:00Z`);
+    const previousMonthEnd = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 0)).toISOString().slice(0, 10);
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Previous period"]')!.click(); });
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+    expect(new URL(requests.at(-1)!).searchParams.get("end")).toBe(previousMonthEnd);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

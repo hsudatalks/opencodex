@@ -305,6 +305,14 @@ ordinary 5xx errors are not replayed. Completion fallback rebuilds only replayab
 the original user/tool-result turn for reasoning-only attempts, supplies neutral non-empty carriers
 for empty tool output, and validates role alternation plus tool-use/result pairing before transport.
 
+Kiro credentials also retain an explicit wire-client mode. SQLite imports mirror the native Kiro
+CLI request contract, while JSON credential imports retain the IDE contract; legacy credential-file
+accounts are treated as IDE accounts during snapshot migration. Builder ID CLI tokens use Kiro's
+fixed streaming profile rather than the unrelated Social profile that can appear in local state. A
+legacy request carrying that Social profile gets one narrowly scoped retry with the Builder profile
+only when Kiro returns its exact invalid-bearer `AccessDeniedException`; other 403 responses are not
+replayed.
+
 Provider-level `retryOn429` (devlog 260802_429_same_target_retry) is the generic, opt-in
 same-target 429 retry for API-key providers (`authMode: "key"`), primarily single-key pools
 that cannot use multi-key failover. In the pre-stream recovery loop, a 429 waits (`Retry-After`

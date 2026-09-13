@@ -1,4 +1,5 @@
 import type { SQL } from "bun";
+import { usageCalendarPeriod } from "./calendar";
 import { sqlCostRule } from "./cost";
 import type {
   UsageDay,
@@ -50,10 +51,7 @@ function surfaceMode(surface: UsageSurface): number {
 }
 
 function sinceForRange(range: UsageRange, now: number): number | null {
-  if (range === "1d") return now - DAY_MS + 1;
-  if (range === "7d") return now - 7 * DAY_MS;
-  if (range === "30d") return now - 30 * DAY_MS;
-  return null;
+  return range === "all" ? null : usageCalendarPeriod(range, now).start;
 }
 
 function singaporeDateKey(timestamp: number): string {
@@ -165,12 +163,13 @@ function capDayModels(day: UsageDay): void {
 
 function dayGrid(range: UsageRange, now: number, oldest: number | undefined, rows: SqlRow[], modelRows: SqlRow[]): UsageDay[] {
   const byDate = new Map<string, UsageDay>();
-  let days = range === "1d" ? 1 : range === "7d" ? 7 : range === "30d" ? 30 : 1;
+  const period = usageCalendarPeriod(range, now);
+  let days = range === "all" ? 1 : period.days;
   if (range === "all" && oldest !== undefined) {
     days = Math.max(1, Math.ceil((now - oldest) / DAY_MS) + 1);
   }
   for (let offset = days - 1; offset >= 0; offset--) {
-    const date = singaporeDateKey(now - offset * DAY_MS);
+    const date = singaporeDateKey((range === "all" ? now : period.end) - offset * DAY_MS);
     byDate.set(date, { date, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const row of rows) {

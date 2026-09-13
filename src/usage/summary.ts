@@ -1,4 +1,5 @@
 import { baseProviderLabel } from "../providers/label";
+import { usageCalendarPeriod } from "./calendar";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
@@ -114,9 +115,10 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
 }
 
 function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
-  if (range === "1d") return { since: now - DAY_MS + 1, days: 1 };
-  if (range === "7d") return { since: now - 7 * DAY_MS, days: 7 };
-  if (range === "30d") return { since: now - 30 * DAY_MS, days: 30 };
+  if (range !== "all") {
+    const period = usageCalendarPeriod(range, now);
+    return { since: period.start, days: period.days };
+  }
   return { since: null, days: 0 };
 }
 
@@ -300,6 +302,7 @@ function addEstimatedCost(
 function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[]): UsageDay[] {
   const window = rangeWindow(range, now);
   const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
+  const gridEnd = range === "all" ? now : usageCalendarPeriod(range, now).end;
   const grid = new Map<string, UsageDay>();
   // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
@@ -324,7 +327,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
   for (let i = days - 1; i >= 0; i--) {
-    const key = singaporeDateKey(now - i * DAY_MS);
+    const key = singaporeDateKey(gridEnd - i * DAY_MS);
     grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const entry of entries) {

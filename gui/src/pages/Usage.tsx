@@ -11,6 +11,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { IconChevron, IconRefresh } from "../icons";
+import { usageCalendarPeriod } from "../../../src/usage/calendar";
 
 type Range = "1d" | "7d" | "30d" | "all";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -105,18 +106,7 @@ function modelColor(model: string, provider: string): string {
   return `hsl(${h % 360} 55% 55%)`;
 }
 
-function singaporeDateOffset(offsetDays: number): string {
-  const parts = new Intl.DateTimeFormat("en", {
-    timeZone: "Asia/Singapore",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(Date.now() + offsetDays * 86_400_000));
-  const part = (type: "year" | "month" | "day") => parts.find(value => value.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-function formatWeekWindow(days: UsageDay[], locale: Locale): string {
+function formatPeriodWindow(days: UsageDay[], locale: Locale): string {
   const first = days.at(0)?.date;
   const last = days.at(-1)?.date;
   if (!first || !last) return "";
@@ -372,7 +362,7 @@ function UsageDayBars({
           >
             <IconChevron aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
           </button>
-          <span className="usage-week-window-label" aria-live="polite">{formatWeekWindow(dayBars, locale)}</span>
+          <span className="usage-week-window-label" aria-live="polite">{formatPeriodWindow(dayBars, locale)}</span>
           <button
             type="button"
             className="btn btn-ghost btn-icon"
@@ -386,9 +376,9 @@ function UsageDayBars({
         </div>
       )}
       <div
-        className={`daybars${showWindowNavigation ? " usage-week-swipe" : ""}`}
+        className={`daybars${dayBars.length > 7 ? " daybars-month" : ""}${showWindowNavigation ? " usage-week-swipe" : ""}`}
         role="img"
-        aria-label={`${t("usage.section.heatmap")}: ${formatWeekWindow(dayBars, locale)}`}
+        aria-label={`${t("usage.section.heatmap")}: ${formatPeriodWindow(dayBars, locale)}`}
         style={{ gridTemplateColumns: `repeat(${Math.max(1, dayBars.length)}, minmax(0, 1fr))` }}
         onPointerDown={onPointerDown}
         onPointerUp={finishPointer}
@@ -396,11 +386,13 @@ function UsageDayBars({
       >
         {dayBars.map(day => {
           const percentage = Math.round((day.totalTokens / max) * 100);
-          const label = day.date.slice(5);
+          const dayOfMonth = Number(day.date.slice(8));
+          const label = dayBars.length > 7 ? (dayOfMonth === 1 || dayOfMonth % 5 === 0 ? String(dayOfMonth) : "") : day.date.slice(5);
           return (
             <div
               key={day.date}
               className="daybar"
+              title={`${day.date}: ${formatTokens(day.totalTokens, locale)}`}
               onMouseEnter={() => setHoverDay(day.date)}
               onMouseLeave={() => setHoverDay(current => (current === day.date ? null : current))}
             >
@@ -447,16 +439,16 @@ function UsageHeatmapPanel({
   range,
   heatmap,
   periodBars,
-  windowDayOffset,
-  onMoveWeek,
+  periodOffset,
+  onMovePeriod,
   locale,
   t,
 }: {
   range: Range;
   heatmap: ReturnType<typeof buildHeatmap>;
   periodBars: UsageDay[];
-  windowDayOffset: number;
-  onMoveWeek: (direction: "older" | "newer") => void;
+  periodOffset: number;
+  onMovePeriod: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
 }) {
@@ -476,13 +468,13 @@ function UsageHeatmapPanel({
   return (
     <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
       <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
-      {range === "7d" || range === "1d" ? (
+      {range !== "all" ? (
         <UsageDayBars
           dayBars={periodBars}
           locale={locale}
-          showWindowNavigation={range === "7d"}
-          canMoveNewer={windowDayOffset < 0}
-          onMove={onMoveWeek}
+          showWindowNavigation={range === "7d" || range === "30d"}
+          canMoveNewer={periodOffset < 0}
+          onMove={onMovePeriod}
           t={t}
         />
       ) : (
@@ -743,8 +735,8 @@ function UsageWorkspaceBody({
   onModelQuery,
   sortedProviders,
   range,
-  windowDayOffset,
-  onMoveWeek,
+  periodOffset,
+  onMovePeriod,
   locale,
   t,
 }: {
@@ -757,14 +749,14 @@ function UsageWorkspaceBody({
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
   range: Range;
-  windowDayOffset: number;
-  onMoveWeek: (direction: "older" | "newer") => void;
+  periodOffset: number;
+  onMovePeriod: (direction: "older" | "newer") => void;
   locale: Locale;
   t: TFn;
 }) {
   // A zero-activity historical week must keep the chart navigator visible so the
   // user can continue paging instead of getting trapped in a generic empty state.
-  const empty = !!data && data.summary.requests === 0 && range !== "7d";
+  const empty = !!data && data.summary.requests === 0 && range !== "7d" && range !== "30d";
   const sections = [
     {
       id: "overview",
@@ -777,8 +769,8 @@ function UsageWorkspaceBody({
             range={range}
             heatmap={heatmap}
             periodBars={periodBars}
-            windowDayOffset={windowDayOffset}
-            onMoveWeek={onMoveWeek}
+            periodOffset={periodOffset}
+            onMovePeriod={onMovePeriod}
             locale={locale}
             t={t}
           />
@@ -836,17 +828,17 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null): string {
-  return `ocx.usage.v2:${apiBase}:${range}:${surface}:${weekEnd ?? "latest"}`;
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null): string {
+  return `ocx.usage.v3:${apiBase}:${range}:${surface}:${periodEnd ?? "latest"}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface, weekEnd);
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, periodEnd);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, weekEnd: string | null, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface, weekEnd);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface, periodEnd);
   if (!usageMemoryCache.has(key) && usageMemoryCache.size >= 96) {
     usageMemoryCache.delete(usageMemoryCache.keys().next().value!);
   }
@@ -857,34 +849,41 @@ function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, we
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("7d");
+  const [calendarNow, setCalendarNow] = useState(() => Date.now());
+  useEffect(() => {
+    const updateClock = () => setCalendarNow(Date.now());
+    const timer = window.setTimeout(updateClock, Math.max(1, usageCalendarPeriod("1d", calendarNow).end + 1 - Date.now()));
+    window.addEventListener("focus", updateClock);
+    return () => { window.clearTimeout(timer); window.removeEventListener("focus", updateClock); };
+  }, [calendarNow]);
   const [surface, setSurface] = useState<UsageSurface>("all");
-  const [windowDayOffset, setWindowDayOffset] = useState(0);
+  const [periodOffset, setPeriodOffset] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const forceRefreshRef = useRef(false);
-  const weekEnd = range === "7d" && windowDayOffset < 0
-    ? singaporeDateOffset(windowDayOffset)
+  const periodEnd = range !== "all"
+    ? usageCalendarPeriod(range, calendarNow, periodOffset).endDate
     : null;
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const forceRefresh = forceRefreshRef.current;
     forceRefreshRef.current = false;
     const params = new URLSearchParams({ range, surface });
-    if (weekEnd) params.set("end", weekEnd);
+    if (periodEnd) params.set("end", periodEnd);
     if (forceRefresh) params.set("refresh", "1");
     const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, weekEnd, next);
+    writeHeldUsage(apiBase, range, surface, periodEnd, next);
     return next;
-  }, [apiBase, range, surface, weekEnd]);
+  }, [apiBase, range, surface, periodEnd]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface, weekEnd);
-  const cached = readHeldUsage(apiBase, range, surface, weekEnd);
+  const resourceKey = usageCacheKey(apiBase, range, surface, periodEnd);
+  const cached = readHeldUsage(apiBase, range, surface, periodEnd);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface, weekEnd],
+    [apiBase, range, surface, periodEnd],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -897,15 +896,15 @@ export default function Usage({ apiBase }: { apiBase: string }) {
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const periodBars = useMemo(
-    () => (data?.days ?? []).slice(range === "1d" ? -1 : -7),
-    [data?.days, range],
+    () => data?.days ?? [],
+    [data?.days],
   );
-  const moveWeek = useCallback((direction: "older" | "newer") => {
-    setWindowDayOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
+  const movePeriod = useCallback((direction: "older" | "newer") => {
+    setPeriodOffset(current => direction === "older" ? current - 1 : Math.min(0, current + 1));
   }, []);
   const changeRange = useCallback((next: Range) => {
     setRange(next);
-    if (next !== "7d") setWindowDayOffset(0);
+    setPeriodOffset(0);
   }, []);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
@@ -964,8 +963,8 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
             range={range}
-            windowDayOffset={windowDayOffset}
-            onMoveWeek={moveWeek}
+            periodOffset={periodOffset}
+            onMovePeriod={movePeriod}
             locale={locale}
             t={t}
           />

@@ -2227,6 +2227,9 @@ button.prov-account-row.active { cursor: default; }
 .daybar-seg { width: 100%; min-height: 1px; }
 .daybar-count { font-size: var(--text-label); font-weight: var(--weight-semibold); color: var(--text); }
 .daybar-label { font-size: var(--text-caption); white-space: nowrap; }
+.daybars-month { gap: 3px; }
+.daybars-month .daybar-count { display: none; }
+.daybars-month .daybar-label { min-height: 16px; }
 .daybar:hover .daybar-track { outline: 1px solid var(--border); }
 .daybar-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
