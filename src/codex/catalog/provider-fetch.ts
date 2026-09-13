@@ -543,6 +543,20 @@ export function configuredContextWindow(prov: OcxProviderConfig, id: string): nu
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+/**
+ * The capacity the vendored per-provider metadata bundle records for one model, if any. This is
+ * the same source `applyCatalogMetadata` reads when it stamps a Codex catalog entry, so routing
+ * the lookup through one helper is what keeps the gathered rows (and therefore `/v1/models` and
+ * `/api/models`) from disagreeing with the catalog about the same model.
+ */
+function metadataContextWindow(provider: string, id: string): number | undefined {
+  const jawcodeProvider = resolveMetadataProvider(provider);
+  if (!jawcodeProvider) return undefined;
+  const meta = getModelMetadata(jawcodeProvider, id)
+    ?? (shouldCaseFoldMetadataModelId(provider) ? getModelMetadataCaseInsensitive(jawcodeProvider, id) : undefined);
+  return typeof meta?.contextWindow === "number" && meta.contextWindow > 0 ? meta.contextWindow : undefined;
+}
+
 export function configuredInputModalities(prov: OcxProviderConfig, id: string): string[] | undefined {
   const modalities = modelRecordValue(prov.modelInputModalities, id);
   return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
@@ -561,9 +575,22 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
-  void name;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
+  const discoveredContext = typeof model.contextWindow === "number" && model.contextWindow > 0
+    ? model.contextWindow
+    : undefined;
+  // Vendored per-provider metadata is the repo's own answer for a model the upstream listing
+  // does not size. It is a LAST resort — an operator or registry value, and a live-discovered
+  // value, both outrank it — but without it the plain `/v1/models` shape published nothing and
+  // the Codex catalog published its 128k conservative floor, so a client sizing its own budget
+  // (DeepSeek Harness defaults to 262144) was told a 1M model held a fraction of that.
+  const bundledContext = discoveredContext === undefined && configuredCap === undefined
+    ? metadataContextWindow(name, model.id)
+    : undefined;
+  const resolvedContext = configuredCap !== undefined
+    ? (discoveredContext !== undefined ? Math.min(discoveredContext, configuredCap) : configuredCap)
+    : (discoveredContext ?? bundledContext);
   let inputModalities = configuredInputModalities(prov, model.id);
   // Vision-sidecar coverage: `noVisionModels` marks models whose images the PROXY describes
   // (src/vision/index.ts). The catalog must still advertise image input for them — the Codex app
@@ -578,13 +605,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
-    ...(configuredCap !== undefined
-      ? {
-        contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
-          ? Math.min(model.contextWindow, configuredCap)
-          : configuredCap,
-      }
-      : {}),
+    ...(resolvedContext !== undefined ? { contextWindow: resolvedContext } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(configuredMaxInput !== undefined

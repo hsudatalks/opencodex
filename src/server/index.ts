@@ -831,7 +831,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, nativeInputModalities, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, nativeInputModalities, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
         const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
@@ -928,11 +928,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         };
         const modalityFields = (modalities?: readonly string[]) =>
           modalities && modalities.length > 0 ? { input_modalities: [...modalities] } : {};
+        // Capacity advertisement for clients that size their own prompt budget off this listing
+        // (DeepSeek Harness reads contextWindow / context_window / context_length / max_input_tokens
+        // here, and applies a 262144 default when none is present). Neither the Codex catalog branch
+        // nor the Anthropic branch reaches those clients, so the plain OpenAI shape carries it too.
+        // Unknown stays unknown: the Codex catalog's strict-fields 128k floor is a catalog-only
+        // conservative default, and publishing it here would tell a generic client it may send 128k
+        // to a model the proxy has no evidence about.
+        const contextWindowFields = (contextWindow?: number) =>
+          typeof contextWindow === "number" && contextWindow > 0
+            ? { context_window: contextWindow }
+            : {};
         const nativeModelRow = (id: string, metadataId = id) => ({
             id,
             object: "model",
             created: 0,
             owned_by: "openai",
+            ...contextWindowFields(nativeOpenAiContextWindow(metadataId)),
             ...grokEffortFields(
               nativeReasoningEfforts(metadataId),
               nativeDefaultReasoningEffort(metadataId),
@@ -964,6 +976,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             object: "model",
             created: 0,
             owned_by: m.owned_by ?? m.provider,
+            ...contextWindowFields(m.contextWindow),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modalityFields(m.inputModalities),
           })),

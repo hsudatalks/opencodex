@@ -105,6 +105,19 @@ function fillRecordOfArrays(
   return { ...cloneRecordOfArrays(seed), ...(user ? cloneRecordOfArrays(user) : {}) };
 }
 
+/**
+ * Per-key fill for a model-keyed number map: `user` wins and `seed` supplies only the ids the
+ * persisted map does not name. The all-or-nothing form is wrong for any map the registry keeps
+ * growing — a config saved before a model was added keeps that model valueless forever, which is
+ * why `modelContextWindows` needs the same treatment `modelReasoningEfforts` already gets.
+ */
+function fillRecordOfNumbers(
+  seed: Record<string, number>,
+  user: Record<string, number> | undefined,
+): Record<string, number> {
+  return { ...seed, ...(user ?? {}) };
+}
+
 function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
 }
@@ -274,14 +287,23 @@ function applyReasoningSummaryDefaults(
  * live gateway's "kimi-code" key row vs the oauth "kimi" entry) has the same gap for the
  * reasoning ladder itself.
  *
- * Deliberately narrow: only the reasoning capability maps (ladder, per-model defaults, wire
- * map, summary support), and only via `registryEntryForProviderDestination`, which matches
- * fixed key destinations and refuses templated or overridable base URLs. A custom row keeps
- * its own identity for everything else; user keys still win over the backfill.
+ * Deliberately narrow: only capability maps that are keyed by model id (reasoning ladder,
+ * per-model defaults, wire map, summary support, context window), and only via
+ * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
+ * templated or overridable base URLs. A custom row keeps its own identity for everything else;
+ * user keys still win over the backfill.
+ *
+ * The context window belongs here for the same reason the ladder does: an operator row at
+ * `https://api.deepseek.com` serves the official DeepSeek models, so it serves their real
+ * capacity. Without this the row advertised no window at all, which the Codex catalog then
+ * filled with its 128k conservative floor — understating a 1M model by 8x.
  */
-function enrichReasoningCapabilitiesByDestination(prov: OcxProviderConfig): void {
+function enrichCapabilitiesByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (destination?.modelContextWindows) {
+    prov.modelContextWindows = fillRecordOfNumbers(destination.modelContextWindows, prov.modelContextWindows);
+  }
   if (destination?.modelReasoningEfforts) {
     prov.modelReasoningEfforts = fillRecordOfArrays(destination.modelReasoningEfforts, prov.modelReasoningEfforts);
   }
@@ -308,7 +330,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     // `registryEntryForProviderDestination` answers the question that actually matters here —
     // which vendor endpoint is this row talking to — and is already restricted to fixed key
     // destinations, so a templated or overridable base URL cannot be claimed by it.
-    enrichReasoningCapabilitiesByDestination(prov);
+    enrichCapabilitiesByDestination(prov);
     return;
   }
   const seed = providerConfigSeed(entry);
@@ -320,7 +342,11 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
-  if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
+  // Per-key fill: a persisted map predates newer registry entries (GLM 5.3, DeepSeek V4.1),
+  // and the all-or-nothing fill left those models without a context window forever — the same
+  // bug the reasoning-effort map below was already fixed for. Operator keys still win; only
+  // missing keys are backfilled.
+  if (seed.modelContextWindows) prov.modelContextWindows = fillRecordOfNumbers(seed.modelContextWindows, prov.modelContextWindows);
   if (seed.modelInputModalities) prov.modelInputModalities = fillRecordOfArrays(seed.modelInputModalities, prov.modelInputModalities);
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
   if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };

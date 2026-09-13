@@ -441,6 +441,22 @@ const DEEPSEEK_ALL_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, ...DEEPSEEK_V
  */
 const DEEPSEEK_FLASH_ALIAS = "deepseek-flash";
 /**
+ * Capacity of the official DeepSeek V4 models. Official Codex setup
+ * (codex-deepseek-setup.sh) advertises 1,048,576 for both V4 ids; the older 1,000,000
+ * figure was a rounded approximation. The live `deepseek-flash` alias resolves to V4 flash
+ * upstream, so it carries the same window instead of falling to the 128k floor.
+ *
+ * This map is also the destination backfill: an operator-defined row pointed at
+ * `https://api.deepseek.com` (the live gateway's `deepseek-official`) inherits it through
+ * `registryEntryForProviderDestination`, because no registry id is ever called
+ * `deepseek-official`.
+ */
+const DEEPSEEK_CONTEXT_WINDOWS: Record<string, number> = {
+  "deepseek-v4-flash": 1_048_576,
+  "deepseek-v4-pro": 1_048_576,
+  [DEEPSEEK_FLASH_ALIAS]: 1_048_576,
+};
+/**
  * DeepSeek thinking mode REJECTS a tool-call continuation whose assistant turn omits the
  * original `reasoning_content` ("The `reasoning_content` in the thinking mode must be passed
  * back to the API"), so these are the ids that must replay it. The live `deepseek-flash`
@@ -1139,6 +1155,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // Zen Go's bare `deepseek-flash` row is the V4 flash alias: 1M context, same as
       // the official API's V4 ids (see DEEPSEEK_FLASH_ALIAS).
       [DEEPSEEK_FLASH_ALIAS]: 1_048_576,
+      // Zen Go's live catalog serves V4.1 flash too, and discloses no window for it. The same
+      // upstream model reached through command-code IS disclosed at 1,000,000, so this row
+      // carries the disclosed figure rather than falling to the 128k floor. The 1M family
+      // figure from the official DeepSeek V4 ids is the cross-check.
+      "deepseek-v4.1-flash": 1_000_000,
     },
     modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
@@ -1374,7 +1395,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     defaultModel: "deepseek-v4-flash",
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
-    modelContextWindows: { "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576 },
+    modelContextWindows: { ...DEEPSEEK_CONTEXT_WINDOWS },
     // DeepSeek documents V4-Flash as a native Responses API model adapted for Codex. The
     // API id is `deepseek-v4-flash`; `DeepSeek-V4-Flash-0731` is a release/version label.
     modelWireDefaults: {
