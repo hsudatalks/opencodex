@@ -55,11 +55,27 @@ export type OAuthAccountRow = {
   quotaUnavailable?: boolean;
 };
 
+/**
+ * One credential's OWN plan window, when the provider reports one per key. A pool exists because
+ * the keys carry independent entitlements, so this is the only place the difference between a
+ * nearly-spent key and an untouched peer is visible. Percentages are UTILISATION (0-100 used),
+ * matching `AccountQuota` and the quota bars; a surface that says "remaining" must subtract.
+ */
+export type ProviderKeyQuotaWindow = {
+  fiveHourPercent?: number;
+  weeklyPercent?: number;
+  fiveHourResetAt?: number;
+  weeklyResetAt?: number;
+};
+
 export type ApiKeyRow = {
   id: string;
   label?: string;
   masked: string;
   active: boolean;
+  quota?: ProviderKeyQuotaWindow;
+  /** Set when this key's window could not be read; the row then shows nothing, never 0%. */
+  quotaError?: string;
 };
 
 export type LoginHint = {

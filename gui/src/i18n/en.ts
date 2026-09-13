@@ -969,6 +969,7 @@ export const en = {
   "quota.cursorApiUsage": "API usage",
   "quota.totalSubscriptionCredits": "Total subscription credits",
   "quota.usedPercent": "{pct}% used",
+  "quota.fiveHourRemaining": "{pct}% of 5h left",
   "quota.limitReached": "Limit reached",
   "quota.resetsToday": "Resets today at {time}",
   "quota.resetsTomorrow": "Resets tomorrow at {time}",

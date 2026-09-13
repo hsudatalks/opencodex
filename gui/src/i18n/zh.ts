@@ -1483,6 +1483,7 @@ export const zh: Record<TKey, string> = {
   "quota.cursorApiUsage": "API 用量",
   "quota.totalSubscriptionCredits": "订阅总额度",
   "quota.usedPercent": "已用 {pct}%",
+  "quota.fiveHourRemaining": "5 小时剩余 {pct}%",
   "quota.limitReached": "已达上限",
   "quota.resetsToday": "今天 {time} 重置",
   "quota.resetsTomorrow": "明天 {time} 重置",

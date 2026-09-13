@@ -20,11 +20,13 @@ import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import CommandCodeAccountPoolSettings from "./CommandCodeAccountPoolSettings";
 import { OAuthLoginWait } from "../oauth-login-wait";
-import QuotaBars from "../QuotaBars";
+import QuotaBars, { isQuotaWarn } from "../QuotaBars";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
 const QUOTA_ENRICH_RESERVE_MS = 4_000;
+/** One threshold for accounts and pool keys, so both warn at the same utilisation. */
+const QUOTA_WARN_PERCENT = 80;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
 
@@ -242,7 +244,7 @@ export default function ProviderAuthPanel({
                           <QuotaBars
                             quota={account.quota ?? null}
                             plan={null}
-                            threshold={80}
+                            threshold={QUOTA_WARN_PERCENT}
                             t={t}
                             layout="stacked"
                             pending={account.quota == null}
@@ -283,6 +285,18 @@ export default function ProviderAuthPanel({
                       </span>
                       {entry.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                     </button>
+                    {/* Outside the row button: the button is disabled on the active key, and a
+                        disabled control neither hovers nor dims what a pool peer needs to compare.
+                        A pool's keys are independent, so the active badge says nothing about the
+                        peers — each row reports its own 5-hour window. */}
+                    {typeof entry.quota?.fiveHourPercent === "number" && (
+                      <span
+                        className={`badge ${isQuotaWarn(entry.quota.fiveHourPercent, QUOTA_WARN_PERCENT) ? "badge-amber" : "badge-muted"}`}
+                        title={t("quota.fiveHourLimit")}
+                      >
+                        {t("quota.fiveHourRemaining", { pct: Math.max(0, 100 - Math.round(entry.quota.fiveHourPercent)) })}
+                      </span>
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm"
                       onClick={() => void authHandlers.onEditAlias(item.name, "api-key", entry.id, entry.label)}>
                       {t("prov.editAlias")}

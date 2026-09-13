@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import type { AccountLoadState } from "../components/provider-workspace/types";
+import type { AccountLoadState, ApiKeyRow } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
@@ -27,8 +27,12 @@ export interface OAuthAccount {
   /** Set when the per-account probe could not reach upstream (expired login, 429, network). */
   quotaUnavailable?: boolean;
 }
-export interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
 
+/**
+ * A listed pool credential. It deliberately IS the view-model the workspace renders, so the
+ * quota fields a probe fills in and the fields a row draws can never drift apart.
+ */
+export type ApiKeyEntry = ApiKeyRow;
 /** Pure aggregate map used by Providers overview / rail attention state. */
 export function buildActiveAccountNeedsReauthMap(
   accountSets: Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>,
@@ -128,7 +132,29 @@ export function useProviderAccountPools(deps: {
       return [name, data?.keys ?? []] as const;
     }));
     setKeyPools(Object.fromEntries(entries));
-  }, [apiBase]);
+    // Each key's own window costs one upstream call per key, so the list must not wait for it:
+    // the rows render from the plain read above and the quota lands a moment later.
+    void Promise.all(providers.map(async name => {
+      const enriched = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}&quota=1`)
+        .then(async r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+        .catch(() => null) as { quotas?: Array<{ id: string; quota?: ApiKeyEntry["quota"]; error?: string }> } | null;
+      const quotas = enriched?.quotas;
+      if (!quotas || !aliveRef.current) return;
+      const byId = new Map(quotas.map(entry => [entry.id, entry]));
+      setKeyPools(current => ({
+        ...current,
+        [name]: (current[name] ?? []).map(entry => {
+          const match = byId.get(entry.id);
+          if (!match) return entry;
+          return {
+            ...entry,
+            ...(match.quota ? { quota: match.quota } : {}),
+            ...(match.error ? { quotaError: match.error } : {}),
+          };
+        }),
+      }));
+    }));
+  }, [aliveRef, apiBase]);
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
     if (account.active || account.needsReauth || switchingAccountRef.current) return;
