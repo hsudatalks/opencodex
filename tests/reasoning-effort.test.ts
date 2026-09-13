@@ -212,7 +212,12 @@ describe("provider-specific reasoning effort mapping", () => {
     });
     const body = JSON.parse(req.body as string) as { messages: Record<string, unknown>[] };
 
-    expect(route.provider.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    // The destination's replay list: the V4.1 ids and the live `deepseek-flash` alias joined
+    // it after this test was written, and the legacy reasoner is deliberately absent — which
+    // is what the assertion below this one observes on the wire.
+    expect(route.provider.preserveReasoningContentModels).toEqual([
+      "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-pro", "deepseek-v4.1-flash", "deepseek-flash",
+    ]);
     expect(body.messages[1].reasoning_content).toBeUndefined();
   });
 

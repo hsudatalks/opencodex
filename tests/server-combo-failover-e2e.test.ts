@@ -648,35 +648,32 @@ describe("server combo failover 030 activation matrix", () => {
         };
         return payload.data;
       };
+      // Identity and ownership are this test's subject; each row also carries additive
+      // capability metadata (capacities, modalities) that is not what "the alias wins" means.
+      // Pinning the whole object made every added field look like a regression.
+      const identityOf = async (id: string) =>
+        (await publicRows())
+          .filter(model => model.id === id)
+          .map(model => ({ id: model.id, owned_by: model.owned_by }));
       const updateAlias = async (alias: string) => fetch(new URL("/api/combos", server.url), {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: "free", combo: { ...combo, alias } }),
       });
 
-      expect((await publicRows()).filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "combo" },
-      ]);
+      expect(await identityOf(selector)).toEqual([{ id: selector, owned_by: "combo" }]);
 
       const renamed = await updateAlias("fast-chat");
       expect(renamed.status).toBe(200);
-      const renamedRows = await publicRows();
-      expect(renamedRows.filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
-      ]);
-      expect(renamedRows.filter(model => model.id === "fast-chat")).toEqual([
-        { id: "fast-chat", object: "model", created: 0, owned_by: "combo" },
-      ]);
+      expect(await identityOf(selector)).toEqual([{ id: selector, owned_by: "deepseek" }]);
+      expect(await identityOf("fast-chat")).toEqual([{ id: "fast-chat", owned_by: "combo" }]);
 
       const restored = await updateAlias(selector);
       expect(restored.status).toBe(200);
       const deleted = await fetch(new URL("/api/combos?id=free", server.url), { method: "DELETE" });
       expect(deleted.status).toBe(200);
-      const deletedRows = await publicRows();
-      expect(deletedRows.filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
-      ]);
-      expect(deletedRows.some(model => model.owned_by === "combo")).toBe(false);
+      expect(await identityOf(selector)).toEqual([{ id: selector, owned_by: "deepseek" }]);
+      expect((await publicRows()).some(model => model.owned_by === "combo")).toBe(false);
     } finally {
       await server.stop(true);
     }
@@ -698,9 +695,17 @@ describe("server combo failover 030 activation matrix", () => {
       const payload = await response.json() as {
         data: Array<{ id: string; owned_by: string }>;
       };
-      expect(payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
-        { id: "a/vendor-model", object: "model", created: 0, owned_by: "combo" },
-        { id: "a/vendor/model", object: "model", created: 0, owned_by: "a" },
+      // Only identity and ownership are this test's subject; the row also carries capability
+      // metadata (capacities, modalities) that is additive and not what "the combo alias wins"
+      // is about. Pinning the whole object made every added field look like a regression.
+      expect(
+        payload.data
+          .filter(model => model.id.startsWith("a/vendor"))
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map(model => ({ id: model.id, owned_by: model.owned_by })),
+      ).toEqual([
+        { id: "a/vendor-model", owned_by: "combo" },
+        { id: "a/vendor/model", owned_by: "a" },
       ]);
     } finally {
       await server.stop(true);

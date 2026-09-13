@@ -446,8 +446,12 @@ describe("routeModel registry effort defaults", () => {
 
     const route = routeModel(config, "deepseek/deepseek-v4-flash");
 
+    // The registry classifies every DeepSeek model on the route as text-only, including the
+    // V4.1 ids added after issue #88 was filed. Pinned exactly so a classification change has
+    // to be a deliberate edit here.
     expect(route.provider.noVisionModels).toEqual([
       "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-v4.1-pro", "deepseek-v4.1-flash",
     ]);
   });
 
