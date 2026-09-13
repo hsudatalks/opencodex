@@ -44,6 +44,30 @@ const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38,
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
 const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 1.4 };
+// Z.AI official list prices (USD / MTok, 2026-09-13). Cache write maps to the input price:
+// cache creation is input-token work, and the "limited-time free" column is storage only.
+const GLM_53_FLASH: Cost4 = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0.15 };
+const GLM_5: Cost4 = { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 1 };
+const GLM_47: Cost4 = { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0.6 };
+const GLM_45_AIR: Cost4 = { input: 0.2, output: 1.1, cacheRead: 0.03, cacheWrite: 0.2 };
+// DeepSeek official list price, PEAK tier (off-peak is half). `deepseek-v4-flash` and
+// `deepseek-v4-flash-vision-exp` are retired names that the API still accepts and bills at
+// the Flash rate, so they share this tuple. cacheWrite stays 0, matching the DeepSeek bundle
+// rows: the vendor reports no separate cache-write token class.
+const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
+const DEEPSEEK_V4_PRO: Cost4 = { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 };
+// opencode Go publishes its own per-model rate, including which models bill cache writes.
+// These tuples are the plan's, so they are registered per-provider rather than reusing the
+// vendor constants above (Go bills no cache write for the GLM/xAI/Meta rows, and does bill
+// it for Qwen3.8).
+const GLM_53_FLASH_PLAN: Cost4 = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 };
+const GLM_53_PLAN: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GROK_46_PLAN: Cost4 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
+const LONGCAT_2_PLAN: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
+const HY4_PREVIEW_PLAN: Cost4 = { input: 0.834, output: 2.501, cacheRead: 0.042, cacheWrite: 0 };
+const MUSE_SPARK_CONTRIBUTOR_PLAN: Cost4 = { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 };
+const QWEN38_FLASH_PLAN: Cost4 = { input: 0.15, output: 0.47, cacheRead: 0.016, cacheWrite: 0.2 };
+const QWEN38_MAX_PLAN: Cost4 = { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 };
 const GPT_IMAGE_2: Cost4 = { input: 5, output: 30, cacheRead: 1.25, cacheWrite: 5 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
@@ -60,12 +84,17 @@ const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-2
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_GPT6_ASTRA_PRICING = "https://developers.openai.com/api/docs/pricing (GPT-6 Astra standard API: input $10/MTok, cached input $1/MTok, output $50/MTok, cache write $12.50/MTok)";
-const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
+const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing (official list price 2026-09-13, PEAK tier; off-peak is half). deepseek-v4-flash and deepseek-v4-flash-vision-exp are retired names the API still accepts and bills at the V4.1-Flash rate, so they carry the Flash tuple";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.com/ (official K3 table: CNY 20 input / 100 output / 2 cache-hit per MTok; converted at fixed CNY 6.6667/USD for stable USD estimates; cacheWrite derived = input because Kimi has no separate write-token rate)";
 const GLM_52_PRICING = "https://docs.z.ai/guides/overview/pricing + https://bigmodel.cn/pricing (official GLM-5.2 API list price; cacheWrite=input because cache creation remains input-token work; temporary free storage is intentionally excluded)";
 const GLM_53_PRICING = `derived from GLM-5.2 regular API list price until an official GLM-5.3 API billing row is published; temporary free access is intentionally excluded; ${GLM_52_PRICING}`;
+const GLM_53_FLASH_PRICING = "https://docs.z.ai/guides/overview/pricing (official GLM-5.3-Flash list price 2026-09-13; cacheWrite=input because cache creation remains input-token work; the limited-time free column covers cache storage only)";
+const GLM_TEXT_MODELS_PRICING = "https://docs.z.ai/guides/overview/pricing (official text-model list price 2026-09-13; cacheWrite=input; the limited-time free column covers cache storage only)";
+// The aggregator surfaces expose DeepSeek's model-version ids, which the vendor bundle does
+// not carry; the tuple is the official peak list price for the model behind the id.
+const DEEPSEEK_V41_PRICING = `official DeepSeek list price for the same model; ${DEEPSEEK_PRICING}`;
 const GPT_IMAGE_2_PRICING = "https://developers.openai.com/api/docs/pricing (standard tier: text input $5/MTok, cached text input $1.25/MTok, image input $8/MTok, image output $30/MTok)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
 // is the exit condition the previous Routeway reseller overlay named. Two caveats are
@@ -103,6 +132,38 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "zai", modelId: "glm-5.3[1m]", cost4: GLM_52, source: `derived alias -> glm-5.3; ${GLM_53_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
   { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3", cost4: GLM_52, source: GLM_53_PRICING, verifiedAt: "2026-08-16", status: "verified-derived" },
   { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3[1m]", cost4: GLM_52, source: `derived alias -> glm-5.3; ${GLM_53_PRICING}`, verifiedAt: "2026-08-16", status: "verified-derived" },
+  // The remaining GLM rows the coding-plan surface serves. Their `zai` bundle entries are
+  // all-zero (subscription surface), so without these the usage dashboard reports the whole
+  // plan as free — glm-5.3-flash alone was 2043 requests at $0.
+  { provider: "zai", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `public API-equivalent estimate ${GLM_53_FLASH_PRICING}`, verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `public API-equivalent estimate ${GLM_53_FLASH_PRICING}`, verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "zai", modelId: "glm-5.1", cost4: GLM_52, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.1", cost4: GLM_52, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5", cost4: GLM_5, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5", cost4: GLM_5, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.7", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.7", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.6", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.6", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.5", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.5", cost4: GLM_47, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.5-air", cost4: GLM_45_AIR, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.5-air", cost4: GLM_45_AIR, source: `public API-equivalent estimate ${GLM_TEXT_MODELS_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // opencode Go publishes a per-model rate for its own limit accounting; these are those
+  // rates, not a second vendor table, so `verified` (the tuple is the published number) with
+  // the plan named in the source. Cache write is unbilled on the plan.
+  { provider: "opencode-go", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; the plan bills no cache write for this model)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "glm-5.3", cost4: GLM_53_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; the plan bills no cache write for this model)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "grok-4.6", cost4: GROK_46_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; <=200K tier; the plan bills no cache write for this model)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "longcat-2.0", cost4: LONGCAT_2_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "hy4-preview", cost4: HY4_PREVIEW_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "muse-spark-1.3-contributor", cost4: MUSE_SPARK_CONTRIBUTOR_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; Meta contributor tier)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "command-code", modelId: "meta/muse-spark-1.3-contributor", cost4: MUSE_SPARK_CONTRIBUTOR_PLAN, source: "aggregator id for the same model; Meta contributor tier rate https://dev.opencode.ai/docs/go/ (2026-09-13)", verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "qwen3.8-flash", cost4: QWEN38_FLASH_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; cache write is billed on this model)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "qwen3.8-max", cost4: QWEN38_MAX_PLAN, source: "opencode Go plan published rate https://dev.opencode.ai/docs/go/ (2026-09-13; cache write is billed on this model)", verifiedAt: "2026-09-13", status: "verified" },
+  { provider: "opencode-go", modelId: "deepseek-v4.1-flash", cost4: DEEPSEEK_V41_FLASH, source: `opencode Go plan rate equals the vendor list price; ${DEEPSEEK_V41_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "command-code", modelId: "deepseek/deepseek-v4.1-flash", cost4: DEEPSEEK_V41_FLASH, source: `aggregator id for the same model; ${DEEPSEEK_V41_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "deepseek-v4-flash-vision-exp", cost4: DEEPSEEK_V41_FLASH, source: `retired alias billed at the V4.1-Flash rate; images bill as input tokens; ${DEEPSEEK_V41_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   // GPT Image 2 reports image-input detail separately from aggregate input. The
   // base tuple prices text input and image output; imageInput carries the image
   // input rate so the estimator can apply only the $3/MTok modality delta.
