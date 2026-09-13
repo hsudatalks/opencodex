@@ -123,8 +123,12 @@ describe("provider registry parity", () => {
     // V4.1 ids carry the same ladders and replay rules as their V4 counterparts.
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4.1-pro"]).toEqual(["high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4.1-flash"]).toEqual(["low", "high", "max"]);
+    // `deepseek-flash` is the live alias the upstream resolves itself. It is not a catalog
+    // enum member, but it IS a thinking model, and omitting it from the replay list made
+    // every tool continuation on that alias 400 with "The `reasoning_content` in the
+    // thinking mode must be passed back to the API".
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels).toEqual([
-      "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-pro", "deepseek-v4.1-flash",
+      "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-pro", "deepseek-v4.1-flash", "deepseek-flash",
     ]);
     // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([

@@ -441,6 +441,15 @@ const DEEPSEEK_ALL_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, ...DEEPSEEK_V
  */
 const DEEPSEEK_FLASH_ALIAS = "deepseek-flash";
 /**
+ * DeepSeek thinking mode REJECTS a tool-call continuation whose assistant turn omits the
+ * original `reasoning_content` ("The `reasoning_content` in the thinking mode must be passed
+ * back to the API"), so these are the ids that must replay it. The live `deepseek-flash`
+ * alias belongs here: it is excluded from the catalog enum above, but it is a thinking model
+ * upstream and was silently missing from the replay list, which made every tool continuation
+ * on that alias fail with the 400 above.
+ */
+const DEEPSEEK_REASONING_REPLAY_MODELS = [...DEEPSEEK_ALL_THINKING_MODELS, DEEPSEEK_FLASH_ALIAS];
+/**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
  * `tests/provider-registry-parity.test.ts` enumerates every id the registry
@@ -1428,7 +1437,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(DEEPSEEK_ALL_THINKING_MODELS.map(id => [id, true])),
       [DEEPSEEK_FLASH_ALIAS]: true,
     },
-    preserveReasoningContentModels: DEEPSEEK_ALL_THINKING_MODELS,
+    preserveReasoningContentModels: DEEPSEEK_REASONING_REPLAY_MODELS,
     // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
     // vision sidecar describes attached images for them, and the catalog advertises image input
     // on their behalf (same treatment as opencode-go's DeepSeek V4 entries above).
@@ -2360,4 +2369,34 @@ export function effectiveGoogleMode(
 ): "ai-studio" | "vertex" | "cloud-code-assist" | null {
   if (prov.adapter !== "google") return null;
   return prov.googleMode ?? getProviderRegistryEntry(providerId)?.googleMode ?? "ai-studio";
+}
+
+/** True when `baseUrl` addresses DeepSeek's official API over HTTPS. */
+export function isCanonicalDeepSeekBaseUrl(baseUrl: string | undefined): boolean {
+  if (typeof baseUrl !== "string") return false;
+  const trimmed = baseUrl.trim();
+  if (trimmed.length === 0) return false;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "https:" && url.hostname === "api.deepseek.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Capabilities the DESTINATION enforces no matter what the operator's provider entry is
+ * called. `routedProviderConfig` merges registry capabilities by provider id, so an
+ * operator-defined entry (`deepseek-official` pointed at api.deepseek.com) matches no id and
+ * inherits nothing. DeepSeek is the load-bearing case: its thinking mode rejects a tool-call
+ * continuation that omits `reasoning_content`, so without this a custom DeepSeek entry 400s
+ * on every tool round with "The `reasoning_content` in the thinking mode must be passed back
+ * to the API". Only destination-level WIRE requirements belong here — never presets a user
+ * could legitimately want to differ on.
+ */
+export function canonicalDestinationCapabilities(
+  baseUrl: string | undefined,
+): { preserveReasoningContentModels?: string[] } | undefined {
+  if (!isCanonicalDeepSeekBaseUrl(baseUrl)) return undefined;
+  return { preserveReasoningContentModels: [...DEEPSEEK_REASONING_REPLAY_MODELS] };
 }

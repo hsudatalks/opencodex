@@ -11,7 +11,7 @@ import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
-import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { canonicalDestinationCapabilities, PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
 import { effectiveProviderCodexAccountMode } from "./deployment-mode";
 import {
   isCanonicalOpenAiForwardProvider,
@@ -254,7 +254,20 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
+    // An operator-defined provider (for example `deepseek-official`) matches no registry id,
+    // so it inherits no capabilities by name — but its DESTINATION still enforces wire
+    // requirements. DeepSeek thinking mode 400s every tool continuation that omits
+    // `reasoning_content`, so backfill the destination's replay list here.
+    const destination = canonicalDestinationCapabilities(provider.baseUrl);
+    const preserveReasoningContentModels = mergeStringArray(
+      destination?.preserveReasoningContentModels,
+      provider.preserveReasoningContentModels,
+    );
+    return {
+      ...provider,
+      apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
+    };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const explicitKeyOverride = registryEntry.authKind === "oauth"
