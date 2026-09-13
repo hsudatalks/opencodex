@@ -136,6 +136,31 @@ bun run build:gui      # Vite GUI build
 Run `bun run typecheck` and `bun run test` before proposing or approving any
 non-trivial change. CI runs these on Linux, Windows, and macOS.
 
+On this workstation there is no `bun` on `PATH`: call
+`./node_modules/bun/bin/bun.exe` explicitly, and establish a baseline before
+blaming a change for a test failure (see the `opencodex-release` skill).
+
+## Univers deployment handover
+
+This checkout is also the source of truth for the **central Univers Gateway**
+(`ubuntu@47.131.65.97`, `opencodex-central.service`), which DSH, Codex, and
+Claude Code consume through the `univers` provider. The operating procedures are
+project skills, loaded from `.agents/skills/`:
+
+- `opencodex-release` — versioning (`2.11.0-univers.NN`), gates, packaging, push.
+- `opencodex-central-gateway` — deploy, verify, roll back, account pools, live triage.
+- `opencodex-debugging` — provider/routing diagnosis and reasoning-replay contract.
+- `opencodex-dsh-workspace` — launching DSH with this repo as the workspace.
+
+Boundaries that apply to every change here:
+
+- The deployed release must correspond to a **pushed commit**; never edit a live
+  release directory in place.
+- Never print, log, or commit credentials, bearer tokens, or account files.
+- Quality-sensitive behavior shipped in this fork (multi-account rotation,
+  DeepSeek reasoning replay) has regression tests; keep them green rather than
+  reverting the capability.
+
 ## Issues and pull requests (agents)
 
 Agent-created issues and PRs must use the repository templates. The gates
