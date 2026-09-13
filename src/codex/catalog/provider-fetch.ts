@@ -964,7 +964,11 @@ const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
 const hintsProviderConfigs = new Map<string, OcxProviderConfig>();
 
 function providerConfigForHints(name: string): OcxProviderConfig {
-  return hintsProviderConfigs.get(name) ?? {};
+  // The fallback is deliberately an EMPTY object: a read outside a gather must not
+  // leak a stale registry hint. Its only consumer reads optional capability maps
+  // (reasoning ladders / no-reasoning lists), never `adapter`/`baseUrl`, so the
+  // empty stand-in is asserted rather than fabricated with placeholder fields.
+  return hintsProviderConfigs.get(name) ?? ({} as OcxProviderConfig);
 }
 
 function observedModelsAuthResolver(
