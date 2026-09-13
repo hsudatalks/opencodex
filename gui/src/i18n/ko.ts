@@ -1009,6 +1009,7 @@ export const ko: Record<TKey, string> = {
   "anthropicPool.saveFailed": "Claude 풀 설정을 저장하지 못했습니다.",
   "anthropicPool.on": "켜짐",
   "anthropicPool.off": "꺼짐",
+  "commandCodePool.toggleAria": "Command Code 계정 풀",
 
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "Univers Gateway가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",

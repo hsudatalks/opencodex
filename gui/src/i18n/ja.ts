@@ -1389,6 +1389,7 @@ export const ja: Record<TKey, string> = {
   "anthropicPool.saveFailed": "Claude プール設定を保存できませんでした。",
   "anthropicPool.on": "オン",
   "anthropicPool.off": "オフ",
+  "commandCodePool.toggleAria": "Command Code アカウントプール",
 
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "Univers Gateway が新規/未紐付けタスクへアカウントを割り当てる方法です。",

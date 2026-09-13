@@ -58,7 +58,7 @@ export default function CommandCodeAccountPoolSettings({ apiBase, accountCount }
           </div>
         </div>
         <button type="button" className={`toggle ${enabled ? "on" : ""}`} disabled={toggleDisabled}
-          aria-pressed={enabled} aria-label="Command Code account pool"
+          aria-pressed={enabled} aria-label={t("commandCodePool.toggleAria")}
           onClick={() => void save(!enabled, strategy)}><span className="toggle-knob" /></button>
       </div>
       {accountCount < 2 && <div className="card-sub" style={{ marginTop: 8 }}>{t("pws.addAccount")}</div>}

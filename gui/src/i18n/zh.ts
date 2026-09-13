@@ -1002,6 +1002,7 @@ export const zh: Record<TKey, string> = {
   "anthropicPool.saveFailed": "无法保存 Claude 账户池设置。",
   "anthropicPool.on": "开",
   "anthropicPool.off": "关",
+  "commandCodePool.toggleAria": "Command Code 账号池",
 
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "Univers Gateway 如何为新建/未绑定任务分配账号。",

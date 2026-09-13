@@ -1431,6 +1431,7 @@ export const ru: Record<TKey, string> = {
   "anthropicPool.saveFailed": "Не удалось сохранить настройки пула Claude.",
   "anthropicPool.on": "Вкл",
   "anthropicPool.off": "Выкл",
+  "commandCodePool.toggleAria": "Пул аккаунтов Command Code",
 
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как Univers Gateway назначает аккаунт новой/непривязанной задаче.",

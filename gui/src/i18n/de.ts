@@ -985,6 +985,7 @@ export const de: Record<TKey, string> = {
   "anthropicPool.saveFailed": "Claude-Pool-Einstellungen konnten nicht gespeichert werden.",
   "anthropicPool.on": "An",
   "anthropicPool.off": "Aus",
+  "commandCodePool.toggleAria": "Command-Code-Kontenpool",
 
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie Univers Gateway einer neuen/ungebundenen Aufgabe ein Konto zuweist.",

@@ -1441,6 +1441,7 @@ export const en = {
   "anthropicPool.saveFailed": "Claude pool settings could not be saved.",
   "anthropicPool.on": "On",
   "anthropicPool.off": "Off",
+  "commandCodePool.toggleAria": "Command Code account pool",
 
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How Univers Gateway assigns an account to a new/unbound task.",
