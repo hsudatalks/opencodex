@@ -215,7 +215,10 @@ export function buildProviderTableBlock(
     'name = "OpenCodex Proxy"',
     `base_url = "http://${host}:${port}/v1"`,
     'wire_api = "responses"',
-    "requires_openai_auth = true",
+    // Keep the gateway API key as the actual Bearer credential while marking
+    // the provider as actor-authorized so Codex exposes built-in extensions.
+    "requires_openai_auth = false",
+    'http_headers = { "X-OpenAI-Actor-Authorization" = "ark-opencodex-central" }',
   ];
   if (includeApiAuthHeader) {
     lines.push(

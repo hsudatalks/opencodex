@@ -69,7 +69,8 @@ describe("injectCodexConfig integration (Design B)", () => {
       'name = "OpenCodex Proxy"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'wire_api = "responses"',
-      "requires_openai_auth = true",
+      "requires_openai_auth = false",
+      'http_headers = { "X-OpenAI-Actor-Authorization" = "ark-opencodex-central" }',
       "",
     ].join("\n"), "utf8");
 

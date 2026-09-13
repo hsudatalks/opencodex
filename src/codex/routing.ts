@@ -1424,7 +1424,8 @@ function getEligiblePoolAccounts(
       && !isAccountNeedsReauth(account.id))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
-    .filter(account => !isCodexAccountModelCapacityAvoided(account.id, quotaScope ?? "shared", now))
+    .filter(account => selectionOptions?.ignoreModelCapacityAvoidance === true
+      || !isCodexAccountModelCapacityAvoided(account.id, quotaScope ?? "shared", now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
     .filter(account => selectionOptions?.canClaimAccount?.(account.id) ?? true)
     .map(account => account.id);
@@ -1436,7 +1437,8 @@ function getEligiblePoolAccounts(
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
-    && !isCodexAccountModelCapacityAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope ?? "shared", now)
+    && (selectionOptions?.ignoreModelCapacityAvoidance === true
+      || !isCodexAccountModelCapacityAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope ?? "shared", now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
     && (selectionOptions?.canClaimAccount?.(MAIN_CODEX_ACCOUNT_ID) ?? true)
   ) {
@@ -2262,10 +2264,10 @@ export function recordCodexUpstreamOutcome(
     if (ownsProbeLease(current, meta)) {
       upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
     }
-    if (outcome === "model_capacity" && meta.retryableModelCapacity && !meta.fixedAccount) {
+    if (outcome === "model_capacity" && !meta.fixedAccount) {
       const capacityScope = quotaScope ?? "shared";
       recordCodexModelCapacityAvoid(accountId, capacityScope, now);
-      if (meta.threadId) {
+      if (meta.threadId && meta.retryableModelCapacity) {
         deleteThreadAffinityForAccount(meta.threadId, accountId, capacityScope);
       }
     }

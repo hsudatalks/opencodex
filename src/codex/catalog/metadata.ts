@@ -41,6 +41,7 @@ export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
 
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
+  "gpt-6-astra",
   "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ];
@@ -234,7 +235,7 @@ export const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
     .filter(m => typeof m.slug === "string"
       && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string)
-      && (m.slug as string).startsWith("gpt-5.6-"))
+      && ((m.slug as string).startsWith("gpt-5.6-") || m.slug === "gpt-6-astra"))
     .map(m => [m.slug as string, m]),
 );
 

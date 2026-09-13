@@ -2561,6 +2561,60 @@ describe("server local API auth", () => {
     }
   });
 
+  test("compact model capacity retries another account inside the same request", async () => {
+    const threadId = "compact-capacity";
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(JSON.stringify({ error: {
+          type: "server_error",
+          code: "server_is_overloaded",
+          message: "The selected model is at capacity.",
+        } }), {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+            "x-pool-retry-test": "original",
+          },
+        })
+      : Response.json({ id: "compact-capacity-recovered", output: [] }));
+    try {
+      const response = await harness.request({ path: "/v1/responses/compact", threadId });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: "compact-capacity-recovered" });
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+
+      const logs = logsFromApiBody(await originalGlobalFetch(
+        new URL("/api/logs?tail=1", harness.server.url),
+        { headers: managementHeaders() },
+      ).then(logsResponse => logsResponse.json()));
+      expect(logs.at(-1)).toMatchObject({ status: 200 });
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("compact all-capacity failure preserves the original bounded rejection", async () => {
+    const body = JSON.stringify({ error: {
+      type: "server_error",
+      code: "server_is_overloaded",
+      message: "The selected model is at capacity.",
+    } });
+    const harness = await startPoolRetryHarness(() => new Response(body, {
+      status: 503,
+      headers: { "content-type": "application/json", "x-pool-retry-test": "original" },
+    }));
+    try {
+      const response = await harness.request({ path: "/v1/responses/compact" });
+      expect(response.status).toBe(503);
+      // compactResponseHeaders deliberately rebuilds the buffered response with a
+      // narrow pass-through header list; the body is the diagnostic surface.
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test("all-capacity SSE is bounded to one alternate account and remains retryable", async () => {
     const harness = await startPoolRetryHarness(() => new Response([
       'event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}',
@@ -2580,7 +2634,7 @@ describe("server local API auth", () => {
   });
 
   test.each(["legacy-tee", "eager-relay"] as const)(
-    "model capacity after meaningful output stays neutral without rebinding (%s)",
+    "model capacity after output is not replayed but the next turn avoids the account (%s)",
     async (streamMode) => {
       const harness = await startPoolRetryHarness(() => new Response(
         [
@@ -2603,7 +2657,7 @@ describe("server local API auth", () => {
         expect(getCodexUpstreamHealth("pool-a")).toBeNull();
 
         await (await harness.request({ stream: true, threadId })).text();
-        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
       } finally {
         await stopPoolRetryHarness(harness);
       }

@@ -22,7 +22,8 @@ describe("Codex config injection", () => {
 
     expect(block).toContain("[model_providers.opencodex]");
     expect(block).toContain('wire_api = "responses"');
-    expect(block).toContain("requires_openai_auth = true");
+    expect(block).toContain("requires_openai_auth = false");
+    expect(block).toContain('X-OpenAI-Actor-Authorization" = "ark-opencodex-central"');
     expect(block).not.toContain("supports_websockets");
   });
 

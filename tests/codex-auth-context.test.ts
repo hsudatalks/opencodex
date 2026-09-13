@@ -765,6 +765,34 @@ describe("Codex auth context", () => {
     }
   });
 
+  test("capacity retry escape hatch reaches alternate account selection", async () => {
+    const cfg = config();
+    cfg.codexAccounts = [
+      ...cfg.codexAccounts!,
+      { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "pool_b_acc" },
+    ];
+    for (const id of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}_token`,
+        refreshToken: `${id}_refresh`,
+        expiresAt: Date.now() + 3_600_000,
+        chatgptAccountId: `${id}_acc`,
+      });
+    }
+    recordCodexUpstreamOutcome(cfg, "pool-b", "model_capacity");
+
+    const options = {
+      excludeAccountId: "pool-a",
+      modelId: "gpt-6-astra",
+    } as const;
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", options))
+      .rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      ...options,
+      allowModelCapacityAvoidedAccounts: true,
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
   test("selected pool headers replace inbound main auth", () => {
     const headers = headersForCodexAuthContext(
       new Headers({ authorization: "Bearer main_token", "chatgpt-account-id": "main_acc", "openai-beta": "responses=experimental" }),

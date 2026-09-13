@@ -718,6 +718,23 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
     expect(config.activeCodexAccountId).toBe("a");
   });
+
+  test("model-capacity avoidance is honored by ordinary selection but can be escaped for retry", () => {
+    const config = makeThreeAccountConfig();
+    for (const id of THREE_ACCOUNT_IDS) updateAccountQuota(id, 10);
+    const now = Date.now();
+
+    recordCodexUpstreamOutcome(config, "b", "model_capacity", { now });
+    recordCodexUpstreamOutcome(config, "c", "model_capacity", { now });
+
+    // Normal alternate routing still respects the short scheduling hints.
+    expect(pickAlternateCodexAccount(config, "a", now + 1)).toBeNull();
+    // A last-resort capacity retry may use one of those accounts, but not the failed one.
+    const retry = pickAlternateCodexAccount(config, "a", now + 1, undefined, {
+      ignoreModelCapacityAvoidance: true,
+    });
+    expect(retry === "b" || retry === "c").toBe(true);
+  });
 });
 
 describe("selection order across rotation strategies", () => {

@@ -15,6 +15,13 @@ export interface CodexAccountUsabilityOptions {
   canClaimAccount?: (accountId: string) => boolean;
   /** Current admitted turns, used to spread new work without rebinding sessions. */
   accountTurnCount?: (accountId: string) => number;
+  /**
+   * Last-resort same-request retry escape hatch. A fleet-wide model-capacity
+   * event can temporarily avoid every otherwise-usable account; ordinary
+   * selection must keep respecting that hint, while a capacity retry may try
+   * one of those accounts rather than fail the client turn immediately.
+   */
+  ignoreModelCapacityAvoidance?: boolean;
 }
 
 export function isCodexAccountUsable(

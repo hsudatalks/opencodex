@@ -279,6 +279,12 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 
 export interface ResolveCodexAuthContextOptions {
   excludeAccountId?: string;
+  /**
+   * Capacity retries only: after an ordinary alternate search has failed, permit
+   * accounts still carrying a model-capacity scheduling hint. Hard ineligibility
+   * (pause, reauth, quota cooldown, concurrency) remains binding.
+   */
+  allowModelCapacityAvoidedAccounts?: boolean;
   /** Resolve exactly this account without consulting or mutating Pool selection. */
   accountId?: string;
   /** Final native model selected for this request, used to select its quota group. */
@@ -345,6 +351,9 @@ export async function resolveCodexAuthContext(
     accountTurnCount: routingSelectionAdmission
       ? (candidateId: string) => routingSelectionAdmission.accountTurnCount(candidateId)
       : undefined,
+    ...(options.allowModelCapacityAvoidedAccounts
+      ? { ignoreModelCapacityAvoidance: true as const }
+      : {}),
   };
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
