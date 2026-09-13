@@ -31,7 +31,7 @@ and a dependency tree with the pinned Bun binary (`node_modules/bun`, deps).
 Use the Univers-machine tooling rather than hand-building a release:
 
 ```bash
-# from /Users/davidxu/repos/univers-machine
+# from the univers-machine checkout (sibling of this repository)
 scripts/deploy-central-gateway.sh <version> [git-ref]   # e.g. 2.11.0-univers.64
 scripts/verify-central-gateway-multi-account.sh
 ```
