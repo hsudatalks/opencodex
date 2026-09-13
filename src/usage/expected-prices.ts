@@ -228,6 +228,9 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // Same relationship the k2.7 pair already records: the highspeed tier is the base model's
+  // rate doubled, and it was the last enabled kimi-code id with no price at all.
+  { provider: "kimi-code", modelId: "kimi-for-coding-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: `derived: highspeed tier of kimi-for-coding ${KIMI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   // Qwen3.8-Max: vendor-published input/output rate (verified). See QWEN38_MAX_PRICING
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },

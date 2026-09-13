@@ -335,7 +335,7 @@ describe("resolveMatchedPrice", () => {
   });
 
   test("16. shipped overlay membership: includes Astra, Opus 5, and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(92);
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(93);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
