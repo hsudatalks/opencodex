@@ -119,7 +119,11 @@ if (import.meta.main) {
     await waitForExclusiveRun(process.pid);
     const startedAt = Date.now();
     const child = Bun.spawnSync(
-      [process.execPath, "test", "--isolate", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],
+      // Bounded worker processes, not one per core: these suites bind ports and share temp
+      // state, and an unbounded fan-out reintroduced cross-test interference that the serial
+      // run does not have (15 extra failures at 28 workers). Four keeps the isolation and runs
+      // the suite in roughly a third of the wall clock.
+      [process.execPath, "test", "--isolate", "--parallel=4", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],
       {
         env: isolated.env,
         stdin: "inherit",
