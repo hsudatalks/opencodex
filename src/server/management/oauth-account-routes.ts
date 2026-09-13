@@ -286,6 +286,33 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
+  // Command Code OAuth account pool: quota-aware by default, with safe rotation fallbacks.
+  if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET"
+    && (url.searchParams.get("provider") ?? "").trim().toLowerCase() === "command-code") {
+    const pool = config.commandCodeAccountPool ?? {};
+    return jsonResponse({
+      provider: "command-code",
+      enabled: pool.enabled !== false,
+      strategy: normalizeAccountPoolStrategy(pool.strategy),
+      experimental: false,
+    });
+  }
+  if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
+    const parsedBody = await readManagementJsonBodyOr(req, {});
+    if (isPlainRecord(parsedBody) && parsedBody.provider === "command-code") {
+      const enabled = parsedBody.enabled === undefined ? config.commandCodeAccountPool?.enabled !== false : parsedBody.enabled;
+      if (typeof enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+      const strategy = parsedBody.strategy === undefined
+        ? normalizeAccountPoolStrategy(config.commandCodeAccountPool?.strategy)
+        : parseAccountPoolStrategy(parsedBody.strategy);
+      if (strategy === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+      config.commandCodeAccountPool = { enabled, strategy };
+      saveConfigPreservingClaudeCode(config);
+      reconcileLiveStateStores();
+      return jsonResponse({ ok: true, provider: "command-code", enabled, strategy, experimental: false });
+    }
+  }
+
   // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();

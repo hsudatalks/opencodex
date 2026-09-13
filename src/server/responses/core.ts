@@ -58,6 +58,12 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  getCommandCodePoolAccessToken,
+  isCommandCodeAccountPoolEnabled,
+  resolveCommandCodeAccountForSession,
+  rotateCommandCodeAccountOn429,
+} from "../../oauth/command-code-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -1769,6 +1775,8 @@ async function handleResponsesInner(
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let commandCodePoolAccountId: string | null = null;
+  let commandCodePoolFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -1780,7 +1788,18 @@ async function handleResponsesInner(
     : null;
   if (route.provider.authMode === "oauth") {
     try {
-      if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
+      if (route.providerName === "command-code" && isCommandCodeAccountPoolEnabled(config)) {
+        const sessionKey = logCtx.conversationId
+          ?? (typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null);
+        const selection = resolveCommandCodeAccountForSession(sessionKey, config);
+        if (!selection.accountId) {
+          return formatErrorResponse(401, "authentication_error", "No eligible Command Code OAuth account available");
+        }
+        const accessToken = await getCommandCodePoolAccessToken(selection.accountId);
+        commandCodePoolAccountId = selection.accountId;
+        route.provider = { ...route.provider, apiKey: accessToken };
+        logCtx.provider = `command-code-${selection.accountId}`;
+      } else if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);
         if (!selection.accountId) {
           if (selection.reason === "all-cooled") {
@@ -3322,6 +3341,39 @@ async function handleResponsesInner(
         const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
+      }
+
+      // Command Code OAuth account pool: cool a rate-limited account and retry once on a peer.
+      while (
+        upstreamResponse.status === 429
+        && commandCodePoolAccountId
+        && commandCodePoolFailovers < 1
+      ) {
+        const nextAccountId = rotateCommandCodeAccountOn429(
+          commandCodePoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+          logCtx.conversationId,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
+          commandCodePoolAccountId = nextAccountId;
+          commandCodePoolFailovers += 1;
+          route.provider = { ...route.provider, apiKey: accessToken };
+          invalidateSameTargetRequest();
+          logCtx.provider = `command-code-${nextAccountId}`;
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
+          const result = await rebuildAndRefetch("command-code-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
       }
 
       // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry

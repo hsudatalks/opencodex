@@ -73,6 +73,27 @@ describe("balanced API-key pools", () => {
     expect(apiKeyQuotaSnapshotForTests("glm", "two")?.usedPercent).toBe(20);
   });
 
+  test("queries every OpenCode Go key and prefers lower official rolling usage", async () => {
+    const p = { ...provider(), baseUrl: "https://opencode.ai/zen/go/v1" };
+    const urls: string[] = [];
+    const selected = await balanceProviderApiKey("opencode-go", p, "thread-opencode", {
+      now: 1_000,
+      fetchImpl: (async (url: string | URL, init?: RequestInit) => {
+        urls.push(String(url));
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        const percent = key === "glm-plan-one" ? 72 : 18;
+        return Response.json({ usage: { rolling: { percent, resetsAt: "2026-08-22T00:00:00Z" } } });
+      }) as typeof fetch,
+    });
+    expect(urls).toEqual([
+      "https://opencode.ai/zen/go/v1/usage",
+      "https://opencode.ai/zen/go/v1/usage",
+    ]);
+    expect(selected.apiKey).toBe("glm-plan-two");
+    expect(apiKeyQuotaSnapshotForTests("opencode-go", "one")?.usedPercent).toBe(72);
+    expect(apiKeyQuotaSnapshotForTests("opencode-go", "two")?.usedPercent).toBe(18);
+  });
+
   test("weights new conversations by remaining quota without funneling them to one plan", async () => {
     const p = provider();
     const fetchImpl = quotaFetch({ "glm-plan-one": 80, "glm-plan-two": 20 });

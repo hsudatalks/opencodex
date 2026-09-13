@@ -18,6 +18,7 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
+import CommandCodeAccountPoolSettings from "./CommandCodeAccountPoolSettings";
 import { OAuthLoginWait } from "../oauth-login-wait";
 import QuotaBars from "../QuotaBars";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -123,6 +124,9 @@ export default function ProviderAuthPanel({
           <>
             {item.name === "anthropic" && (
               <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+            )}
+            {item.name === "command-code" && (
+              <CommandCodeAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
             )}
             <div className="pwi-auth-status-row">
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />

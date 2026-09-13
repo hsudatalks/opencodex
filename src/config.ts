@@ -1097,6 +1097,10 @@ const configSchema = z.object({
   // An expired deadline is harmless (routing ignores it), while malformed hand edits
   // must not discard the rest of the account pool configuration.
   accountPoolOfficialResetAt: z.number().finite().positive().optional().catch(undefined),
+  commandCodeAccountPool: z.object({
+    enabled: z.boolean().optional().catch(undefined),
+    strategy: z.enum(["quota", "round-robin", "fill-first"]).optional().catch(undefined),
+  }).optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
   // map degrades to "no ordering" rather than failing the parse, so a hand-edited

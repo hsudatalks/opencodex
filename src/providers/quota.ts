@@ -33,9 +33,26 @@ const ACCOUNT_TOKEN_SKEW_MS = 60_000;
 
 const CACHE_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 8_000;
+export const QUOTA_RESPONSE_MAX_BYTES = 512 * 1024;
+
+async function readQuotaJson(response: Response): Promise<unknown> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > QUOTA_RESPONSE_MAX_BYTES) return null;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > QUOTA_RESPONSE_MAX_BYTES) return null;
+  try { return JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { return null; }
+}
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
+const COMMAND_CODE_BASE_URL = "https://api.commandcode.ai";
+const COMMAND_CODE_WHOAMI_URL = `${COMMAND_CODE_BASE_URL}/alpha/whoami`;
+const COMMAND_CODE_CREDITS_URL = `${COMMAND_CODE_BASE_URL}/alpha/billing/credits`;
+const COMMAND_CODE_SUBSCRIPTIONS_URL = `${COMMAND_CODE_BASE_URL}/alpha/billing/subscriptions`;
+const COMMAND_CODE_USAGE_URL = `${COMMAND_CODE_BASE_URL}/alpha/usage/summary`;
 const A6API_BASE_URL = "https://api.a6api.com";
+const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
@@ -269,6 +286,10 @@ function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
   return normalized === A6API_BASE_URL || normalized === `${A6API_BASE_URL}/v1`;
 }
 
+function isCanonicalOpenCodeGoBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === OPENCODE_GO_BASE_URL;
+}
+
 function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === OPENROUTER_BASE_URL;
@@ -409,6 +430,54 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
   });
+}
+
+function parseOpenCodeGoUsageWindow(value: unknown): { percent: number; resetAt?: number } | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const percent = normalizePercent(row.percent);
+  if (percent === undefined) return null;
+  const resetAt = normalizeResetAt(row.resetsAt);
+  return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+}
+
+async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never send a configured API key when the provider destination is not the built-in Go endpoint.
+  if (!isCanonicalOpenCodeGoBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const usage = asRecord(body?.usage);
+  if (!usage) return null;
+  const rolling = parseOpenCodeGoUsageWindow(usage.rolling);
+  const weekly = parseOpenCodeGoUsageWindow(usage.weekly);
+  const monthly = parseOpenCodeGoUsageWindow(usage.monthly);
+  const quota: ProviderQuota = {
+    ...(rolling ? {
+      fiveHourPercent: rolling.percent,
+      ...(rolling.resetAt !== undefined ? { fiveHourResetAt: rolling.resetAt } : {}),
+    } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(monthly ? {
+      monthlyPercent: monthly.percent,
+      ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
+    } : {}),
+    updatedAt: Date.now(),
+  };
+  return report(provider, "opencode-go:usage", quota);
 }
 
 /**
@@ -1205,7 +1274,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic";
+  return provider === "anthropic" || provider === "command-code";
 }
 
 function accountCacheKey(provider: string, accountId: string): string {
@@ -1325,7 +1394,9 @@ async function fetchAccountQuota(
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
       const token = await getTokenForAccountQuotaProbe(provider, accountId);
-      const quota = await fetchAnthropicUsageQuota(token);
+      const quota = provider === "command-code"
+        ? await fetchCommandCodeAccountQuota(token)
+        : await fetchAnthropicUsageQuota(token);
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
         // negative-cache instead of re-probing on every GUI poll.
@@ -1402,6 +1473,12 @@ function quotaResetAt(row: Record<string, unknown>): number | undefined {
 
 function isCanonicalKimiCodeBaseUrl(baseUrl: string): boolean {
   return normalizedBaseUrl(baseUrl) === KIMI_CODE_BASE_URL;
+}
+
+function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  // OAuth preset points at the API root; the Provider-API preset at /provider/v1.
+  return normalized === COMMAND_CODE_BASE_URL || normalized === `${COMMAND_CODE_BASE_URL}/provider/v1`;
 }
 
 /** Prefer the nested `data` shell when the outer object is only an envelope. */
@@ -1523,6 +1600,166 @@ async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Prom
   if (!response.ok) return null;
   const quota = parseKimiQuotaPayload(await response.json().catch(() => null));
   return quota ? report(provider, "kimi:usages", quota) : null;
+}
+
+/**
+ * Command Code rolling window: `{ cap, used, resetAt }` off /alpha/billing/credits,
+ * normalized to a percent with an optional reset timestamp.
+ */
+function parseCommandCodeWindow(value: unknown): { percent: number; resetAt?: number } | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const cap = toFiniteNumber(row.cap);
+  const used = toFiniteNumber(row.used);
+  if (cap === undefined || used === undefined || cap <= 0 || used < 0) return null;
+  const percent = normalizePercent((used / cap) * 100);
+  if (percent === undefined) return null;
+  const resetAt = quotaResetAt(row);
+  return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+}
+
+/** Soft-fail GET returning a parsed record, or null when unavailable. */
+async function fetchCommandCodeJson(url: string, bearer: string): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    return asRecord(await readQuotaJson(response));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Soft-fail period spend (used) against the remaining credit pools → creditsUsd.
+ * Period scoping: `since=<currentPeriodStart>` keeps spend aligned with the
+ * pools' billing cycle, and `currentPeriodEnd` becomes expiresAt.
+ */
+async function fetchCommandCodeSpend(
+  bearer: string,
+  credits: Record<string, unknown> | null,
+  orgQuery: string,
+): Promise<ProviderQuotaCreditsUsd | undefined> {
+  if (!credits) return undefined;
+  const subscriptionBody = await fetchCommandCodeJson(`${COMMAND_CODE_SUBSCRIPTIONS_URL}${orgQuery}`, bearer);
+  const subscription = asRecord(subscriptionBody?.data) ?? subscriptionBody;
+  const periodStart = typeof subscription?.currentPeriodStart === "string" ? subscription.currentPeriodStart.trim() : "";
+  // Unscoped /usage/summary is lifetime spend; mixing it with current-cycle
+  // remaining pools produces a wrong percent. Omit creditsUsd until a period exists.
+  if (!periodStart) return undefined;
+  const sinceQuery = `${orgQuery ? "&" : "?"}since=${encodeURIComponent(periodStart)}`;
+  const expiresAt = normalizeResetAt(subscription?.currentPeriodEnd);
+  const summaryBody = await fetchCommandCodeJson(`${COMMAND_CODE_USAGE_URL}${orgQuery}${sinceQuery}`, bearer);
+  const summary = asRecord(summaryBody?.data) ?? summaryBody;
+  const used = toFiniteNumber(summary?.totalCost) ?? toFiniteNumber(summary?.totalMonthlyCredits);
+  if (used === undefined || used < 0) return undefined;
+  const pools = [credits.monthlyCredits, credits.purchasedCredits, credits.freeCredits]
+    .map(value => toFiniteNumber(value))
+    .filter((value): value is number => value !== undefined);
+  // Field presence is what separates a real balance from absent data: an exhausted
+  // all-zero account still reports remaining=0, while no remaining-credit field at
+  // all means there is nothing to meter.
+  if (pools.length === 0) return undefined;
+  const remaining = pools.reduce((sum, value) => sum + Math.max(0, value ?? 0), 0);
+  const limit = used + remaining;
+  const percent = normalizePercent(limit > 0 ? (used / limit) * 100 : 0);
+  // Purchased credits roll over past the subscription period end, so an expiry is
+  // only truthful when the aggregate contains no non-expiring purchased pool.
+  const purchased = toFiniteNumber(credits.purchasedCredits) ?? 0;
+  return percent === undefined
+    ? undefined
+    : {
+        used,
+        limit,
+        remaining,
+        percent,
+        ...(expiresAt !== undefined && purchased <= 0 ? { expiresAt } : {}),
+      };
+}
+
+/** OAuth access token or ACTIVE Provider-API key for the Command Code quota probe. */
+async function resolveCommandCodeQuotaBearer(config: OcxProviderConfig): Promise<string | null> {
+  if (config.authMode === "oauth") {
+    try {
+      return await getValidAccessToken("command-code");
+    } catch {
+      return null;
+    }
+  }
+  // ACTIVE key only: a quota bar for a different account than the one routing
+  // requests is a wrong meter, not a helpful one.
+  return resolveEnvValue(config.apiKey)?.trim() || null;
+}
+
+/**
+ * Command Code `GET /alpha/billing/credits` — the same Bearer surface the CLI's
+ * usage view uses (windowLimits.fiveHour / windowLimits.weekly), plus soft
+ * whoami (team orgId scoping) and subscription-scoped spend for creditsUsd.
+ */
+async function fetchCommandCodeAccountQuota(accessToken: string): Promise<ProviderQuota | null> {
+  const body = await fetchCommandCodeJson(COMMAND_CODE_CREDITS_URL, accessToken);
+  const credits = asRecord(body?.credits);
+  const limits = asRecord(body?.windowLimits);
+  if (!credits && !limits) return null;
+  const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
+  const weekly = parseCommandCodeWindow(limits?.weekly);
+  if (!fiveHour && !weekly) return null;
+  return {
+    ...(fiveHour ? {
+      fiveHourPercent: fiveHour.percent,
+      ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
+    } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    updatedAt: Date.now(),
+  };
+}
+
+async function fetchCommandCodeQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never release credentials to a user-edited or lookalike provider host.
+  if (!isCanonicalCommandCodeBaseUrl(config.baseUrl)) return null;
+  const bearer = await resolveCommandCodeQuotaBearer(config);
+  if (!bearer) return null;
+  const whoamiBody = await fetchCommandCodeJson(COMMAND_CODE_WHOAMI_URL, bearer);
+  const whoami = asRecord(whoamiBody?.data) ?? whoamiBody;
+  const org = asRecord(whoami?.org);
+  const orgId = typeof org?.id === "string" && org.id.trim() ? org.id.trim() : null;
+  const orgQuery = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
+  const response = await fetch(`${COMMAND_CODE_CREDITS_URL}${orgQuery}`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const raw = asRecord(await readQuotaJson(response));
+  const body = asRecord(raw?.data) ?? raw;
+  const credits = asRecord(body?.credits);
+  const limits = asRecord(body?.windowLimits);
+  if (!credits && !limits) return null;
+  const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
+  const weekly = parseCommandCodeWindow(limits?.weekly);
+  const creditsUsd = await fetchCommandCodeSpend(bearer, credits, orgQuery);
+  return report(provider, "command-code:credits", {
+    ...(fiveHour ? {
+      fiveHourPercent: fiveHour.percent,
+      ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
+    } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(creditsUsd ? { creditsUsd } : {}),
+    updatedAt: Date.now(),
+  });
 }
 
 /** Cursor included usage via api2.cursor.sh (Bearer from OAuth) — unofficial, may change. */
@@ -1812,6 +2049,18 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "kimi") return fetchKimiQuota(name, provider);
     if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
       return fetchKimiQuota(name, provider);
+    }
+    // OAuth account login or Provider-API key only; forward/local modes carry no
+    // credential of ours on the canonical host.
+    if (provider.authMode === "oauth" && name === "command-code") {
+      return fetchCommandCodeQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "commandcode"
+      && isCanonicalCommandCodeBaseUrl(provider.baseUrl)) {
+      return fetchCommandCodeQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "opencode-go") {
+      return fetchOpenCodeGoQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl)) {
       return fetchA6apiQuota(name, provider);

@@ -30,7 +30,7 @@ export interface OcxParsedRequest {
    */
   _cursorIsolateConversation?: boolean;
   /** Account-scoped, non-secret Kiro request metadata selected with the OAuth access token. */
-  _kiroAuthContext?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
+  _kiroAuthContext?: Pick<KiroOAuthMetadata, "clientMode" | "profileArn" | "apiRegion" | "ssoRegion">;
   /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
   _providerContinuation?: OcxProviderContinuationState;
   /**
@@ -209,7 +209,14 @@ export function modelInList(list: string[] | undefined, modelId: string): boolea
   if (!list || list.length === 0) return false;
   if (list.includes(modelId)) return true;
   const colon = modelId.indexOf(":");
-  return colon > 0 && list.includes(modelId.slice(0, colon));
+  if (colon > 0 && list.includes(modelId.slice(0, colon))) return true;
+  // Routed OpenAI-compatible models may retain an upstream namespace (for example
+  // `deepseek/deepseek-v4-flash`) after provider selection. Provider capability lists
+  // are conventionally keyed by the bare model slug, so match the final namespace
+  // component as well. This is especially important for DeepSeek thinking replay:
+  // the upstream rejects a tool continuation without reasoning_content.
+  const slash = modelId.lastIndexOf("/");
+  return slash > 0 && list.includes(modelId.slice(slash + 1));
 }
 
 export type OcxToolChoice =
@@ -880,6 +887,12 @@ export interface OcxConfig {
     strategy?: OcxAccountPoolRotationStrategy;
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
+  };
+  /** Command Code OAuth account pool. Enabled by default when multiple accounts exist. */
+  commandCodeAccountPool?: {
+    enabled?: boolean;
+    /** New-session selection strategy. Default quota; unavailable quota falls back to round-robin. */
+    strategy?: OcxAccountPoolRotationStrategy;
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;

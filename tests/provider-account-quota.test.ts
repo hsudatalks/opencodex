@@ -201,6 +201,30 @@ describe("fetchProviderAccountQuotas", () => {
     expect(after?.credential.source).toBe("local-cli");
   });
 
+  test("reports Command Code quota per OAuth account without sharing the active token", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("command-code", { access: "command-first", refresh: "command-first", expires, accountId: "cc-first" });
+    await saveCredential("command-code", { access: "command-second", refresh: "command-second", expires, accountId: "cc-second" });
+    const seenTokens: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenTokens.push(auth);
+      const used = auth.endsWith("command-first") ? 9 : 2;
+      return new Response(JSON.stringify({ windowLimits: {
+        fiveHour: { cap: 14, used, resetAt: "2026-08-15T20:00:00.000Z" },
+        weekly: { cap: 35, used, resetAt: "2026-08-18T00:00:00.000Z" },
+      } }), { status: 200 });
+    }) as typeof fetch;
+    expect(supportsPerAccountQuota("command-code")).toBe(true);
+    const rows = await fetchProviderAccountQuotas("command-code");
+    const percentages = rows.map(row => [row.quota?.fiveHourPercent, row.quota?.weeklyPercent] as const).sort((a, b) => a[0] - b[0]);
+    expect(percentages[0]?.[0]).toBeCloseTo(14.2857, 3);
+    expect(percentages[0]?.[1]).toBeCloseTo(5.7142, 3);
+    expect(percentages[1]?.[0]).toBeCloseTo(64.2857, 3);
+    expect(percentages[1]?.[1]).toBeCloseTo(25.7142, 3);
+    expect(seenTokens.sort()).toEqual(["Bearer command-first", "Bearer command-second"]);
+  });
+
   test("providers without a per-account usage API are skipped", async () => {
     expect(supportsPerAccountQuota("anthropic")).toBe(true);
     expect(supportsPerAccountQuota("kiro")).toBe(false);

@@ -55,6 +55,9 @@ function quotaEndpoint(baseUrl: string): string | null {
     if (url.hostname === "api.z.ai" && url.pathname.startsWith("/api/coding/paas/v4")) {
       return "https://api.z.ai/api/monitor/usage/quota/limit";
     }
+    if (url.hostname === "opencode.ai" && url.pathname === "/zen/go/v1") {
+      return "https://opencode.ai/zen/go/v1/usage";
+    }
   } catch {
     // Invalid or user-defined destinations have no trusted quota endpoint.
   }
@@ -63,6 +66,19 @@ function quotaEndpoint(baseUrl: string): string | null {
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseOpenCodeQuota(payload: unknown, fetchedAt: number): QuotaSnapshot {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+  const usage = body?.usage && typeof body.usage === "object" ? body.usage as Record<string, unknown> : null;
+  const rolling = usage?.rolling && typeof usage.rolling === "object" ? usage.rolling as Record<string, unknown> : null;
+  const percent = finiteNumber(rolling?.percent);
+  const parsedReset = typeof rolling?.resetsAt === "string" ? Date.parse(rolling.resetsAt) : finiteNumber(rolling?.resetsAt);
+  return {
+    fetchedAt,
+    ...(percent !== undefined ? { usedPercent: Math.min(100, Math.max(0, percent)) } : {}),
+    ...(parsedReset !== undefined && Number.isFinite(parsedReset) ? { resetAt: parsedReset > 10_000_000_000 ? parsedReset : parsedReset * 1_000 } : {}),
+  };
 }
 
 function parseFiveHourQuota(payload: unknown, fetchedAt: number): QuotaSnapshot {
@@ -114,7 +130,10 @@ async function refreshQuota(
         state.quotas.set(entry.id, { fetchedAt: now });
         return;
       }
-      state.quotas.set(entry.id, parseFiveHourQuota(await response.json().catch(() => null), now));
+      const payload = await response.json().catch(() => null);
+      state.quotas.set(entry.id, endpoint === "https://opencode.ai/zen/go/v1/usage"
+        ? parseOpenCodeQuota(payload, now)
+        : parseFiveHourQuota(payload, now));
     } catch {
       state.quotas.set(entry.id, { fetchedAt: now });
     }
