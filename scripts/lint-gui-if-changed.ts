@@ -13,6 +13,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { parseOverrideCommand } from "./override-command";
 
 /** True when any changed path is the gui directory or inside it (slash-guarded). */
 function guiPathsChanged(files: string[]): boolean {
@@ -79,8 +80,10 @@ if (import.meta.main) {
 
   console.log("lint:gui: gui/ changed — running eslint (scope=changed)");
   const [cmd, ...args] = process.env.LINT_CMD
-    ? process.env.LINT_CMD.split(" ")
-    : ["bun", "run", "lint"];
+    ? parseOverrideCommand(process.env.LINT_CMD, "LINT_CMD")
+    // Same reason as the doctor step: a bare "bun" is not on PATH where the pinned binary
+    // is used, so the lint gate failed with ENOENT instead of running.
+    : [process.execPath, "run", "lint"];
 
   const result = spawnSync(cmd!, args, {
     cwd: guiDir,

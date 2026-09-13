@@ -4710,13 +4710,13 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {
-    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "gui/src/App.tsx\nscripts/x.ts" },
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout.toString()).toContain("doctor:run");
 
-    const skip = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const skip = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "scripts/x.ts\nREADME.md" },
     });
     expect(skip.exitCode).toBe(0);
@@ -4724,7 +4724,7 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("degrades gracefully when the doctor engine is unavailable (offline prepush)", () => {
-    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
@@ -4739,11 +4739,11 @@ describe("doctor-gui-if-changed", () => {
     // Simulate `bun run doctor` starting, then npx failing offline: numeric status
     // plus registry noise in stderr — must not gate the push.
     // cwd for DOCTOR_CMD is gui/, so reach fixtures via ../scripts/...
-    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
-        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-offline-exit.ts",
+        DOCTOR_CMD: JSON.stringify([process.execPath, "../scripts/fixtures/doctor-offline-exit.ts"]),
       },
     });
     expect(run.exitCode).toBe(0);
@@ -4751,11 +4751,11 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("propagates a non-zero doctor exit so findings gate the push", () => {
-    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
-        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-findings-exit.ts",
+        DOCTOR_CMD: JSON.stringify([process.execPath, "../scripts/fixtures/doctor-findings-exit.ts"]),
       },
     });
     expect(run.exitCode).not.toBe(0);
@@ -4770,11 +4770,11 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("hard-fails when doctor output exceeds maxBuffer (does not soft-skip)", () => {
-    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
-        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-huge-output.ts",
+        DOCTOR_CMD: JSON.stringify([process.execPath, "../scripts/fixtures/doctor-huge-output.ts"]),
         // Tiny buffer so the fixture's stdout trips the overflow branch.
         OCX_DOCTOR_MAX_BUFFER: "256",
       },
@@ -4786,13 +4786,13 @@ describe("doctor-gui-if-changed", () => {
 
 describe("lint-gui-if-changed", () => {
   test("DRY_RUN prints the run/skip decision without spawning lint", () => {
-    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, lintGuiIfChangedScript], {
       env: { ...process.env, LINT_DRY_RUN: "1", LINT_FILES: "gui/src/App.tsx\nscripts/x.ts" },
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout.toString()).toContain("lint:run");
 
-    const skip = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+    const skip = Bun.spawnSync([process.execPath, lintGuiIfChangedScript], {
       env: { ...process.env, LINT_DRY_RUN: "1", LINT_FILES: "scripts/x.ts\nREADME.md" },
     });
     expect(skip.exitCode).toBe(0);
@@ -4802,22 +4802,22 @@ describe("lint-gui-if-changed", () => {
   test("runs eslint when gui/ changed and fails the push on findings", () => {
     // `bun run lint` in gui/ exits non-zero on findings; a fake command makes
     // the spawn deterministic without depending on the real eslint output.
-    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, lintGuiIfChangedScript], {
       env: {
         ...process.env,
         LINT_FILES: "gui/src/App.tsx",
-        LINT_CMD: "bun ../scripts/fixtures/lint-findings-exit.ts",
+        LINT_CMD: JSON.stringify([process.execPath, "../scripts/fixtures/lint-findings-exit.ts"]),
       },
     });
     expect(run.exitCode).not.toBe(0);
   });
 
   test("skips eslint when gui/ did not change", () => {
-    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+    const run = Bun.spawnSync([process.execPath, lintGuiIfChangedScript], {
       env: {
         ...process.env,
         LINT_FILES: "scripts/x.ts\nREADME.md",
-        LINT_CMD: "bun ../scripts/fixtures/lint-findings-exit.ts",
+        LINT_CMD: JSON.stringify([process.execPath, "../scripts/fixtures/lint-findings-exit.ts"]),
       },
     });
     expect(run.exitCode).toBe(0);

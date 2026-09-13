@@ -28,7 +28,9 @@ describe("generated model metadata stays in sync with its source", () => {
       const outPath = join(outDir, "model-metadata.ts");
 
       const proc = Bun.spawn(
-        ["bun", resolve(import.meta.dir, "../scripts/generate-model-metadata.ts")],
+        // process.execPath: a bare "bun" is not on PATH where the pinned binary is used, so
+        // this test failed with ENOENT before it could compare a single byte.
+        [process.execPath, resolve(import.meta.dir, "../scripts/generate-model-metadata.ts")],
         {
           cwd: resolve(import.meta.dir, ".."),
           env: { ...process.env, MODEL_METADATA_OUT: outPath },

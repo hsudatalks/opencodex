@@ -13,6 +13,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { parseOverrideCommand } from "./override-command";
 
 /** True when any changed path is the gui directory or inside it (slash-guarded). */
 export function guiPathsChanged(files: string[]): boolean {
@@ -102,8 +103,11 @@ if (import.meta.main) {
 
   console.log("doctor:gui: gui/ changed — running React Doctor (scope=changed)");
   const [cmd, ...args] = process.env.DOCTOR_CMD
-    ? process.env.DOCTOR_CMD.split(" ")
-    : ["bun", "run", "doctor"];
+    ? parseOverrideCommand(process.env.DOCTOR_CMD, "DOCTOR_CMD")
+    // `process.execPath` is this script's own bun binary. A bare "bun" only resolves on a
+    // host that installed bun into PATH, which the pinned-binary workflow explicitly does
+    // not — there the doctor step failed with ENOENT instead of running.
+    : [process.execPath, "run", "doctor"];
 
   // spawnSync (not execFileSync): explicit maxBuffer + status/error channels so
   // oversized doctor output cannot be mistaken for an offline soft-skip.
