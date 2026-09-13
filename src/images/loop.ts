@@ -21,7 +21,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
-import { rateLimitRetryDelayMs } from "../providers/key-failover";
+import { isKeyRotationStatus, rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -250,10 +250,11 @@ export interface ImageBridgeDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
-   * Optional 429 key-failover for the routed (non-xAI) model. Return a rebuilt adapter for the
+   * Optional key-failover for the routed (non-xAI) model: a 429 rate limit or a 401/403
+   * credential rejection all mean "try the next pool key". Return a rebuilt adapter for the
    * rotated key, or null when the pool is exhausted.
    */
-  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  on429?: (retryAfterHeader: string | null, status: number) => ProviderAdapter | null;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
@@ -553,9 +554,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         yield { type: "heartbeat" };
         prepared = await fetchOnce(adapter, "rate-limit-429");
       }
-      // 429 key-failover parity with web-search / normal routed path.
-      while (prepared.response.status === 429 && deps.on429) {
-        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+      // Key-failover parity with web-search / normal routed path: a 429 rate limit and a
+      // 401/403 credential rejection both rotate to the next pool key.
+      while (isKeyRotationStatus(prepared.response.status) && deps.on429) {
+        const rotated = deps.on429(prepared.response.headers.get("retry-after"), prepared.response.status);
         if (!rotated) break;
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;

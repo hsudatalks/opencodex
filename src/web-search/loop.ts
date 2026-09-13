@@ -9,7 +9,7 @@ import { clearableDeadline } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
-import { rateLimitRetryDelayMs } from "../providers/key-failover";
+import { isKeyRotationStatus, rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -276,10 +276,11 @@ export interface WebSearchLoopDeps {
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
-   * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
-   * or null when the pool is exhausted (same semantics as the normal routed path).
+   * Key-failover hook: a 429 rate limit or a 401/403 credential rejection rotates the provider's
+   * active pool key. Returns a rebuilt adapter, or null when the pool is exhausted (same
+   * semantics as the normal routed path).
    */
-  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  on429?: (retryAfterHeader: string | null, status: number) => ProviderAdapter | null;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
 }
@@ -469,10 +470,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         yield { type: "heartbeat" };
         prepared = await fetchOnce(adapter, "rate-limit-429");
       }
-      // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
-      // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
-      while (prepared.response.status === 429 && deps.on429) {
-        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+      // Key-failover parity with the normal routed path: a 429 rate limit and a 401/403
+      // credential rejection both rotate pool keys until one responds or the pool is exhausted
+      // (deps.on429 returns null — cooldown map guarantees termination).
+      while (isKeyRotationStatus(prepared.response.status) && deps.on429) {
+        const rotated = deps.on429(prepared.response.headers.get("retry-after"), prepared.response.status);
         if (!rotated) break;
         // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
         // it, but proceed immediately to the rotated fetch under the SAME deadline signal.

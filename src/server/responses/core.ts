@@ -122,9 +122,10 @@ import { providerModelResponsesUpstreamStreaming, type InboundWire } from "../..
 import type { AdapterRequest } from "../../adapters/base";
 import {
   hasKeyPoolFailover,
+  isKeyRotationStatus,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
-  rotateProviderTransportOn429,
+  rotateProviderTransportOnKeyStatus,
 } from "../../providers/key-failover";
 import { balanceProviderApiKey } from "../../providers/api-key-balancer";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -2875,8 +2876,9 @@ async function handleResponsesInner(
           if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
         }
       },
-      on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+      on429: (retryAfter, status) => {
+        const rotated = rotateProviderTransportOnKeyStatus(config, route.providerName, route.provider, {
+          status,
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -2945,8 +2947,9 @@ async function handleResponsesInner(
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
-      on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+      on429: (retryAfter, status) => {
+        const rotated = rotateProviderTransportOnKeyStatus(config, route.providerName, route.provider, {
+          status,
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -3334,11 +3337,16 @@ async function handleResponsesInner(
         upstreamResponse = result;
       }
 
-      // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
-      // SAME request once per remaining key. OAuth/forward providers and single-key pools
-      // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
-      while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+      // Multi-key rejection failover: rotate to the next pool key (cooldown-aware) and retry the
+      // SAME request once per remaining key. A 429 is a rate limit; a 401/403 from a pooled
+      // provider is that credential being rejected or out of credit, and the remedy is identical.
+      // Leaving 401s out let one zero-balance key in the opencode-go pool fail ~1/3 of requests
+      // while the client saw an authentication error. OAuth/forward providers and single-key
+      // pools return null immediately, so this stays a no-op for them
+      // (src/providers/key-failover.ts).
+      while (isKeyRotationStatus(upstreamResponse.status) && hasKeyPoolFailover(route.provider)) {
+        const rotated = rotateProviderTransportOnKeyStatus(config, route.providerName, route.provider, {
+          status: upstreamResponse.status,
           retryAfter: upstreamResponse.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -3628,8 +3636,9 @@ async function handleResponsesInner(
         }
       }
 
-      if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+      if (isKeyRotationStatus(response.status) && hasKeyPoolFailover(route.provider)) {
+        const rotated = rotateProviderTransportOnKeyStatus(config, route.providerName, route.provider, {
+          status: response.status,
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,

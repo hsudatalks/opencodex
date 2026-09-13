@@ -7,8 +7,11 @@ import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
   hasKeyPoolFailover,
+  isKeyRotationStatus,
   rotateKeyOn429,
+  rotateKeyOnRejection,
   rotateProviderTransportOn429,
+  rotateProviderTransportOnKeyStatus,
 } from "../src/providers/key-failover";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { routeModel } from "../src/router";
@@ -222,5 +225,47 @@ describe("rotateProviderTransportOn429", () => {
     expect(rotated?.headers?.["x-grok-client-version"]).toBeUndefined();
     expect(rotated?.headers?.["x-xai-token-auth"]).toBeUndefined();
     expect(JSON.stringify(rotated?.headers)).not.toContain(promptCacheKey);
+  });
+});
+
+describe("credential-rejection rotation (401/403)", () => {
+  test("only rate limits and credential rejections rotate a pool key", () => {
+    expect([401, 403, 429].map(isKeyRotationStatus)).toEqual([true, true, true]);
+    // A bad request, a quota/billing body or an upstream fault is not "try the next credential".
+    expect([400, 402, 404, 500, 503].map(isKeyRotationStatus)).toEqual([false, false, false, false, false]);
+  });
+
+  test("a rejected key is cooled for the rejection window and the next key takes over", () => {
+    // The live incident this closes: one zero-balance key in the opencode-go pool produced an
+    // intermittent 401 on its share of requests, and the client reported "the key is wrong"
+    // even though three healthy credentials were present.
+    const now = 5_000;
+    const config = makeConfig({ authMode: "key", apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+
+    const first = rotateKeyOnRejection(config, "p", now, "key-alpha-000111222333");
+    expect(first?.apiKey).toBe("key-beta-444555666777");
+    // A depleted or revoked key does not come back on the 60s rate-limit timescale.
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
+
+    const second = rotateKeyOnRejection(config, "p", now, "key-beta-444555666777");
+    expect(second?.apiKey).toBe("key-gamma-888999000111");
+    // Once every credential is cooled the pool returns null, which is what bounds the retry
+    // loop rather than letting it spin on the same failure.
+    expect(rotateKeyOnRejection(config, "p", now, "key-gamma-888999000111")).toBeNull();
+  });
+
+  test("the unified entry point keeps Retry-After semantics for a 429", () => {
+    const now = 7_000;
+    const config = makeConfig({ authMode: "key", apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const routed = routeModel(config, "p/m1").provider;
+
+    const rotated = rotateProviderTransportOnKeyStatus(config, "p", routed, {
+      status: 429,
+      retryAfter: "120",
+      now,
+      attemptedKey: "key-alpha-000111222333",
+    });
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 120_000);
   });
 });

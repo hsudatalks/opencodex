@@ -134,21 +134,22 @@ export function rateLimitRetryDelayMs(
 }
 
 /**
- * Record a 429 for the current key and attempt to switch to the next available one.
+ * Record a key failure and attempt to switch to the next available one.
  *
  * @returns A new OcxProviderConfig with the swapped key (and mutated config on disk),
  *          or `null` when no alternative key is available (all in cooldown or pool < 2).
  *
  * The returned object is a snapshot of the PERSISTED config — it carries none of the
  * registry backfills `routedProviderConfig` merges in at request time. Request paths must
- * not assign it to an active route wholesale; use `rotateProviderTransportOn429`, which
- * takes only the swapped key and keeps the routed provider intact.
+ * not assign it to an active route wholesale; use the `rotateProviderTransportOn*` wrappers,
+ * which take only the swapped key and keep the routed provider intact.
  */
-export function rotateKeyOn429(
+function rotateKeyCooling(
   config: OcxConfig,
   providerName: string,
-  retryAfterHeader: string | null | undefined,
-  now = Date.now(),
+  cooldownMs: number,
+  reason: string,
+  now: number,
   attemptedKey?: string,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
@@ -158,13 +159,13 @@ export function rotateKeyOn429(
   const pool = provider.apiKeyPool;
   if (!pool || pool.length < 2) return null;
 
-  // Cool the key that ACTUALLY failed. Under concurrent 429s another request may already have
-  // rotated provider.apiKey — cooling the live key would punish an innocent replacement and can
-  // exhaust a 2-key pool from a single bad key. CAS semantics: callers pass the key they used.
+  // Cool the key that ACTUALLY failed. Under concurrent failures another request may already
+  // have rotated provider.apiKey — cooling the live key would punish an innocent replacement
+  // and can exhaust a 2-key pool from a single bad key. CAS semantics: callers pass the key
+  // they used.
   const failedKey = attemptedKey ?? provider.apiKey;
   const currentEntry = pool.find(e => e.key === failedKey);
   if (currentEntry) {
-    const cooldownMs = parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
     keyCooldowns.set(cooldownKey(providerName, currentEntry.id), {
       cooldownUntil: now + cooldownMs,
     });
@@ -190,15 +191,61 @@ export function rotateKeyOn429(
       saveConfigPreservingClaudeCode(config);
       console.warn(
         // Log ids only — labels are user-supplied free text and could carry secret material.
-        `[key-failover] ${providerName}: 429 on key ${currentEntry?.id ?? "?"}; rotating to key ${candidate.id}`,
+        `[key-failover] ${providerName}: ${reason} on key ${currentEntry?.id ?? "?"}; rotating to key ${candidate.id}`,
       );
       return { ...provider };
     }
   }
 
   // All keys in cooldown
-  console.warn(`[key-failover] ${providerName}: all ${pool.length} keys in cooldown; returning 429 to client`);
+  console.warn(`[key-failover] ${providerName}: all ${pool.length} keys in cooldown after ${reason}; returning the failure to the client`);
   return null;
+}
+
+/**
+ * A pool key the upstream rejected as unauthorized or out of credit.
+ *
+ * These statuses are key-scoped by construction: each pool entry is an independent credential,
+ * so the remedy is the next entry — the same remedy a 429 gets. Without this a single depleted
+ * key poisoned its share of requests while the client saw an authentication error, which is how
+ * a zero-balance key in the opencode-go pool surfaced as "the key is wrong" on one machine.
+ */
+export function isKeyRotationStatus(status: number): boolean {
+  return status === 429 || status === 401 || status === 403;
+}
+
+/**
+ * A rejected key does not recover on the 60s rate-limit timescale: it needs a top-up or a
+ * replacement, and any manual key management clears cooldowns.
+ */
+const KEY_REJECTION_COOLDOWN_MS = MAX_COOLDOWN_MS;
+
+/** Rate-limit rotation: the cooldown follows Retry-After when the upstream sent one. */
+export function rotateKeyOn429(
+  config: OcxConfig,
+  providerName: string,
+  retryAfterHeader: string | null | undefined,
+  now = Date.now(),
+  attemptedKey?: string,
+): OcxProviderConfig | null {
+  return rotateKeyCooling(
+    config,
+    providerName,
+    parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS,
+    "429",
+    now,
+    attemptedKey,
+  );
+}
+
+/** Credential rotation: cool the rejected key for the full rejection window. */
+export function rotateKeyOnRejection(
+  config: OcxConfig,
+  providerName: string,
+  now = Date.now(),
+  attemptedKey?: string,
+): OcxProviderConfig | null {
+  return rotateKeyCooling(config, providerName, KEY_REJECTION_COOLDOWN_MS, "key rejection", now, attemptedKey);
 }
 
 export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
@@ -242,6 +289,29 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
   );
+  return rotated
+    ? resolveProviderTransport(
+        providerName,
+        { ...routedProvider, apiKey: rotated.apiKey },
+        options.promptCacheKey,
+      )
+    : null;
+}
+
+/**
+ * Rotate on whichever key-scoped rejection the upstream returned: a 429 follows Retry-After,
+ * a 401/403 cools the credential for the full rejection window. One entry point, so every
+ * request path that already retries a 429 retries a rejected key the same way.
+ */
+export function rotateProviderTransportOnKeyStatus(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  options: RotateProviderTransportOptions & { status: number },
+): OcxProviderTransport | null {
+  const rotated = options.status === 429
+    ? rotateKeyOn429(config, providerName, options.retryAfter, options.now, options.attemptedKey)
+    : rotateKeyOnRejection(config, providerName, options.now, options.attemptedKey);
   return rotated
     ? resolveProviderTransport(
         providerName,
