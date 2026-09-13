@@ -317,12 +317,38 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
+  test("17. DeepSeek V4.1 billing: the live alias and the retired names share the Flash rate", () => {
+    // `deepseek-flash` is now the official model name (DeepSeek-V4.1-Flash) and the retired
+    // `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` names are still accepted and billed
+    // at the Flash price, so all three must resolve to the same tuple. Before this the alias
+    // had no price at all and the retired names carried the pre-V4.1 0.14/0.28 row.
+    const flash = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
+    expect(resolveMatchedPrice("deepseek-official", "deepseek-flash")?.cost4).toEqual(flash);
+    expect(resolveMatchedPrice("deepseek-official", "deepseek-v4-flash")?.cost4).toEqual(flash);
+    expect(resolveMatchedPrice("opencode-go", "deepseek-v4-flash-vision-exp")?.cost4).toEqual(flash);
+    // V4 Pro was re-priced to the V4-Pro-0813 list price; the retired row said 0.435/0.87.
+    expect(resolveMatchedPrice("deepseek-official", "deepseek-v4-pro")?.cost4)
+      .toEqual({ input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 });
+    // An aggregator-only id the vendor bundle does not carry, priced from the overlay.
+    expect(resolveMatchedPrice("opencode-go", "deepseek-v4.1-flash")?.cost4).toEqual(flash);
+    expect(resolveMatchedPrice("command-code", "deepseek/deepseek-v4.1-flash")?.cost4).toEqual(flash);
+  });
+
   test("16. shipped overlay membership: includes Astra, Opus 5, and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(66);
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(92);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
       "anthropic/claude-opus-5",
+      // The coding-plan GLM rows and the aggregator DeepSeek ids joined the shipped set when
+      // the usage dashboard reported them as free: their bundles are all-zero (subscription
+      // surfaces) and `deepseek-v4.1-flash` has no vendor row at all.
+      "zhipu-bigmodel-coding/glm-5.3-flash",
+      "zhipu-bigmodel-coding/glm-4.6",
+      "opencode-go/glm-5.3-flash",
+      "opencode-go/qwen3.8-max",
+      "opencode-go/deepseek-v4.1-flash",
+      "command-code/deepseek/deepseek-v4.1-flash",
       "cursor/claude-opus-5",
       "kiro/claude-opus-5",
       "minimax/MiniMax-M2.1-highspeed",
