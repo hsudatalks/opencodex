@@ -14,6 +14,14 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
+import {
+  chmod as chmodAsync,
+  copyFile as copyFileAsync,
+  link as linkAsync,
+  mkdir as mkdirAsync,
+  open as openAsync,
+  unlink as unlinkAsync,
+} from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
@@ -273,6 +281,29 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   return true;
 }
 
+function serializeSpillPayload(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): { bytes: Buffer; digest: string; idDigest: string; contentDigest: string } {
+  const payload: ResponseSpillPayload = {
+    version: 1,
+    responseId,
+    createdAt: state.createdAt,
+    items: state.items,
+    ...(state.providers ? { providers: state.providers } : {}),
+  };
+  const serialized = JSON.stringify(payload);
+  if (serialized === undefined) throw new Error("Response spill serialization failed");
+  const bytes = Buffer.from(serialized, "utf8");
+  const digest = sha256(bytes);
+  return {
+    bytes,
+    digest,
+    idDigest: sha256(responseId).slice(0, 12),
+    contentDigest: digest.slice(0, 24),
+  };
+}
+
 export function writeResponseSpillDurably(
   responseId: string,
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
@@ -280,19 +311,7 @@ export function writeResponseSpillDurably(
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
-    const payload: ResponseSpillPayload = {
-      version: 1,
-      responseId,
-      createdAt: state.createdAt,
-      items: state.items,
-      ...(state.providers ? { providers: state.providers } : {}),
-    };
-    const serialized = JSON.stringify(payload);
-    if (serialized === undefined) throw new Error("Response spill serialization failed");
-    const bytes = Buffer.from(serialized, "utf8");
-    const digest = sha256(bytes);
-    const idDigest = sha256(responseId).slice(0, 12);
-    const contentDigest = digest.slice(0, 24);
+    const { bytes, digest, idDigest, contentDigest } = serializeSpillPayload(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     harden(dir, 0o700);
@@ -330,6 +349,81 @@ export function writeResponseSpillDurably(
     }
     if (tempPath) {
       try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
+    }
+    throw new Error("Response spill write failed");
+  }
+}
+
+/**
+ * Durable spill publication without blocking the server event loop on file and
+ * directory fsync. Serialization stays bounded by the same admission ceiling;
+ * callers retain the resident node until this promise resolves, so immediate
+ * previous_response_id replay does not depend on storage latency.
+ */
+export async function writeResponseSpillDurablyAsync(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): Promise<ResponseSpillRef> {
+  let tempPath: string | null = null;
+  let file: Awaited<ReturnType<typeof openAsync>> | null = null;
+  try {
+    // Yield before the remaining synchronous serialization work. This lets the
+    // terminal SSE frame finish propagating before a large continuation is encoded.
+    await Promise.resolve();
+    const { bytes, digest, idDigest, contentDigest } = serializeSpillPayload(responseId, state);
+    const dir = responseSpillDirectory();
+    await mkdirAsync(dir, { recursive: true, mode: 0o700 });
+    try {
+      await chmodAsync(dir, 0o700);
+    } catch {
+      if (process.platform !== "win32") throw new Error("Response spill permission hardening failed");
+      harden(dir, 0o700);
+    }
+
+    const stagingPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+    tempPath = stagingPath;
+    file = await openAsync(stagingPath, "wx", 0o600);
+    await file.writeFile(bytes);
+    await file.sync();
+    await file.close();
+    file = null;
+    harden(stagingPath, 0o600);
+
+    for (let attempt = 0; attempt < RESPONSE_SPILL_PUBLISH_RETRIES; attempt++) {
+      spillGeneration += 1;
+      const fileName = `${sanitizeResponseId(responseId)}.${idDigest}.${contentDigest}.${spillGeneration}.${bytes.byteLength}.spill.json`;
+      if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
+      const destinationPath = join(dir, fileName);
+      try {
+        try {
+          await linkAsync(stagingPath, destinationPath);
+        } catch (error) {
+          if (isErrno(error, "EEXIST")) throw error;
+          if (!canUseExclusiveCopyFallback(error)) throw error;
+          await copyFileAsync(stagingPath, destinationPath, constants.COPYFILE_EXCL);
+          harden(destinationPath, 0o600);
+          const copied = await openAsync(destinationPath, "r");
+          try { await copied.sync(); } finally { await copied.close(); }
+        }
+        const directory = await openAsync(dir, "r");
+        try { await directory.sync(); } catch { /* unsupported directory fsync */ } finally { await directory.close(); }
+        await unlinkAsync(stagingPath);
+        forgetEphemeralSecretPath(stagingPath);
+        tempPath = null;
+        return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
+      } catch (error) {
+        if (isErrno(error, "EEXIST")) continue;
+        throw error;
+      }
+    }
+    throw new Error("Response spill publication retries exhausted");
+  } catch {
+    if (file) {
+      try { await file.close(); } catch { /* best effort */ }
+    }
+    if (tempPath) {
+      try { await unlinkAsync(tempPath); } catch { /* best effort */ }
+      forgetEphemeralSecretPath(tempPath);
     }
     throw new Error("Response spill write failed");
   }

@@ -13,6 +13,7 @@ import {
   responseSpillPayloadCap,
   type ResponseSpillRef,
   writeResponseSpillDurably,
+  writeResponseSpillDurablyAsync,
 } from "./spill-store";
 import {
   applyResponseStateMutations,
@@ -140,6 +141,14 @@ interface PendingStateMutation {
   revision: number;
 }
 const pendingStateMutations = new Map<string, PendingStateMutation>();
+interface PendingDurableSpill {
+  candidate: ResidentResponseState;
+  previousId?: string;
+}
+const pendingDurableSpills = new Map<string, PendingDurableSpill>();
+const pendingDurableFlights = new Set<Promise<void>>();
+let asyncDurableSpillOverride: boolean | null = null;
+const asyncSpillCounters = { completed: 0, fallbacks: 0, failures: 0 };
 let incrementalStoreConfigDir: string | null = null;
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
 const materializationCounters = { hits: 0, misses: 0 };
@@ -158,6 +167,17 @@ const MAX_RESPONSE_PARENT_ID_LENGTH = 512;
 const MAX_RESPONSE_CHAIN_DEPTH = 4_096;
 /** Periodic checkpoints bound cold-restart file reads and detach old DAG segments for GC. */
 const MAX_RESPONSE_DELTA_DEPTH = 256;
+
+function asyncDurableSpillEnabled(): boolean {
+  if (asyncDurableSpillOverride !== null) return asyncDurableSpillOverride;
+  if (process.env.NODE_ENV === "test") return false;
+  return process.env.OPENCODEX_RESPONSE_SPILL_ASYNC !== "0";
+}
+
+/** Test-only: production defaults to asynchronous durable spill publication. */
+export function setAsyncDurableSpillForTests(enabled: boolean | null): void {
+  asyncDurableSpillOverride = enabled;
+}
 
 function validParentId(parentId: unknown, childId?: string): parentId is string {
   return typeof parentId === "string"
@@ -592,17 +612,78 @@ function markResponseSuperseded(id: string, at: number): void {
   replaceMapEntry(id, tombstone(id, existing.createdAt, at, existing.scope), existing);
 }
 
-/** Install a completed response as a durable spill as soon as its terminal event is observed. */
-function setDurableEntry(id: string, entry: ResidentInput): void {
+type DurableEntryResult = "stored" | "pending" | "failed";
+
+function beginAsyncDurableSpill(
+  id: string,
+  candidate: ResidentResponseState,
+  previousId?: string,
+): void {
+  pendingDurableSpills.set(id, { candidate, ...(previousId ? { previousId } : {}) });
+  const recorded = pendingStateMutations.get(id);
+  if (recorded?.state === candidate) pendingStateMutations.delete(id);
+
+  let flight!: Promise<void>;
+  flight = writeResponseSpillDurablyAsync(id, {
+    createdAt: candidate.createdAt,
+    items: candidate.items,
+    ...(candidate.providers ? { providers: candidate.providers } : {}),
+  }).then(ref => {
+    const pending = pendingDurableSpills.get(id);
+    if (!pending || pending.candidate !== candidate || states.get(id) !== candidate) {
+      deleteResponseSpill(ref);
+      return;
+    }
+    pendingDurableSpills.delete(id);
+    if (ref.payloadBytes > responseSpillPayloadCap()) {
+      deleteResponseSpill(ref);
+      replaceWithSpillFailure(id, candidate);
+      asyncSpillCounters.failures += 1;
+      schedulePersist();
+      return;
+    }
+    if (!swapResidentForSpill(id, candidate, ref)) return;
+    spillCounters.writes += 1;
+    asyncSpillCounters.completed += 1;
+    if (previousId && previousId !== id) markResponseSuperseded(previousId, now());
+    pruneResponses();
+    schedulePersist();
+  }).catch(() => {
+    const pending = pendingDurableSpills.get(id);
+    if (!pending || pending.candidate !== candidate || states.get(id) !== candidate) return;
+    pendingDurableSpills.delete(id);
+    spillCounters.writeFailures += 1;
+    asyncSpillCounters.failures += 1;
+    replaceWithSpillFailure(id, candidate);
+    schedulePersist();
+  }).finally(() => {
+    pendingDurableFlights.delete(flight);
+  });
+  pendingDurableFlights.add(flight);
+}
+
+/** Install a completed response durably without routine file fsync on the request thread. */
+function setDurableEntry(id: string, entry: ResidentInput, previousId?: string): DurableEntryResult {
   const expected = states.get(id);
   const candidate = measureResidentEntry(id, entry);
   if (!candidate) {
     replaceWithSpillFailure(id, expected);
     pruneResponses();
-    return;
+    return "failed";
   }
+  const canPublishAsync = asyncDurableSpillEnabled()
+    && expected === undefined
+    && candidate.sizeBytes <= responseSpillPayloadCap()
+    && residentResponseBytes + candidate.sizeBytes <= byteCap();
+  if (canPublishAsync && replaceMapEntry(id, candidate, expected)) {
+    beginAsyncDurableSpill(id, candidate, previousId);
+    pruneResponses();
+    return "pending";
+  }
+  if (asyncDurableSpillEnabled()) asyncSpillCounters.fallbacks += 1;
   admitOversizedCandidate(id, candidate, expected, true);
   pruneResponses();
+  return states.get(id)?.kind === "spill" ? "stored" : "failed";
 }
 
 /**

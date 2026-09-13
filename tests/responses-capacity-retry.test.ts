@@ -25,6 +25,23 @@ function failedEvent(code: string): Record<string, unknown> {
 }
 
 describe("Responses capacity retry adaptation", () => {
+  test("recognizes the stable capacity message with a provider-specific code", () => {
+    expect(isResponsesCapacityErrorBody(JSON.stringify({ error: {
+      code: "model_at_capacity", message: "Selected model is at capacity.", type: "server_error",
+    } }))).toBe(true);
+  });
+
+  test("detects delayed capacity beyond the old 250ms probe", async () => {
+    const response = new Response(new ReadableStream({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${eventBlock({ type: "response.created" })}\n\n`));
+        await Bun.sleep(350);
+        controller.enqueue(new TextEncoder().encode(`${eventBlock(failedEvent("server_is_overloaded"))}\n\n`));
+        controller.close();
+      },
+    }));
+    expect((await probeResponsesPreOutputCapacity(response)).capacityError?.code).toBe("server_is_overloaded");
+  });
   test("rewrites a pre-output capacity terminal for Codex native retry", () => {
     const rewrite = createResponsesCapacityRetryBlockRewrite();
     rewrite(eventBlock({ type: "response.created", response: { status: "in_progress" } }));

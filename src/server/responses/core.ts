@@ -343,7 +343,9 @@ async function shouldRetryCodexPoolAccountCapacityBody(
 ): Promise<boolean> {
   if (response.status !== 503) return false;
   const contentType = response.headers.get("content-type")?.toLowerCase();
-  if (contentType && !contentType.includes("json")) return false;
+  // ChatGPT has emitted the pre-stream JSON error with an event-stream content
+  // type. The body classifier is bounded and strict, so content type alone must
+  // not suppress account failover for this controlled 503 path.
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });
     return body.displaySafe
@@ -443,28 +445,42 @@ async function retryCodexPoolOnAlternateAccount(
   // even if a future caller forgets to guard this helper.
   if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
+  const resolveRetryAuthContext = async (allowModelCapacityAvoidedAccounts: boolean) => {
+    try {
+      return await resolveCodexAuthContext(
+        req.headers,
+        config,
+        "pool",
+        {
+          excludeAccountId: firstAuthCtx.accountId,
+          modelId: route.modelId,
+          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+          signal: options.abortSignal ?? req.signal,
+          allowModelCapacityAvoidedAccounts,
+        },
+      );
+    } catch (error) {
+      if (
+        !(error instanceof CodexPoolAuthenticationError)
+        && !(error instanceof CodexAuthContextError)
+        && !(error instanceof CodexAccountCooldownError)
+        && !(error instanceof CodexMainProfileDrainingError)
+        && !(error instanceof CodexAccountCapacityError)
+        && !(error instanceof CodexAccountCapacityQueueError)
+      ) throw error;
+      return undefined;
+    }
+  };
   let retryAuthCtx: CodexAuthContext | undefined;
-  try {
-    retryAuthCtx = await resolveCodexAuthContext(
-      req.headers,
-      config,
-      "pool",
-      {
-        excludeAccountId: firstAuthCtx.accountId,
-        modelId: route.modelId,
-        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-        signal: options.abortSignal ?? req.signal,
-      },
-    );
-  } catch (error) {
-    if (
-      !(error instanceof CodexPoolAuthenticationError)
-      && !(error instanceof CodexAuthContextError)
-      && !(error instanceof CodexAccountCooldownError)
-      && !(error instanceof CodexMainProfileDrainingError)
-      && !(error instanceof CodexAccountCapacityError)
-      && !(error instanceof CodexAccountCapacityQueueError)
-    ) throw error;
+  retryAuthCtx = await resolveRetryAuthContext(false);
+  if (
+    (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool")
+    && outcomeStatus === "model_capacity"
+  ) {
+    // A fleet-wide capacity burst can leave every alternate with only the short
+    // model-capacity scheduling hint. That hint is not account ineligibility:
+    // rather than surfacing the upstream 503, make one bounded last-resort retry.
+    retryAuthCtx = await resolveRetryAuthContext(true);
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
     return { kind: "no-alternate" };

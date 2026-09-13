@@ -132,6 +132,7 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
+import { isResponsesCapacityErrorBody } from "../responses-capacity-retry";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
@@ -144,6 +145,21 @@ export function compactResponseTooLargeError(): Response {
       code: "compact_response_too_large",
     },
   }), { status: 502, headers: { "Content-Type": "application/json" } });
+}
+
+async function shouldRetryCompactCapacityBody(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (response.status !== 503 || !response.body) return false;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe
+      && !body.truncated
+      && isResponsesCapacityErrorBody(body.text);
+  } catch {
+    return false;
+  }
 }
 
 
@@ -164,8 +180,12 @@ async function resolveAlternateCompactContext(args: {
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
   turnAdmissionLease?: AdmissionLease;
+  allowModelCapacityAvoidedAccounts?: boolean;
 }): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
-  const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
+  const {
+    req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease,
+    allowModelCapacityAvoidedAccounts,
+  } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
   try {
     const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
@@ -173,6 +193,7 @@ async function resolveAlternateCompactContext(args: {
       excludeAccountId,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
       signal: req.signal,
+      allowModelCapacityAvoidedAccounts,
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -461,6 +482,7 @@ export async function handleResponsesCompact(
         retryAfter?: string | null;
         resetAt?: unknown | unknown[];
         promoteAccountId?: string;
+        retryableModelCapacity?: boolean;
       } = {},
     ) => {
       if (!usesCodexForwardPoolAuth(ctx, route.provider)) return;
@@ -485,6 +507,7 @@ export async function handleResponsesCompact(
       sendProvider: OcxProviderConfig,
       sendHeaders: Headers,
       recovery: "normal" | "single",
+      options: { shouldRetryResponse?: (response: Response) => Promise<boolean> } = {},
     ): Promise<Response> => {
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
@@ -508,7 +531,11 @@ export async function handleResponsesCompact(
       });
       return recovery === "single"
         ? doFetch()
-        : fetchWithTransientRetry(doFetch, { abortSignal: req.signal, label: safeHostLabel(compactUrl) });
+        : fetchWithTransientRetry(doFetch, {
+          abortSignal: req.signal,
+          label: safeHostLabel(compactUrl),
+          ...(options.shouldRetryResponse ? { shouldRetryResponse: options.shouldRetryResponse } : {}),
+        });
     };
 
     // The account each outcome belongs to. Reassigned only when the alternate send below
@@ -518,7 +545,9 @@ export async function handleResponsesCompact(
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
-      upstream = await sendCompactAttempt(compactProvider, headers, "normal");
+      upstream = await sendCompactAttempt(compactProvider, headers, "normal", {
+        shouldRetryResponse: async response => !await shouldRetryCompactCapacityBody(response, req.signal),
+      });
     } catch (err) {
       if (req.signal.aborted) {
         recordCompactPoolOutcome(outcomeCtx, 499);
@@ -545,11 +574,17 @@ export async function handleResponsesCompact(
     }
 
     // Bounded same-request alternate: the regular /v1/responses path already does this
-    // (core.ts:319-423) and recognizes exactly 429/402. Without it a pool rejection
+      // (core.ts:319-423) and recognizes exactly 429/402 and bounded 503 capacity bodies.
     // surfaces to the client, which retries the compact task OUTSIDE the logical request
     // — reporting exhausted retries while another pool account sat idle (#913).
+    const compactCapacityFailure = await shouldRetryCompactCapacityBody(upstream, req.signal);
+    const compactPoolRetryOutcome: CodexUpstreamOutcome | undefined = compactCapacityFailure
+      ? "model_capacity"
+      : upstream.status === 429 || upstream.status === 402
+      ? upstream.status
+      : undefined;
     if (
-      (upstream.status === 429 || upstream.status === 402)
+      compactPoolRetryOutcome !== undefined
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
@@ -563,14 +598,26 @@ export async function handleResponsesCompact(
       ].filter(Boolean);
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
+      let alternate = await resolveAlternateCompactContext({
         req,
         config,
         route,
         selectedModelId,
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
+        allowModelCapacityAvoidedAccounts: false,
       });
+      if (!alternate && compactCapacityFailure) {
+        alternate = await resolveAlternateCompactContext({
+          req,
+          config,
+          route,
+          selectedModelId,
+          excludeAccountId: authCtx.accountId,
+          turnAdmissionLease,
+          allowModelCapacityAvoidedAccounts: true,
+        });
+      }
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's
@@ -593,9 +640,10 @@ export async function handleResponsesCompact(
             authCtx.writerGeneration,
           );
         }
-        recordCompactPoolOutcome(authCtx, upstream.status, {
+        recordCompactPoolOutcome(authCtx, compactPoolRetryOutcome, {
           retryAfter: firstRetryAfter,
           resetAt: firstResetAt,
+          retryableModelCapacity: compactCapacityFailure,
           ...(alternate.authCtx.accountId ? { promoteAccountId: alternate.authCtx.accountId } : {}),
         });
         await upstream.body?.cancel().catch(() => undefined);

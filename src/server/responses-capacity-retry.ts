@@ -8,7 +8,7 @@ import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 const CAPACITY_ERROR_CODES = new Set(["server_is_overloaded", "slow_down"]);
 const RETRYABLE_CAPACITY_CODE = "upstream_server_error";
 const DEFAULT_CAPACITY_RETRY_SECONDS = 2;
-const DEFAULT_CAPACITY_PROBE_MS = 250;
+const DEFAULT_CAPACITY_PROBE_MS = 35_000;
 const MAX_CAPACITY_PROBE_BYTES = 64 * 1024;
 
 type ResponsesError = {
@@ -26,7 +26,12 @@ type ResponsesEvent = {
 };
 
 function isCapacityError(error: ResponsesError | null | undefined): boolean {
-  return typeof error?.code === "string" && CAPACITY_ERROR_CODES.has(error.code);
+  if (typeof error?.code === "string" && CAPACITY_ERROR_CODES.has(error.code)) return true;
+  // ChatGPT has also returned the capacity terminal with a provider-specific
+  // code while keeping this stable client-facing message. Treat it the same as
+  // server_is_overloaded so the pool can move the turn to another account.
+  return typeof error?.message === "string"
+    && /selected model is (?:temporarily )?at capacity/i.test(error.message);
 }
 
 function retryableCapacityMessage(message: unknown): string {
@@ -133,7 +138,7 @@ function capacityErrorFromBlock(block: Uint8Array, decoder: TextDecoder): {
       return {
         kind: "capacity",
         error: {
-          code: error.code as string,
+          code: typeof error.code === "string" ? error.code : "server_is_overloaded",
           ...(typeof error.message === "string" ? { message: error.message } : {}),
         },
       };
