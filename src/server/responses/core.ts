@@ -3338,12 +3338,13 @@ async function handleResponsesInner(
       }
 
       // Multi-key rejection failover: rotate to the next pool key (cooldown-aware) and retry the
-      // SAME request once per remaining key. A 429 is a rate limit; a 401/403 from a pooled
+      // SAME request once per remaining key. A 429 is a rate limit; a 401/402 from a pooled
       // provider is that credential being rejected or out of credit, and the remedy is identical.
-      // Leaving 401s out let one zero-balance key in the opencode-go pool fail ~1/3 of requests
-      // while the client saw an authentication error. OAuth/forward providers and single-key
-      // pools return null immediately, so this stays a no-op for them
-      // (src/providers/key-failover.ts).
+      // Leaving those out let one zero-balance key in the opencode-go pool fail ~1/3 of requests
+      // while the client saw an authentication error. A 403 stays out deliberately: region and
+      // model-permission denials arrive as 403 with a healthy credential
+      // (src/providers/key-failover.ts). OAuth/forward providers and single-key pools return null
+      // immediately, so this stays a no-op for them.
       while (isKeyRotationStatus(upstreamResponse.status) && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOnKeyStatus(config, route.providerName, route.provider, {
           status: upstreamResponse.status,

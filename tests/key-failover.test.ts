@@ -228,11 +228,32 @@ describe("rotateProviderTransportOn429", () => {
   });
 });
 
-describe("credential-rejection rotation (401/403)", () => {
+describe("credential-rejection rotation (401/402)", () => {
   test("only rate limits and credential rejections rotate a pool key", () => {
-    expect([401, 403, 429].map(isKeyRotationStatus)).toEqual([true, true, true]);
-    // A bad request, a quota/billing body or an upstream fault is not "try the next credential".
-    expect([400, 402, 404, 500, 503].map(isKeyRotationStatus)).toEqual([false, false, false, false, false]);
+    expect([401, 402, 429].map(isKeyRotationStatus)).toEqual([true, true, true]);
+    // A bad request, a region/permission denial or an upstream fault is not "try the next
+    // credential". 403 in particular arrives for a region-restricted model while the key is
+    // healthy, and benching that key for the rejection window disables the NEXT real 429's
+    // failover — so the unified loop must pass it through untouched.
+    expect([400, 403, 404, 500, 503].map(isKeyRotationStatus)).toEqual([false, false, false, false, false]);
+  });
+
+  test("a region-style 403 leaves every pool key live", async () => {
+    // The loop itself is what must skip a 403, and it must learn that from the ONE shared
+    // predicate — a local `status === 403` re-added here would bench healthy keys again.
+    const core = await Bun.file("src/server/responses/core.ts").text();
+    expect(core).toContain("while (isKeyRotationStatus(upstreamResponse.status) && hasKeyPoolFailover(route.provider))");
+    expect(core).toContain("if (isKeyRotationStatus(response.status) && hasKeyPoolFailover(route.provider))");
+    expect(core).not.toMatch(/status\s*===\s*403/);
+
+    const now = 6_000;
+    const config = makeConfig({ authMode: "key", apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    expect(isKeyRotationStatus(403)).toBe(false);
+    // Nothing cools and nothing swaps: the request keeps the credential it used, so a
+    // region-restricted model cannot take the pool's failover away for ten minutes.
+    expect(getKeyCooldownUntil("p", "k1", now)).toBeNull();
+    expect(getKeyCooldownUntil("p", "k2", now)).toBeNull();
+    expect(config.providers.p!.apiKey).toBe("key-alpha-000111222333");
   });
 
   test("a rejected key is cooled for the rejection window and the next key takes over", () => {

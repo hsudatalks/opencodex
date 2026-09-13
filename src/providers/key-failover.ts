@@ -203,15 +203,23 @@ function rotateKeyCooling(
 }
 
 /**
- * A pool key the upstream rejected as unauthorized or out of credit.
+ * A pool key the upstream rejected as a credential problem: rate-limited (429), rejected or out
+ * of credit (401), or unpaid (402 — the same billing status the Codex pool path already treats as
+ * quota exhaustion, src/codex/routing.ts).
  *
  * These statuses are key-scoped by construction: each pool entry is an independent credential,
  * so the remedy is the next entry — the same remedy a 429 gets. Without this a single depleted
  * key poisoned its share of requests while the client saw an authentication error, which is how
  * a zero-balance key in the opencode-go pool surfaced as "the key is wrong" on one machine.
+ *
+ * 403 is deliberately NOT here. It is not credential-scoped in general — a region restriction or
+ * a model-permission denial arrives as 403 while the credential is perfectly healthy — and its
+ * cooldown benches that key for ten minutes, which can disable failover for the next real 429.
+ * Providers that report an exhausted key as 403 also report it as 401/402 or as a 429 with a
+ * structured exhaustion body, so those paths still rotate.
  */
 export function isKeyRotationStatus(status: number): boolean {
-  return status === 429 || status === 401 || status === 403;
+  return status === 429 || status === 401 || status === 402;
 }
 
 /**
