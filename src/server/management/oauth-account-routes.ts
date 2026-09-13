@@ -445,7 +445,16 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const name = (url.searchParams.get("name") ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     const { listProviderApiKeys } = await import("../../providers/api-keys");
-    return jsonResponse(listProviderApiKeys(config, name));
+    const listed = listProviderApiKeys(config, name);
+    // `?quota=1` asks each key for its OWN remaining window — one upstream call per key. It is
+    // opt-in because that cost should not sit on every provider-list render, and it is the only
+    // way to see that one credential is exhausted while its peers are untouched.
+    if (url.searchParams.get("quota") !== "1") return jsonResponse(listed);
+    const { probeProviderKeyQuotas } = await import("../../providers/quota");
+    return jsonResponse({
+      ...listed,
+      quotas: await probeProviderKeyQuotas(name, config.providers[name]!, config),
+    });
   }
   if (url.pathname === "/api/providers/keys" && req.method === "POST") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; key?: string; label?: string };

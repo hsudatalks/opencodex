@@ -57,6 +57,8 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const ZAI_BASE_URL = "https://api.z.ai";
+/** The China coding-plan surface: same monitor path, its own keys and plan tiers. */
+const BIGMODEL_BASE_URL = "https://open.bigmodel.cn";
 const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
@@ -308,6 +310,16 @@ function isCanonicalClineBaseUrl(baseUrl: string): boolean {
 function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`;
+}
+
+/**
+ * The China coding-plan host, with or without its `/api/coding/paas/v4` suffix. The live
+ * `zhipu-bigmodel-coding` provider row is named for the vendor rather than the registry id, so
+ * the destination is the only reliable signal that this quota probe applies.
+ */
+function isCanonicalBigmodelCodingBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === BIGMODEL_BASE_URL || (normalized?.startsWith(`${BIGMODEL_BASE_URL}/`) ?? false);
 }
 
 function isCanonicalMinimaxBaseUrl(baseUrl: string): boolean {
@@ -632,10 +644,13 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
  * Authenticates with the API key as a Bearer token per Z.AI's API reference.
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
-  if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
+  const host = isCanonicalZaiBaseUrl(config.baseUrl)
+    ? ZAI_BASE_URL
+    : isCanonicalBigmodelCodingBaseUrl(config.baseUrl) ? BIGMODEL_BASE_URL : undefined;
+  if (!host) return null;
   const apiKey = resolveEnvValue(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${ZAI_BASE_URL}/api/monitor/usage/quota/limit`, {
+  const response = await fetch(`${host}/api/monitor/usage/quota/limit`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -648,30 +663,57 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const body = asRecord(await response.json().catch(() => null));
   if (!body || body.success === false) return null;
   const data = asRecord(body.data) ?? body;
-  // The plugin renders a 5h token window, a weekly window, and a monthly MCP
-  // window. Look for percent fields with window identifiers.
   const quota: ProviderQuota = { updatedAt: Date.now() };
   let windows = 0;
-  const percentAt = (key: string): number | undefined => {
-    const value = normalizePercent(data?.[key]);
-    if (value !== undefined) return value;
-    const nested = asRecord(data?.quota);
-    return nested ? normalizePercent(nested[key]) : undefined;
-  };
-  const fiveHour = percentAt("fiveHourPercent") ?? percentAt("fiveHourUsage") ?? percentAt("fiveHourUsed");
-  const weekly = percentAt("weeklyPercent") ?? percentAt("weeklyUsage") ?? percentAt("weeklyUsed");
-  const monthly = percentAt("monthlyPercent") ?? percentAt("mcpPercent") ?? percentAt("monthlyMCPUsage");
-  if (fiveHour !== undefined) {
-    quota.fiveHourPercent = fiveHour;
+  // Live shape: `data.limits[]`, one entry per window, each with its own `percentage` and
+  // `nextResetTime`. `TIME_LIMIT` whose unit*number is 5 hours is the coding plan's 5-hour
+  // cycle (the plan documents a 5-hour limit plus a weekly one, which is the second entry
+  // here). A percentage is the only shared field, so the window is identified by its own
+  // declared span rather than by array position.
+  for (const raw of Array.isArray(data?.limits) ? data.limits : []) {
+    const limit = asRecord(raw);
+    if (!limit) continue;
+    const percent = normalizePercent(limit.percentage);
+    if (percent === undefined) continue;
+    const resetAt = toFiniteNumber(limit.nextResetTime);
+    const unit = toFiniteNumber(limit.unit);
+    const count = toFiniteNumber(limit.number);
+    const isFiveHour = limit.type === "TIME_LIMIT" && unit !== undefined && count !== undefined && unit * count === 5;
+    if (isFiveHour) {
+      quota.fiveHourPercent = percent;
+      if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+    } else if (quota.weeklyPercent === undefined) {
+      quota.weeklyPercent = percent;
+      if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
+    } else if (quota.monthlyPercent === undefined) {
+      quota.monthlyPercent = percent;
+      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    }
     windows += 1;
   }
-  if (weekly !== undefined) {
-    quota.weeklyPercent = weekly;
-    windows += 1;
-  }
-  if (monthly !== undefined) {
-    quota.monthlyPercent = monthly;
-    windows += 1;
+  // Flat fallback for a surface that reports the windows as top-level percent fields.
+  if (windows === 0) {
+    const percentAt = (key: string): number | undefined => {
+      const value = normalizePercent(data?.[key]);
+      if (value !== undefined) return value;
+      const nested = asRecord(data?.quota);
+      return nested ? normalizePercent(nested[key]) : undefined;
+    };
+    const fiveHour = percentAt("fiveHourPercent") ?? percentAt("fiveHourUsage") ?? percentAt("fiveHourUsed");
+    const weekly = percentAt("weeklyPercent") ?? percentAt("weeklyUsage") ?? percentAt("weeklyUsed");
+    const monthly = percentAt("monthlyPercent") ?? percentAt("mcpPercent") ?? percentAt("monthlyMCPUsage");
+    if (fiveHour !== undefined) {
+      quota.fiveHourPercent = fiveHour;
+      windows += 1;
+    }
+    if (weekly !== undefined) {
+      quota.weeklyPercent = weekly;
+      windows += 1;
+    }
+    if (monthly !== undefined) {
+      quota.monthlyPercent = monthly;
+      windows += 1;
+    }
   }
   return windows > 0 ? report(provider, "zai:quota-limit", quota) : null;
 }
@@ -2074,7 +2116,11 @@ async function maybeFetchProviderQuota(
     if ((provider.authMode ?? "key") === "key" && name === "cline-pass") {
       return fetchClineQuota(name, provider);
     }
-    if ((provider.authMode ?? "key") === "key" && name === "zai") {
+    // The GLM coding plan answers the same monitor path from two hosts, and the live China row
+    // is named for the vendor (`zhipu-bigmodel-coding`) rather than a registry id, so the
+    // destination has to be part of the match.
+    if ((provider.authMode ?? "key") === "key"
+      && (name === "zai" || isCanonicalZaiBaseUrl(provider.baseUrl) || isCanonicalBigmodelCodingBaseUrl(provider.baseUrl))) {
       return fetchZaiQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && (name === "minimax" || name === "minimax-cn")) {
@@ -2099,6 +2145,54 @@ async function maybeFetchProviderQuota(
   } catch {
     return null;
   }
+}
+
+/** One pool key's own quota, as the provider reports it for THAT credential. */
+export interface ProviderKeyQuota {
+  id: string;
+  label?: string;
+  active: boolean;
+  source?: string;
+  quota?: ProviderQuota;
+  /** Set when this key reported nothing, so a surface shows "unknown" rather than a false 0%. */
+  error?: string;
+}
+
+/**
+ * Probe every key in a provider's pool with ITS OWN credential.
+ *
+ * A pool exists precisely because the keys carry independent entitlements, so a provider-level
+ * probe — which only ever uses the active key — cannot answer "how much is left on each key".
+ * Each probe reuses the provider's own quota path by overriding the credential, so a provider
+ * that gains a probe gains per-key reporting with no extra wiring.
+ */
+export async function probeProviderKeyQuotas(
+  name: string,
+  provider: OcxProviderConfig,
+  config: OcxConfig,
+): Promise<ProviderKeyQuota[]> {
+  const pool = provider.apiKeyPool ?? [];
+  if (pool.length === 0) return [];
+  return Promise.all(pool.map(async entry => {
+    const identity = {
+      id: entry.id,
+      ...(entry.label ? { label: entry.label } : {}),
+      active: provider.apiKey === entry.key,
+    };
+    try {
+      const result = await maybeFetchProviderQuota(
+        name,
+        { ...provider, apiKey: entry.key, apiKeyPool: undefined },
+        config,
+        true,
+      );
+      if (result === TERMINAL_QUOTA_FAILURE) return { ...identity, error: "rejected" };
+      if (!result) return { ...identity, error: "unavailable" };
+      return { ...identity, source: result.source, quota: result.quota };
+    } catch (error) {
+      return { ...identity, error: error instanceof Error ? error.message : String(error) };
+    }
+  }));
 }
 
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {

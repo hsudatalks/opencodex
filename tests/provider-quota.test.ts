@@ -13,6 +13,7 @@ import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
   parseXaiCreditsResponse,
+  probeProviderKeyQuotas,
   setProviderQuotaBeforePublishForTests,
 } from "../src/providers/quota";
 import type { OcxConfig } from "../src/types";
@@ -2165,5 +2166,139 @@ describe("fetchProviderQuotaReports", () => {
     } as OcxConfig;
     const pruned = await fetchProviderQuotaReports(disabledConfig, true);
     expect(pruned.reports).toEqual([]);
+  });
+});
+
+describe("per-key coding-plan quota", () => {
+  /** The live bigmodel shape: one limits[] entry per window, each with its own reset. */
+  function bigmodelBody(currentValue: number, weeklyPercent: number): string {
+    return JSON.stringify({
+      code: 200,
+      msg: "操作成功",
+      success: true,
+      data: {
+        level: "max",
+        limits: [
+          {
+            type: "TIME_LIMIT",
+            unit: 5,
+            number: 1,
+            usage: 4000,
+            currentValue,
+            remaining: 4000 - currentValue,
+            percentage: Math.round((currentValue / 4000) * 100),
+            nextResetTime: 1_790_864_673_998,
+            usageDetails: [{ modelCode: "search-prime", usage: 0 }],
+          },
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: weeklyPercent, nextResetTime: 1_789_347_165_846 },
+        ],
+      },
+    });
+  }
+
+  function bigmodelConfig(): OcxConfig {
+    return {
+      port: 10100,
+      defaultProvider: "zhipu-bigmodel-coding",
+      providers: {
+        "zhipu-bigmodel-coding": {
+          adapter: "openai-chat",
+          baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+          authMode: "key",
+          apiKey: "glm-key-a",
+          apiKeyPool: [
+            { id: "ka", key: "glm-key-a", label: "glm-a" },
+            { id: "kb", key: "glm-key-b", label: "glm-b" },
+          ],
+        },
+      },
+    } as OcxConfig;
+  }
+
+  test("each zhipu key reports its own 5-hour window, and the plan's second window", async () => {
+    // The live row is named for the vendor, not a registry id, and it sits on the China host —
+    // before this the probe was gated on `name === "zai"` and `api.z.ai`, so the whole plan
+    // reported nothing at all.
+    const seenKeys: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const key = authorization.replace(/^Bearer /, "");
+      seenKeys.push(key);
+      return new Response(bigmodelBody(key === "glm-key-a" ? 2 : 0, 7), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const config = bigmodelConfig();
+    const quotas = await probeProviderKeyQuotas(
+      "zhipu-bigmodel-coding",
+      config.providers["zhipu-bigmodel-coding"]!,
+      config,
+    );
+
+    // One upstream call per key, each with that key's OWN credential — that is the whole point:
+    // one credential can be spent while its peers are untouched.
+    expect(seenKeys.sort()).toEqual(["glm-key-a", "glm-key-b"]);
+    expect(quotas.map(entry => entry.id)).toEqual(["ka", "kb"]);
+    expect(quotas.map(entry => entry.active)).toEqual([true, false]);
+    expect(quotas[0]!.quota?.fiveHourPercent).toBe(0); // 2/4000 rounds to 0%
+    expect(quotas[0]!.quota?.fiveHourResetAt).toBe(1_790_864_673_998);
+    expect(quotas[1]!.quota?.fiveHourPercent).toBe(0);
+    // The second limits[] entry is the plan's weekly window.
+    expect(quotas[0]!.quota?.weeklyPercent).toBe(7);
+  });
+
+  test("a spent key is visible as spent, not as an absent row", async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      if (authorization.includes("glm-key-b")) {
+        return new Response(JSON.stringify({ error: { message: "unauthorized" } }), { status: 401 });
+      }
+      return new Response(bigmodelBody(4000, 100), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const config = bigmodelConfig();
+    const quotas = await probeProviderKeyQuotas(
+      "zhipu-bigmodel-coding",
+      config.providers["zhipu-bigmodel-coding"]!,
+      config,
+    );
+    expect(quotas[0]!.quota?.fiveHourPercent).toBe(100);
+    // A rejected credential is named as rejected rather than rendered as 0% used.
+    expect(quotas[1]!.quota).toBeUndefined();
+    expect(quotas[1]!.error).toBe("rejected");
+  });
+
+  test("opencode-go reports each key's own rolling window", async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const rolling = authorization.includes("oc-a") ? 12 : 64;
+      return new Response(JSON.stringify({
+        usage: {
+          rolling: { percent: rolling, resetsAt: 1_789_400_000_000 },
+          weekly: { percent: 30 },
+          monthly: { percent: 40 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const config = {
+      port: 10100,
+      defaultProvider: "opencode-go",
+      providers: {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          authMode: "key",
+          apiKey: "oc-a",
+          apiKeyPool: [{ id: "oa", key: "oc-a" }, { id: "ob", key: "oc-b" }],
+        },
+      },
+    } as OcxConfig;
+
+    const quotas = await probeProviderKeyQuotas("opencode-go", config.providers["opencode-go"]!, config);
+    expect(quotas.map(entry => entry.quota?.fiveHourPercent)).toEqual([12, 64]);
+    expect(quotas.map(entry => entry.quota?.weeklyPercent)).toEqual([30, 30]);
   });
 });

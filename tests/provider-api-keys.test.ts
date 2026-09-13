@@ -117,3 +117,53 @@ describe("provider API key pool", () => {
     }
   });
 });
+
+describe("per-key quota on the key list", () => {
+  test("?quota=1 asks each key for its own window; the plain listing makes no upstream call", async () => {
+    const realFetch = globalThis.fetch;
+    let upstreamCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("opencode.ai")) return realFetch(input, init);
+      upstreamCalls += 1;
+      // Each key carries its own entitlement: that is the whole reason to probe per credential.
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const rolling = authorization.includes("key-first") ? 12 : 64;
+      return new Response(JSON.stringify({ usage: { rolling: { percent: rolling }, weekly: { percent: 30 } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    try {
+      const added = await fetch(new URL("/api/providers/keys", server.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "opencode-go", key: "key-second-444555666777", label: "second" }),
+      });
+      expect(added.status).toBe(201);
+
+      // Without the flag this stays a metadata read: no upstream call, no added latency.
+      const plain = await fetch(new URL("/api/providers/keys?name=opencode-go", server.url));
+      const plainBody = await plain.json() as Record<string, unknown>;
+      expect("quotas" in plainBody).toBe(false);
+      expect(upstreamCalls).toBe(0);
+
+      const withQuota = await fetch(new URL("/api/providers/keys?name=opencode-go&quota=1", server.url));
+      expect(withQuota.status).toBe(200);
+      const body = await withQuota.json() as {
+        quotas?: Array<{ id: string; active: boolean; quota?: { fiveHourPercent?: number } }>;
+      };
+      expect(body.quotas?.length).toBe(2);
+      expect(upstreamCalls).toBe(2);
+      // `POST /api/providers/keys` activates the key it adds, so the newly added credential is
+      // the active one and the original is now its peer.
+      const byActive = Object.fromEntries((body.quotas ?? []).map(entry => [entry.active, entry.quota?.fiveHourPercent]));
+      expect(byActive).toEqual({ true: 64, false: 12 });
+    } finally {
+      globalThis.fetch = realFetch;
+      await server.stop(true);
+    }
+  });
+});
