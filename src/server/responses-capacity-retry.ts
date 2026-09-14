@@ -6,6 +6,16 @@ import {
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 
 const CAPACITY_ERROR_CODES = new Set(["server_is_overloaded", "slow_down"]);
+/**
+ * Both wordings matter. The "selected model" one arrives when a specific model is drained; the
+ * "servers are currently overloaded" one is what the ChatGPT pool accounts actually answer with
+ * (24h of gateway logs: every 503 on gpt-5.6-sol carried it). Only the former used to be read, so
+ * an overload 503 that carried a provider-specific code — or no OpenAI-shaped error at all — never
+ * failed the turn over to another account.
+ */
+const CAPACITY_MESSAGE = /(?:selected model is (?:temporarily )?at capacity|servers are currently overloaded|server_is_overloaded|slow_down)/i;
+/** The message is the only signal in a body that carries no OpenAI-shaped error object. */
+const MAX_CAPACITY_BODY_SCAN = 512;
 const RETRYABLE_CAPACITY_CODE = "upstream_server_error";
 const DEFAULT_CAPACITY_RETRY_SECONDS = 2;
 const DEFAULT_CAPACITY_PROBE_MS = 35_000;
@@ -27,11 +37,7 @@ type ResponsesEvent = {
 
 function isCapacityError(error: ResponsesError | null | undefined): boolean {
   if (typeof error?.code === "string" && CAPACITY_ERROR_CODES.has(error.code)) return true;
-  // ChatGPT has also returned the capacity terminal with a provider-specific
-  // code while keeping this stable client-facing message. Treat it the same as
-  // server_is_overloaded so the pool can move the turn to another account.
-  return typeof error?.message === "string"
-    && /selected model is (?:temporarily )?at capacity/i.test(error.message);
+  return typeof error?.message === "string" && CAPACITY_MESSAGE.test(error.message);
 }
 
 function retryableCapacityMessage(message: unknown): string {
@@ -269,12 +275,19 @@ export function createResponsesCapacityRetryBlockRewrite(options?: {
 }
 
 export function isResponsesCapacityErrorBody(bodyText: string): boolean {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(bodyText) as { error?: ResponsesError | null };
-    return isCapacityError(parsed.error);
+    parsed = JSON.parse(bodyText);
   } catch {
-    return false;
+    // A pre-stream 503 can arrive as plain text, which JSON.parse rejects outright. The wording
+    // is still the capacity signal, and reading only JSON made the pool treat these as terminal.
+    return CAPACITY_MESSAGE.test(bodyText.slice(0, MAX_CAPACITY_BODY_SCAN));
   }
+  if (isCapacityError((parsed as { error?: ResponsesError | null } | null)?.error)) return true;
+  // The ChatGPT backend's own error layer answers with `{"detail": "..."}` instead of the
+  // OpenAI error object; without this the retryable capacity path is unreachable for it.
+  const detail = (parsed as { detail?: unknown } | null)?.detail;
+  return typeof detail === "string" && CAPACITY_MESSAGE.test(detail);
 }
 
 /** Rewrite only the client-facing error code; callers retain the original body for logs. */

@@ -12,10 +12,13 @@ function eventBlock(event: Record<string, unknown>): string {
   return `event: ${String(event.type ?? "message")}\ndata: ${JSON.stringify(event)}`;
 }
 
-function failedEvent(code: string): Record<string, unknown> {
+function failedEvent(
+  code: string,
+  message = "Our servers are currently overloaded. Please try again later.",
+): Record<string, unknown> {
   const error = {
     code,
-    message: "Our servers are currently overloaded. Please try again later.",
+    message,
     type: "server_error",
   };
   return {
@@ -64,7 +67,9 @@ describe("Responses capacity retry adaptation", () => {
 
   test("does not rewrite unrelated failures", () => {
     const rewrite = createResponsesCapacityRetryBlockRewrite();
-    const original = eventBlock(failedEvent("invalid_prompt"));
+    // The overload wording is itself a capacity signal now, so an unrelated failure has to carry
+    // an unrelated message for this to test what it says it tests.
+    const original = eventBlock(failedEvent("invalid_prompt", "Invalid prompt: unsafe content."));
     expect(rewrite(original)).toEqual([original]);
   });
 
@@ -80,6 +85,25 @@ describe("Responses capacity retry adaptation", () => {
     };
     expect(rewritten.error.code).toBe("upstream_server_error");
     expect(rewritten.error.message).toContain("try again in 2s");
+  });
+
+  test("recognizes the overload 503 however the backend wraps it", () => {
+    // The gateway's own 24h of ChatGPT-pool logs: every 503 on gpt-5.6-sol carried the overload
+    // sentence, and none of them failed the turn over to another account (all had one attempt).
+    // The body classifier only read the OpenAI error object, so the shapes below were invisible.
+    const overload = "Our servers are currently overloaded. Please try again later.";
+    expect(isResponsesCapacityErrorBody(overload)).toBe(true);
+    expect(isResponsesCapacityErrorBody(JSON.stringify({ detail: overload }))).toBe(true);
+    expect(isResponsesCapacityErrorBody(JSON.stringify({
+      error: { code: "model_at_capacity", message: overload, type: "server_error" },
+    }))).toBe(true);
+    // A non-capacity pre-stream rejection must stay terminal: `{"detail": ...}` is also how this
+    // backend reports "Stream must be set to true", and retrying that on another account is futile.
+    expect(isResponsesCapacityErrorBody(JSON.stringify({ detail: "Stream must be set to true" }))).toBe(false);
+    expect(isResponsesCapacityErrorBody(JSON.stringify({
+      error: { code: "invalid_request_error", message: "Unknown parameter: store", type: "invalid_request_error" },
+    }))).toBe(false);
+    expect(isResponsesCapacityErrorBody("")).toBe(false);
   });
 
   test("model capacity is neutral account-health evidence", () => {
