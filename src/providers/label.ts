@@ -1,5 +1,14 @@
 import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
+/**
+ * An OAuth/API-key pool account id as the usage ledger writes it: the first eight hex characters
+ * of the account identity (`src/oauth/store.ts`). Command Code's account pool stamps it onto the
+ * provider label — `command-code-93b610d2` — and without collapsing it those rows never match the
+ * provider's own price rows, so every such request (and every combo turn whose attempt chain
+ * touched one) was counted as unbillable.
+ */
+const POOL_ACCOUNT_ID_LOG_LABEL_RE = /^[a-f0-9]{8}$/;
+
 function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
 }
@@ -15,5 +24,7 @@ export function baseProviderLabel(provider: string): string {
   // ChatGPT auth-pool and OpenAI passthrough are the same Codex/OpenAI usage surface, so display
   // summaries normalize them to one `openai` row after recognized main/pool suffixes are removed.
   if (suffix === "main") return canonicalUsageProviderLabel(provider.slice(0, cut));
-  return CODEX_ACCOUNT_LOG_LABEL_RE.test(suffix) ? canonicalUsageProviderLabel(provider.slice(0, cut)) : provider;
+  return CODEX_ACCOUNT_LOG_LABEL_RE.test(suffix) || POOL_ACCOUNT_ID_LOG_LABEL_RE.test(suffix)
+    ? canonicalUsageProviderLabel(provider.slice(0, cut))
+    : provider;
 }
