@@ -177,6 +177,67 @@ describe("PostgreSQL usage summary cache", () => {
     expect(aggregateReads).toBe(2);
   });
 
+  test("a zero-request rollup bucket never reaches the provider or model breakdown", async () => {
+    // Repricing a past window zeroes the accumulator rows it replaces (the ingest role can UPDATE
+    // but not DELETE), so the read model can legitimately hold bucket rows with no requests. They
+    // must not render as empty provider/model lines.
+    const tx = {
+      unsafe: async (query: string) => {
+        if (query.includes("dashboard_read_model_state")) return [{ ready: true }];
+        if (query.includes("FROM opencodex_usage.requests")) return [];
+        if (query.includes("dashboard_request_hourly") && !query.includes("GROUP BY")) {
+          return [{
+            requests: 5, oldest_occurred_at: "2026-08-10T00:00:00.000Z", attempt_count: 5,
+            measured_requests: 5, reported_requests: 5, unreported_requests: 0,
+            unsupported_requests: 0, estimated_requests: 0, input_tokens: 10, output_tokens: 2,
+            cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+            reasoning_output_tokens: 0, total_tokens: 12, estimated_cost_usd: 0.25,
+            priced_requests: 5, unpriced_requests: 0, unmetered_requests: 0,
+          }];
+        }
+        if (query.includes("dashboard_request_hourly")) {
+          return [{ date: "2026-08-10", requests: 5, measured_requests: 5, reported_requests: 5, total_tokens: 12 }];
+        }
+        if (query.includes("dashboard_model_hourly") && query.includes("to_char")) {
+          return [
+            { date: "2026-08-10", provider: "command-code", model: "deepseek/deepseek-v4.1-flash", requests: 5, attempt_count: 5, total_tokens: 12 },
+            { date: "2026-08-10", provider: "command-code-93b610d2", model: "deepseek/deepseek-v4.1-flash", requests: 0, attempt_count: 0, total_tokens: 0 },
+          ];
+        }
+        if (query.includes("dashboard_model_hourly")) {
+          return [
+            { provider: "command-code", model: "deepseek/deepseek-v4.1-flash", requests: 5, attempt_count: 5,
+              measured_requests: 5, reported_requests: 5, estimated_requests: 0,
+              total_tokens: 12, input_tokens: 10, output_tokens: 2,
+              estimated_cost_usd: 0.25, priced_attribution_count: 5 },
+            { provider: "command-code-93b610d2", model: "deepseek/deepseek-v4.1-flash", requests: 0, attempt_count: 0,
+              measured_requests: 0, reported_requests: 0, estimated_requests: 0,
+              total_tokens: 0, input_tokens: 0, output_tokens: 0,
+              estimated_cost_usd: 0, priced_attribution_count: 0 },
+          ];
+        }
+        if (query.includes("dashboard_provider_hourly")) {
+          return [
+            { provider: "command-code", requests: 5, attempt_count: 5, measured_requests: 5,
+              reported_requests: 5, estimated_requests: 0, total_tokens: 12,
+              estimated_cost_usd: 0.25, priced_attribution_count: 5 },
+            { provider: "command-code-93b610d2", requests: 0, attempt_count: 0, measured_requests: 0,
+              reported_requests: 0, estimated_requests: 0, total_tokens: 0,
+              estimated_cost_usd: 0, priced_attribution_count: 0 },
+          ];
+        }
+        return [];
+      },
+    };
+    const sql = { begin: async (_mode: string, run: (transaction: typeof tx) => Promise<unknown>) => run(tx) } as unknown as SQL;
+
+    const result = await summarizeUsageFromPostgres(sql, "all", Date.parse("2026-08-11T00:00:00Z"), "all");
+
+    expect(result.providers.map(row => row.provider)).toEqual(["command-code"]);
+    expect(result.models.map(row => row.provider)).toEqual(["command-code"]);
+    expect(result.days.flatMap(day => day.models).map(row => row.provider)).toEqual(["command-code"]);
+  });
+
   test("caches historical windows by their stable window key", async () => {
     let aggregateReads = 0;
     const tx = {

@@ -778,6 +778,10 @@ async function summarizeDashboardRollupsInTransaction(
     GROUP BY 1 ORDER BY requests DESC
   `, params);
   const summaryTotals = totalsFromRow(totals[0]);
+  // The hourly rollups are accumulators: repricing a past window zeroes the old buckets in place
+  // (the ingest role may UPDATE but not DELETE), which leaves rows carrying no requests. Such a row
+  // has nothing to say and would otherwise render an empty provider/model line in the dashboard,
+  // so drop it here rather than teaching every reader to ignore it.
   const models = modelRows.map<UsageModel>(row => ({
     provider: String(row.provider), model: String(row.model),
     requests: numeric(row.requests), attemptCount: numeric(row.attempt_count),
@@ -785,18 +789,19 @@ async function summarizeDashboardRollupsInTransaction(
     estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens),
     inputTokens: numeric(row.input_tokens), outputTokens: numeric(row.output_tokens), shareRatio: 0,
     ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
-  })).sort(compareModels);
+  })).filter(model => model.requests > 0).sort(compareModels);
   const providers = providerRows.map<UsageProvider>(row => ({
     provider: String(row.provider), requests: numeric(row.requests), attemptCount: numeric(row.attempt_count),
     measuredRequests: numeric(row.measured_requests), reportedRequests: numeric(row.reported_requests),
     estimatedRequests: numeric(row.estimated_requests), totalTokens: numeric(row.total_tokens), shareRatio: 0,
     ...(numeric(row.priced_attribution_count) > 0 ? { estimatedCostUsd: numeric(row.estimated_cost_usd) } : {}),
-  })).sort(compareProviders);
+  })).filter(provider => provider.requests > 0).sort(compareProviders);
   for (const model of models) model.shareRatio = summaryTotals.totalTokens === 0 ? 0 : model.totalTokens / summaryTotals.totalTokens;
   for (const provider of providers) provider.shareRatio = summaryTotals.totalTokens === 0 ? 0 : provider.totalTokens / summaryTotals.totalTokens;
   return {
     range, surface, since: sinceForRange(range, now), generatedAt: now, summary: summaryTotals,
-    days: dayGrid(range, now, timestampMs(totals[0]?.oldest_occurred_at), days, dayModels),
+    days: dayGrid(range, now, timestampMs(totals[0]?.oldest_occurred_at), days,
+      dayModels.filter(row => numeric(row.requests) > 0)),
     models: cappedModels(models, summaryTotals.totalTokens), providers,
   };
 }
