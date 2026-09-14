@@ -192,7 +192,8 @@ describe("usage summary retained-store accounting", () => {
       const req = new Request(`http://127.0.0.1:10100/api/usage?range=${range}`);
       expect((await handleManagementAPI(req, new URL(req.url), baseConfig()))!.status).toBe(200);
     }
-    const seed = getUsageSummaryCacheEntry("30d:all");
+    // The JSONL cache key carries the key filter and breakdown flag as trailing segments.
+    const seed = getUsageSummaryCacheEntry("30d:all::");
     expect(seed).toBeDefined();
     // Simulate an older-started slow read that COMPLETES last: its generatedAt
     // is older than everything else, but its revisionReadAt is the newest.

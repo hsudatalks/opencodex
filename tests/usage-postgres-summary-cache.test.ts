@@ -44,8 +44,9 @@ describe("PostgreSQL usage summary cache", () => {
 
     const result = await summarizeUsageFromPostgres(sql, "all", Date.parse("2026-08-11T00:00:00Z"), "all");
 
+    // The fourth parameter is the admission-key dimension id: null unless a key narrows the read.
     expect(factWindows).toEqual([[
-      "2026-08-11T00:00:00.000Z", 0, "2026-08-11T00:00:00.000Z",
+      "2026-08-11T00:00:00.000Z", 0, "2026-08-11T00:00:00.000Z", null,
     ]]);
     expect(result.summary).toMatchObject({ requests: 3, attemptCount: 4, totalTokens: 36, estimatedCostUsd: 0.5 });
     expect(result.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 3, estimatedCostUsd: 0.5 });
@@ -86,7 +87,7 @@ describe("PostgreSQL usage summary cache", () => {
 
     expect(result.summary).toMatchObject({ requests: 3, attemptCount: 4, totalTokens: 15 });
     expect(factWindows).toEqual([
-      ["2026-08-12T12:00:00.000Z", 0, "2026-08-12T12:30:00.000Z"],
+      ["2026-08-12T12:00:00.000Z", 0, "2026-08-12T12:30:00.000Z", null],
     ]);
     expect(rollupWindows[0]).toEqual([
       "2026-08-09T16:00:00.000Z", 0, "2026-08-12T11:59:59.999Z",
@@ -127,7 +128,7 @@ describe("PostgreSQL usage summary cache", () => {
     expect(result.since).toBe(Date.parse("2026-08-12T00:00:00.000+08:00"));
     expect(result.days.map(day => day.date)).toEqual(["2026-08-12"]);
     expect(factWindows).toEqual([
-      ["2026-08-12T15:00:00.000Z", 0, "2026-08-12T15:59:59.999Z"],
+      ["2026-08-12T15:00:00.000Z", 0, "2026-08-12T15:59:59.999Z", null],
     ]);
     expect(rollupWindows[0]).toEqual([
       "2026-08-11T16:00:00.000Z", 0, "2026-08-12T14:59:59.999Z",

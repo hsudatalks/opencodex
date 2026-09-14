@@ -77,6 +77,27 @@ interface UsageProvider {
   shareRatio: number;
 }
 
+/**
+ * One admission key's share of the window. The Usage page is per-key because a gateway key
+ * belongs to one client: it is the only view that answers "which machine spent this".
+ */
+interface UsageKeyRow {
+  id: string;
+  name?: string;
+  requests: number;
+  attemptCount: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  estimatedRequests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+  unmeteredRequests: number;
+  estimatedCostUsd: number;
+}
+
 interface UsageResponse {
   range: Range;
   surface: UsageSurface;
@@ -86,6 +107,10 @@ interface UsageResponse {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  keys?: UsageKeyRow[];
+  apiKeyId?: string;
+  /** Set when the range is too wide to compute the per-key breakdown (see keyBreakdownSupported). */
+  keyBreakdownUnavailable?: boolean;
   historyTruncated: boolean;
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
@@ -95,6 +120,14 @@ interface UsageResponse {
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+/**
+ * The per-key breakdown is served from raw facts, which stays affordable only for the short
+ * windows; the hourly read model has no key dimension to answer the wide ones.
+ */
+function keyBreakdownSupported(range: Range): boolean {
+  return range === "1d" || range === "7d";
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -191,16 +224,24 @@ function UsageFilters({
   surface,
   range,
   refreshing,
+  keyFilter,
+  keyOptions,
+  keyFilterSupported,
   onSurface,
   onRange,
+  onKeyFilter,
   onRefresh,
   t,
 }: {
   surface: UsageSurface;
   range: Range;
   refreshing: boolean;
+  keyFilter: string;
+  keyOptions: Array<{ id: string; name: string }>;
+  keyFilterSupported: boolean;
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
+  onKeyFilter: (id: string) => void;
   onRefresh: () => void;
   t: TFn;
 }) {
@@ -251,6 +292,33 @@ function UsageFilters({
           );
         })}
       </div>
+      <label className="muted text-control usage-key-select">
+        <span>{t("usage.filter.key.label")}</span>
+        <select
+          className="input"
+          value={keyFilter}
+          aria-label={t("usage.filter.key.label")}
+          title={keyFilterSupported ? undefined : t("usage.keys.rangeLimited")}
+          disabled={!keyFilterSupported}
+          onChange={event => onKeyFilter(event.target.value)}
+        >
+          <option value="">{t("usage.filter.key.all")}</option>
+          {keyOptions.map(option => (
+            <option key={option.id} value={option.id}>
+              {option.name || (option.id === "" ? t("usage.key.none") : option.id)}
+            </option>
+          ))}
+          {/* A report held in the session cache can name a key the current list no longer has. */}
+          {keyFilter !== "" && !keyOptions.some(option => option.id === keyFilter) && (
+            <option value={keyFilter}>{keyFilter}</option>
+          )}
+        </select>
+      </label>
+      {keyFilter !== "" && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onKeyFilter("")}>
+          {t("usage.filter.key.clear")}
+        </button>
+      )}
       <button
         type="button"
         className="btn btn-ghost btn-icon"
@@ -725,6 +793,81 @@ function UsageCoveragePanel({
  * Workspace layout for Usage: left rail picks one report section so Overview /
  * Models / Providers / Coverage do not stack into a long scroll.
  */
+function UsageKeysTable({
+  rows,
+  selectedKeyId,
+  onSelectKey,
+  locale,
+  t,
+  workspace = false,
+}: {
+  rows: UsageKeyRow[];
+  selectedKeyId: string;
+  onSelectKey: (id: string) => void;
+  locale: Locale;
+  t: TFn;
+  workspace?: boolean;
+}) {
+  const sectionLabel = t("usage.section.keys");
+  const titleId = "usage-keys-title";
+  const table = (
+    <div className="tbl-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>{t("usage.col.key")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num">{t("usage.col.cost")}</th>
+            <th className="num">{t("usage.col.unpriced")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => {
+            const label = row.id.length === 0 ? t("usage.key.none") : row.name ?? row.id;
+            return (
+              <tr key={row.id || "__none__"} className={selectedKeyId === row.id ? "usage-key-row--selected" : undefined}>
+                <td className="mono">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm usage-key-filter"
+                    aria-pressed={selectedKeyId === row.id}
+                    title={row.id || undefined}
+                    onClick={() => onSelectKey(row.id)}
+                  >
+                    {label}
+                  </button>
+                </td>
+                <td className="num">{row.requests}</td>
+                <td className="num mono">{formatTokens(row.totalTokens, locale)}</td>
+                <td className="num mono">{formatUsdEstimate(row.estimatedCostUsd, locale)}</td>
+                <td className="num">{row.unpricedRequests > 0 ? row.unpricedRequests : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  if (workspace) {
+    return (
+      <UsageWorkspaceSection title={sectionLabel} titleId={titleId}>
+        {table}
+      </UsageWorkspaceSection>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <div className="panel-head">
+        <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+      </div>
+      {table}
+    </section>
+  );
+}
+
 function UsageWorkspaceBody({
   data,
   heatmap,
@@ -734,6 +877,9 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
+  keyRows,
+  selectedKeyId,
+  onSelectKey,
   range,
   periodOffset,
   onMovePeriod,
@@ -748,6 +894,9 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
+  keyRows: UsageKeyRow[];
+  selectedKeyId: string;
+  onSelectKey: (id: string) => void;
   range: Range;
   periodOffset: number;
   onMovePeriod: (direction: "older" | "newer") => void;
@@ -794,6 +943,25 @@ function UsageWorkspaceBody({
         : null,
     },
     {
+      id: "keys",
+      label: t("usage.section.keys"),
+      meta: data ? `${keyRows.length}` : "—",
+      body: data
+        ? (data.keyBreakdownUnavailable
+          ? <Notice tone="ok">{t("usage.keys.rangeLimited")}</Notice>
+          : (
+            <UsageKeysTable
+              rows={keyRows}
+              selectedKeyId={selectedKeyId}
+              onSelectKey={onSelectKey}
+              locale={locale}
+              t={t}
+              workspace
+            />
+          ))
+        : null,
+    },
+    {
       id: "coverage",
       label: t("usage.section.coverage"),
       meta: data ? formatPct(data.summary.coverageRatio) : "—",
@@ -828,17 +996,19 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null): string {
-  return `ocx.usage.v3:${apiBase}:${range}:${surface}:${periodEnd ?? "latest"}`;
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null, keyId = ""): string {
+  // A key-narrowed window is a different report; caching it under the unfiltered key would serve
+  // one as the other on a tab switch.
+  return `ocx.usage.v3:${apiBase}:${range}:${surface}:${periodEnd ?? "latest"}:${keyId}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface, periodEnd);
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null, keyId = ""): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, periodEnd, keyId);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface, periodEnd);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, periodEnd: string | null, value: UsageResponse, keyId = "") {
+  const key = usageCacheKey(apiBase, range, surface, periodEnd, keyId);
   if (!usageMemoryCache.has(key) && usageMemoryCache.size >= 96) {
     usageMemoryCache.delete(usageMemoryCache.keys().next().value!);
   }
@@ -859,6 +1029,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [periodOffset, setPeriodOffset] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
+  const [keyFilter, setKeyFilter] = useState("");
   const forceRefreshRef = useRef(false);
   const periodEnd = range !== "all"
     ? usageCalendarPeriod(range, calendarNow, periodOffset).endDate
@@ -867,23 +1038,28 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const forceRefresh = forceRefreshRef.current;
     forceRefreshRef.current = false;
+    // `byKey=1` asks for the per-key breakdown. The server computes it from raw facts (the hourly
+    // read model has no key dimension), which is only affordable up to a week, so wider ranges are
+    // requested without it and the page explains why.
     const params = new URLSearchParams({ range, surface });
+    if (keyBreakdownSupported(range)) params.set("byKey", "1");
     if (periodEnd) params.set("end", periodEnd);
+    if (keyFilter) params.set("apiKeyId", keyFilter);
     if (forceRefresh) params.set("refresh", "1");
     const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, periodEnd, next);
+    writeHeldUsage(apiBase, range, surface, periodEnd, next, keyFilter);
     return next;
-  }, [apiBase, range, surface, periodEnd]);
+  }, [apiBase, range, surface, periodEnd, keyFilter]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface, periodEnd);
-  const cached = readHeldUsage(apiBase, range, surface, periodEnd);
+  const resourceKey = usageCacheKey(apiBase, range, surface, periodEnd, keyFilter);
+  const cached = readHeldUsage(apiBase, range, surface, periodEnd, keyFilter);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface, periodEnd],
+    [apiBase, range, surface, periodEnd, keyFilter],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -893,6 +1069,19 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     forceRefreshRef.current = true;
     resource.refresh();
   }, [resource]);
+
+  const keyRows = useMemo(() => data?.keys ?? [], [data?.keys]);
+  // Selector options come from the unfiltered report held in the session cache: a narrowed report
+  // only carries its own key, so it could not offer the others, and asking /api/keys would add a
+  // second request to every visit. Derived during render, so no effect re-renders the page.
+  const unfilteredHeld = readHeldUsage(apiBase, range, surface, periodEnd, "");
+  const keyOptions = useMemo(() => {
+    const source = keyFilter === "" ? data : unfilteredHeld ?? data;
+    return (source?.keys ?? []).map(row => ({ id: row.id, name: row.name ?? "" }));
+  }, [data, unfilteredHeld, keyFilter]);
+  const selectKey = useCallback((id: string) => {
+    setKeyFilter(current => current === id ? "" : id);
+  }, []);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const periodBars = useMemo(
@@ -905,6 +1094,8 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const changeRange = useCallback((next: Range) => {
     setRange(next);
     setPeriodOffset(0);
+    // A key filter cannot be answered for a wide range; keeping it would silently show every key.
+    if (!keyBreakdownSupported(next)) setKeyFilter("");
   }, []);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
@@ -932,8 +1123,12 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           surface={surface}
           range={range}
           refreshing={state.refreshing}
+          keyFilter={keyFilter}
+          keyOptions={keyOptions}
+          keyFilterSupported={keyBreakdownSupported(range)}
           onSurface={setSurface}
           onRange={changeRange}
+          onKeyFilter={setKeyFilter}
           onRefresh={refreshUsage}
           t={t}
         />
@@ -962,6 +1157,9 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
+            keyRows={keyRows}
+            selectedKeyId={keyFilter}
+            onSelectKey={selectKey}
             range={range}
             periodOffset={periodOffset}
             onMovePeriod={movePeriod}

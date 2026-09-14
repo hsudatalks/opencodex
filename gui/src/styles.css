@@ -2143,6 +2143,11 @@ button.prov-account-row.active { cursor: default; }
 /* Top-align with Storage: centering against the taller filter chips dropped the "Usage" title. */
 .usage-head { flex-wrap: wrap; align-items: flex-start; }
 .usage-filters { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+/* Per-key selector: the label sits above the select so the control matches the filter row height. */
+.usage-key-select { display: inline-flex; flex-direction: column; gap: 2px; font-size: var(--text-label); }
+.usage-key-select .input { max-width: 260px; }
+.usage-key-filter { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-key-row--selected { background: var(--accent-soft); }
 .usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }

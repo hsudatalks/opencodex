@@ -44,6 +44,38 @@ export interface UsageDay {
   models: UsageDayModel[];
 }
 
+/**
+ * One admission key's share of the same window. A gateway key belongs to one client, so this is
+ * the only view that answers "which machine/agent spent this" — the totals and the provider/model
+ * breakdowns deliberately merge every key together.
+ */
+export interface UsageKey {
+  /** The admission key id, as `GET /api/keys` reports it. */
+  id: string;
+  /** Human label from the key list (e.g. `ark-workbench:domain-dev::host`), when known. */
+  name?: string;
+  requests: number;
+  attemptCount: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  estimatedRequests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+  unmeteredRequests: number;
+  estimatedCostUsd: number;
+}
+
+/** Narrowing a usage read to one admission key, and/or asking for the per-key breakdown. */
+export interface UsageSummaryOptions {
+  /** Only requests admitted with this key id. */
+  apiKeyId?: string;
+  /** Include the per-key rows (`keys`). */
+  byKey?: boolean;
+}
+
 export interface UsageDayModel {
   model: string;
   provider: string;
@@ -89,6 +121,10 @@ export interface UsageSummary {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  /** Per-admission-key rows; empty unless the caller asked for them (see `UsageSummaryOptions`). */
+  keys: UsageKey[];
+  /** The admission key this summary was narrowed to, when one was requested. */
+  apiKeyId?: string;
 }
 
 const DAY_MS = 86_400_000;
@@ -278,25 +314,74 @@ function finalizeCoverage(totals: UsageSummaryTotals): void {
   totals.coverageRatio = totals.requests === 0 ? 0 : totals.measuredRequests / totals.requests;
 }
 
-function addEstimatedCost(
-  totals: UsageSummaryTotals,
-  entry: Pick<PersistedUsageEntry, "provider" | "model" | "usageStatus" | "usage" | "attempts" | "responseServiceTier" | "requestedServiceTier" | "configuredServiceTier">,
+function blankKeyRow(id: string): UsageKey {
+  return {
+    id,
+    requests: 0,
+    attemptCount: 0,
+    measuredRequests: 0,
+    reportedRequests: 0,
+    estimatedRequests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    pricedRequests: 0,
+    unpricedRequests: 0,
+    unmeteredRequests: 0,
+    estimatedCostUsd: 0,
+  };
+}
+
+function bumpKeyStatus(row: UsageKey, status: UsageStatus): void {
+  if (isMeasuredStatus(status)) row.measuredRequests += 1;
+  if (status === "reported") row.reportedRequests += 1;
+  else if (status === "estimated") row.estimatedRequests += 1;
+}
+
+/** The key rows report the token kinds a reader compares between keys; the cache split stays in
+ *  the totals because it is a pricing detail rather than a "who spent it" one. */
+function addKeyTokens(
+  row: UsageKey,
+  entry: Pick<PersistedUsageEntry, "usage" | "totalTokens">,
 ): void {
+  if (!entry.usage) return;
+  row.inputTokens += entry.usage.inputTokens;
+  row.outputTokens += entry.usage.outputTokens;
+  row.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
+}
+
+/** Where one request's cost landed, so totals and the per-key rows can share one computation. */
+type EstimateOutcome =
+  | { kind: "unmetered" }
+  | { kind: "unpriced" }
+  | { kind: "priced"; costUsd: number };
+
+function estimateEntry(
+  entry: Pick<PersistedUsageEntry, "provider" | "model" | "usageStatus" | "usage" | "attempts" | "responseServiceTier" | "requestedServiceTier" | "configuredServiceTier">,
+): EstimateOutcome {
   if (entry.usageStatus === "unreported" || entry.usageStatus === "unsupported"
     || (!entry.usage && !entry.attempts?.length)) {
-    totals.unmeteredRequests += 1;
-    return;
+    return { kind: "unmetered" };
   }
   const tier = serviceTierContext(entry);
   const estimate = entry.attempts?.length
     ? estimateComboCost(entry.attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
-  if (!estimate) {
+  if (!estimate) return { kind: "unpriced" };
+  return { kind: "priced", costUsd: estimate.cost.total };
+}
+
+function addEstimatedCostOutcome(totals: UsageSummaryTotals, outcome: EstimateOutcome): void {
+  if (outcome.kind === "unmetered") {
+    totals.unmeteredRequests += 1;
+    return;
+  }
+  if (outcome.kind === "unpriced") {
     totals.unpricedRequests += 1;
     return;
   }
   totals.pricedRequests += 1;
-  totals.estimatedCostUsd += estimate.cost.total;
+  totals.estimatedCostUsd += outcome.costUsd;
 }
 
 function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[]): UsageDay[] {
@@ -554,11 +639,14 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  options: UsageSummaryOptions = {},
 ): UsageSummary {
   const { since } = rangeWindow(range, now);
+  const keyFilter = options.apiKeyId?.trim();
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
     if (entry.timestamp > now) return false;
+    if (keyFilter !== undefined && keyFilter.length > 0 && (entry.apiKeyId ?? "") !== keyFilter) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
@@ -568,11 +656,34 @@ export function summarizeUsage(
     return true;
   });
   const totals = blankTotals();
+  const perKey = options.byKey === true || (keyFilter !== undefined && keyFilter.length > 0)
+    ? new Map<string, UsageKey>()
+    : undefined;
   for (const entry of filteredEntries) {
     bumpStatus(totals, entry.usageStatus);
     totals.attemptCount += entry.attempts?.length ?? 1;
     addTokens(totals, entry);
-    addEstimatedCost(totals, entry);
+    const outcome = estimateEntry(entry);
+    addEstimatedCostOutcome(totals, outcome);
+    if (!perKey) continue;
+    // A request without an admission key (internal or pre-key traffic) is reported under an
+    // empty id rather than dropped, so the per-key rows still add up to the totals.
+    const id = entry.apiKeyId ?? "";
+    let row = perKey.get(id);
+    if (!row) {
+      row = blankKeyRow(id);
+      perKey.set(id, row);
+    }
+    row.requests += 1;
+    row.attemptCount += entry.attempts?.length ?? 1;
+    bumpKeyStatus(row, entry.usageStatus);
+    addKeyTokens(row, entry);
+    if (outcome.kind === "unmetered") row.unmeteredRequests += 1;
+    else if (outcome.kind === "unpriced") row.unpricedRequests += 1;
+    else {
+      row.pricedRequests += 1;
+      row.estimatedCostUsd += outcome.costUsd;
+    }
   }
   finalizeCoverage(totals);
   return {
@@ -584,5 +695,7 @@ export function summarizeUsage(
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),
     providers: buildProviders(filteredEntries, totals.totalTokens),
+    keys: perKey ? [...perKey.values()].sort((a, b) => b.requests - a.requests) : [],
+    ...(keyFilter !== undefined && keyFilter.length > 0 ? { apiKeyId: keyFilter } : {}),
   };
 }

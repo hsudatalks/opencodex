@@ -53,7 +53,7 @@ import {
   usageLogRevisionKey,
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary } from "../../usage/summary";
+import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSummaryOptions } from "../../usage/summary";
 import { usagePostgresClient } from "../../usage/postgres-ingest";
 import { cachedUsageSummaryFromPostgres } from "../../usage/postgres-summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
@@ -119,6 +119,25 @@ function usageWindow(range: UsageRange, input: string | null, now: number): Usag
   }
   const period = usageCalendarPeriod(range, requestedEnd);
   return { end: period.end, generatedAt: now, cacheKey: period.endDate, historical: true };
+}
+
+/**
+ * Attach the configured key names to the per-key usage rows.
+ *
+ * The usage store only knows the key's id; the human label lives in the admission-key config
+ * (`ark-workbench:domain-dev::host`), and the Usage page is unreadable without it.
+ */
+function namedUsageKeys(summary: UsageSummary, config: OcxConfig): UsageSummary {
+  if (summary.keys.length === 0) return summary;
+  const names = new Map<string, string>();
+  for (const entry of config.apiKeys ?? []) names.set(entry.id, entry.name);
+  return {
+    ...summary,
+    keys: summary.keys.map(row => {
+      const name = names.get(row.id);
+      return name !== undefined && name.length > 0 ? { ...row, name } : row;
+    }),
+  };
 }
 
 function nextSingaporeMidnight(now: number): number {
@@ -207,6 +226,20 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     const forceRefresh = url.searchParams.get("refresh") === "1";
+    // The hourly read model has no key dimension, so a key filter and the per-key breakdown are
+    // computed from raw facts, which is only affordable for the short windows: 7d costs ~2s while
+    // 30d costs ~40s and `all` minutes. Wide ranges therefore answer without the key dimension
+    // rather than making the whole page wait (see usage.keys.rangeLimited in the dashboard).
+    const keyDimensionAffordable = range === "1d" || range === "7d";
+    const apiKeyId = keyDimensionAffordable
+      ? url.searchParams.get("apiKeyId")?.trim() || undefined
+      : undefined;
+    const byKey = keyDimensionAffordable && url.searchParams.get("byKey") === "1";
+    const keyBreakdownUnavailable = !keyDimensionAffordable;
+    const usageOptions: UsageSummaryOptions = {
+      ...(apiKeyId !== undefined ? { apiKeyId } : {}),
+      ...(byKey ? { byKey: true } : {}),
+    };
     const now = Date.now();
     const window = usageWindow(range, url.searchParams.get("end"), now);
     try {
@@ -220,9 +253,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
             surface,
             forceRefresh,
             window.cacheKey,
+            usageOptions,
           );
           return jsonResponse({
-            ...summary,
+            ...namedUsageKeys(summary, config),
+            ...(keyBreakdownUnavailable ? { keyBreakdownUnavailable: true } : {}),
             generatedAt: window.generatedAt,
             historyTruncated: false,
             truncatedPrefixBytes: 0,
@@ -235,19 +270,24 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         }
       }
       const cacheKey = window.historical
-        ? `${range}:${surface}:${window.cacheKey}`
-        : `${range}:${surface}`;
+        ? `${range}:${surface}:${apiKeyId ?? ""}:${byKey ? "keys" : ""}:${window.cacheKey}`
+        : `${range}:${surface}:${apiKeyId ?? ""}:${byKey ? "keys" : ""}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLedgerRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (!forceRefresh && cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
-        return jsonResponse(refreshedUsageSummary(cached.summary, range, window.end, window.generatedAt));
+        return jsonResponse({
+          ...refreshedUsageSummary(cached.summary, range, window.end, window.generatedAt),
+          // Pure function of `range`, so a cache hit must carry it too: the entry itself was
+          // cached from a response that only decorated the returned object.
+          ...(keyBreakdownUnavailable ? { keyBreakdownUnavailable: true } : {}),
+        });
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
       const summary = {
-        ...summarizeUsage(snapshot.entries, range, window.end, surface),
+        ...namedUsageKeys(summarizeUsage(snapshot.entries, range, window.end, surface, usageOptions), config),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
@@ -261,7 +301,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         revisionReadAt,
         summary,
       });
-      return jsonResponse({ ...summary, generatedAt: window.generatedAt });
+      return jsonResponse({
+        ...summary,
+        ...(keyBreakdownUnavailable ? { keyBreakdownUnavailable: true } : {}),
+        generatedAt: window.generatedAt,
+      });
     } catch {
       return jsonResponse({
         range,
@@ -292,6 +336,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         days: [],
         models: [],
         providers: [],
+        keys: [],
+        ...(apiKeyId !== undefined ? { apiKeyId } : {}),
+        ...(keyBreakdownUnavailable ? { keyBreakdownUnavailable: true } : {}),
         historyTruncated: false,
         truncatedPrefixBytes: 0,
         entriesTruncated: false,

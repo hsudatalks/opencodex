@@ -1,13 +1,16 @@
 import type { SQL } from "bun";
 import { usageCalendarPeriod } from "./calendar";
 import { sqlCostRule } from "./cost";
+import { USAGE_DIMENSION_KIND } from "./postgres-ingest";
 import type {
   UsageDay,
   UsageDayModel,
+  UsageKey,
   UsageModel,
   UsageProvider,
   UsageRange,
   UsageSummary,
+  UsageSummaryOptions,
   UsageSummaryTotals,
   UsageSurface,
 } from "./summary";
@@ -209,19 +212,39 @@ const FILTER = `
     OR ($2::smallint = 2 AND r.surface_code IN (1, 2))
     OR ($2::smallint = 3 AND r.surface_code = 3)
   )
+  -- $4 is the admission key's dimension id, NULL for every key. An id that does not exist is
+  -- passed as -1 so a filter naming an unused key yields an empty window instead of everything.
+  AND ($4::bigint IS NULL OR r.api_key_id = $4::bigint)
 `;
+
+/**
+ * The read model has no admission-key dimension, so a key filter (or the per-key breakdown) is
+ * answered from the raw facts: the same rows the dashboard already recomputes the current hour
+ * from. The key id is a `dimensions` row of kind `apiKey`; a key that never carried a request has
+ * no row, and `-1` matches nothing.
+ */
+async function resolveApiKeyDimensionId(tx: SQL, apiKeyId: string | undefined): Promise<number | null> {
+  const wanted = apiKeyId?.trim();
+  if (wanted === undefined || wanted.length === 0) return null;
+  const rows = await tx.unsafe<SqlRow[]>(
+    `SELECT id FROM opencodex_usage.dimensions WHERE kind = $1::smallint AND value = $2 LIMIT 1`,
+    [USAGE_DIMENSION_KIND.apiKey, wanted],
+  );
+  const id = rows[0]?.id;
+  return typeof id === "number" || typeof id === "bigint" || typeof id === "string" ? Number(id) : -1;
+}
 
 const ATTRIBUTIONS = `
   filtered AS MATERIALIZED (
     SELECT * FROM opencodex_usage.requests r WHERE ${FILTER}
   ),
   attributions AS MATERIALIZED (
-    SELECT r.occurred_at, r.request_id, a.canonical_provider_id, a.usage_model_id,
+    SELECT r.occurred_at, r.request_id, r.api_key_id, a.canonical_provider_id, a.usage_model_id,
       a.usage_status_code, a.input_tokens, a.output_tokens, a.total_tokens
     FROM filtered r
     JOIN opencodex_usage.attempts a USING (occurred_at, request_id)
     UNION ALL
-    SELECT r.occurred_at, r.request_id, r.canonical_provider_id, r.usage_model_id,
+    SELECT r.occurred_at, r.request_id, r.api_key_id, r.canonical_provider_id, r.usage_model_id,
       r.usage_status_code, r.input_tokens, r.output_tokens, r.total_tokens
     FROM filtered r
     WHERE r.attempt_count = 0
@@ -233,8 +256,10 @@ async function readAggregateRows(
   since: string | null,
   mode: number,
   through: string,
-): Promise<{ totals: SqlRow[]; days: SqlRow[]; dayModels: SqlRow[]; models: SqlRow[]; providers: SqlRow[] }> {
-  const params = [since, mode, through];
+  apiKeyDimensionId: number | null,
+  wantKeys: boolean,
+): Promise<{ totals: SqlRow[]; days: SqlRow[]; dayModels: SqlRow[]; models: SqlRow[]; providers: SqlRow[]; keys: SqlRow[] }> {
+  const params = [since, mode, through, apiKeyDimensionId];
   const totals = await tx.unsafe<SqlRow[]>(`
     SELECT count(*) requests, min(r.occurred_at) oldest_occurred_at,
       sum(GREATEST(r.attempt_count, 1)) attempt_count,
@@ -332,7 +357,39 @@ async function readAggregateRows(
     JOIN opencodex_usage.dimensions provider ON provider.id = canonical_provider_id
     GROUP BY 1 ORDER BY requests DESC
   `, params);
-  return { totals, days, dayModels, models, providers };
+  const keys = wantKeys ? await tx.unsafe<SqlRow[]>(`
+    WITH ${ATTRIBUTIONS}, per_request AS (
+      SELECT api_key_id, occurred_at, request_id,
+        count(*) attempt_count,
+        CASE
+          WHEN bool_and(usage_status_code = 3) THEN 3
+          WHEN bool_or(usage_status_code IN (2, 3)) THEN 2
+          WHEN bool_or(usage_status_code = 4) THEN 4
+          ELSE 1
+        END usage_status_code,
+        sum(COALESCE(input_tokens, 0)) input_tokens,
+        sum(COALESCE(output_tokens, 0)) output_tokens,
+        sum(COALESCE(total_tokens, 0)) total_tokens
+      FROM attributions
+      GROUP BY 1, 2, 3
+    )
+    SELECT COALESCE(api_key.value, '') id, count(*) requests, sum(attempt_count) attempt_count,
+      count(*) FILTER (WHERE usage_status_code IN (1, 4)) measured_requests,
+      count(*) FILTER (WHERE usage_status_code = 1) reported_requests,
+      count(*) FILTER (WHERE usage_status_code = 4) estimated_requests,
+      sum(total_tokens) total_tokens, sum(input_tokens) input_tokens, sum(output_tokens) output_tokens
+    FROM per_request
+    LEFT JOIN opencodex_usage.dimensions api_key ON api_key.id = per_request.api_key_id
+    GROUP BY 1 ORDER BY requests DESC
+  `, params) : [];
+  return { totals, days, dayModels, models, providers, keys };
+}
+
+/** Cost and failure split of the per-key rows; token counts come from the aggregate pass. */
+interface UsageKeyCosts {
+  costs: Map<string, number>;
+  unpriced: Map<string, number>;
+  unmetered: Map<string, number>;
 }
 
 async function applyCosts(
@@ -343,8 +400,10 @@ async function applyCosts(
   totals: UsageSummaryTotals,
   models: UsageModel[],
   providers: UsageProvider[],
-): Promise<void> {
-  const params = [since, mode, through];
+  apiKeyDimensionId: number | null,
+  wantKeys: boolean,
+): Promise<UsageKeyCosts> {
+  const params = [since, mode, through, apiKeyDimensionId];
   const pairs = await tx.unsafe<SqlRow[]>(`
     WITH filtered AS MATERIALIZED (
       SELECT * FROM opencodex_usage.requests r WHERE ${FILTER}
@@ -369,7 +428,7 @@ async function applyCosts(
     WITH filtered AS MATERIALIZED (
       SELECT * FROM opencodex_usage.requests r WHERE ${FILTER}
     ), rules AS MATERIALIZED (
-      SELECT * FROM jsonb_to_recordset($4::jsonb) AS x(
+      SELECT * FROM jsonb_to_recordset($5::jsonb) AS x(
         provider text, model text,
         "inputRate" double precision, "outputRate" double precision,
         "cacheReadRate" double precision, "cacheWriteRate" double precision,
@@ -383,7 +442,7 @@ async function applyCosts(
       SELECT r.occurred_at, r.request_id, r.attempt_count,
         r.usage_status_code request_usage_status_code,
         (r.input_tokens IS NOT NULL AND r.output_tokens IS NOT NULL) request_has_usage,
-        r.provider_id, r.model_id, r.canonical_provider_id, r.usage_model_id,
+        r.provider_id, r.model_id, r.canonical_provider_id, r.usage_model_id, r.api_key_id,
         r.usage_status_code, r.input_tokens, r.output_tokens, r.image_input_tokens,
         r.cached_input_tokens, r.cache_read_input_tokens, r.cache_creation_input_tokens,
         response_tier.value response_service_tier,
@@ -398,7 +457,7 @@ async function applyCosts(
       SELECT r.occurred_at, r.request_id, r.attempt_count,
         r.usage_status_code request_usage_status_code,
         (r.input_tokens IS NOT NULL AND r.output_tokens IS NOT NULL) request_has_usage,
-        a.provider_id, a.model_id, a.canonical_provider_id, a.usage_model_id,
+        a.provider_id, a.model_id, a.canonical_provider_id, a.usage_model_id, r.api_key_id,
         a.usage_status_code, a.input_tokens, a.output_tokens, a.image_input_tokens,
         a.cached_input_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens,
         response_tier.value response_service_tier,
@@ -413,6 +472,7 @@ async function applyCosts(
     ), identified AS MATERIALIZED (
       SELECT basis.*, provider.value provider, model.value model,
         canonical_provider.value canonical_provider, usage_model.value usage_model,
+        COALESCE(api_key.value, '') api_key,
         COALESCE(basis.cache_creation_input_tokens, 0) cache_write,
         COALESCE(basis.cache_read_input_tokens, basis.cached_input_tokens, 0) primary_cache_read,
         CASE WHEN basis.cache_read_input_tokens IS NULL
@@ -425,6 +485,7 @@ async function applyCosts(
       JOIN opencodex_usage.dimensions model ON model.id = basis.model_id
       JOIN opencodex_usage.dimensions canonical_provider ON canonical_provider.id = basis.canonical_provider_id
       JOIN opencodex_usage.dimensions usage_model ON usage_model.id = basis.usage_model_id
+      LEFT JOIN opencodex_usage.dimensions api_key ON api_key.id = basis.api_key_id
     ), tokenized AS MATERIALIZED (
       SELECT identified.*, rules.*,
         CASE
@@ -474,6 +535,11 @@ async function applyCosts(
         bool_and(attribution_cost IS NOT NULL) all_priced,
         sum(attribution_cost) request_cost
       FROM attributed GROUP BY 1, 2, request_usage_status_code, attempt_count, request_has_usage
+    ), request_keys AS MATERIALIZED (
+      -- The admission key lives on the request row, so every attribution of one request shares it;
+      -- min() collapses the degenerate multi-key case instead of multiplying the request.
+      SELECT occurred_at, request_id, min(api_key) api_key
+      FROM attributed GROUP BY 1, 2
     ), result AS (
       SELECT 'totals' kind, '' provider, '' model,
         COALESCE(sum(request_cost) FILTER (WHERE NOT unmetered AND all_priced), 0) cost,
@@ -489,6 +555,17 @@ async function applyCosts(
       SELECT 'provider', canonical_provider, '', sum(attribution_cost), 0, 0, 0
       FROM attributed JOIN request_costs USING (occurred_at, request_id)
       WHERE NOT unmetered AND all_priced GROUP BY 2
+      UNION ALL
+      SELECT 'key', rk.api_key, '', COALESCE(sum(rc.request_cost) FILTER (WHERE NOT rc.unmetered AND rc.all_priced), 0), 0, 0, 0
+      FROM request_costs rc JOIN request_keys rk USING (occurred_at, request_id)
+      GROUP BY 2
+      UNION ALL
+      SELECT 'keycount', rk.api_key, '',
+        0, 0,
+        count(*) FILTER (WHERE NOT rc.unmetered AND NOT rc.all_priced),
+        count(*) FILTER (WHERE rc.unmetered)
+      FROM request_costs rc JOIN request_keys rk USING (occurred_at, request_id)
+      GROUP BY 2
     ) SELECT * FROM result
   `, [...params, JSON.stringify(rules)]);
   const totalRow = costRows.find(row => row.kind === "totals");
@@ -508,6 +585,11 @@ async function applyCosts(
     const cost = providerCosts.get(provider.provider);
     if (cost !== undefined) provider.estimatedCostUsd = cost;
   }
+  return {
+    costs: new Map(costRows.filter(row => row.kind === "key").map(row => [String(row.provider), numeric(row.cost)])),
+    unpriced: new Map(costRows.filter(row => row.kind === "keycount").map(row => [String(row.provider), numeric(row.unpriced_requests)])),
+    unmetered: new Map(costRows.filter(row => row.kind === "keycount").map(row => [String(row.provider), numeric(row.unmetered_requests)])),
+  };
 }
 
 async function summarizeRawInTransaction(
@@ -517,13 +599,17 @@ async function summarizeRawInTransaction(
   surface: UsageSurface,
   sinceOverride?: number | null,
   throughOverride?: number,
+  options: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const sinceMs = sinceOverride === undefined ? sinceForRange(range, now) : sinceOverride;
   const since = sinceMs === null ? null : new Date(sinceMs).toISOString();
   const throughMs = throughOverride ?? now;
   const through = new Date(throughMs).toISOString();
+  const apiKeyId = options.apiKeyId?.trim();
+  const wantKeys = options.byKey === true || (apiKeyId !== undefined && apiKeyId.length > 0);
+  const apiKeyDimensionId = await resolveApiKeyDimensionId(tx, apiKeyId);
     const aggregateStartedAt = performance.now();
-    const rows = await readAggregateRows(tx, since, surfaceMode(surface), through);
+    const rows = await readAggregateRows(tx, since, surfaceMode(surface), through, apiKeyDimensionId, wantKeys);
     const aggregateMs = performance.now() - aggregateStartedAt;
     const totals = totalsFromRow(rows.totals[0]);
     const models = rows.models.map<UsageModel>(row => ({
@@ -550,7 +636,7 @@ async function summarizeRawInTransaction(
       shareRatio: totals.totalTokens === 0 ? 0 : numeric(row.total_tokens) / totals.totalTokens,
     })).sort(compareProviders);
     const costStartedAt = performance.now();
-    await applyCosts(tx, since, surfaceMode(surface), through, totals, models, providers);
+    const keyCosts = await applyCosts(tx, since, surfaceMode(surface), through, totals, models, providers, apiKeyDimensionId, wantKeys);
     if (process.env.OPENCODEX_USAGE_POSTGRES_DIAGNOSTICS === "1") {
       console.info("[usage-postgres] summary timings", {
         range,
@@ -559,6 +645,29 @@ async function summarizeRawInTransaction(
         costMs: Math.round(performance.now() - costStartedAt),
       });
     }
+    // Token/status counts come from the request rows; cost and the priced/unpriced/unmetered split
+    // come from the same cost pass the totals use, so the key rows always add up to the totals.
+    const keys = rows.keys.map<UsageKey>(row => {
+      const id = String(row.id);
+      const requests = numeric(row.requests);
+      const unpricedRequests = keyCosts.unpriced.get(id) ?? 0;
+      const unmeteredRequests = keyCosts.unmetered.get(id) ?? 0;
+      return {
+        id,
+        requests,
+        attemptCount: numeric(row.attempt_count),
+        measuredRequests: numeric(row.measured_requests),
+        reportedRequests: numeric(row.reported_requests),
+        estimatedRequests: numeric(row.estimated_requests),
+        inputTokens: numeric(row.input_tokens),
+        outputTokens: numeric(row.output_tokens),
+        totalTokens: numeric(row.total_tokens),
+        pricedRequests: Math.max(0, requests - unpricedRequests - unmeteredRequests),
+        unpricedRequests,
+        unmeteredRequests,
+        estimatedCostUsd: keyCosts.costs.get(id) ?? 0,
+      };
+    }).sort((a, b) => b.requests - a.requests);
     return {
       range,
       surface,
@@ -568,6 +677,8 @@ async function summarizeRawInTransaction(
       days: dayGrid(range, now, timestampMs(rows.totals[0]?.oldest_occurred_at), rows.days, rows.dayModels),
       models: cappedModels(models, totals.totalTokens),
       providers,
+      keys,
+      ...(apiKeyId !== undefined && apiKeyId.length > 0 ? { apiKeyId } : {}),
     };
 }
 
@@ -576,8 +687,9 @@ export async function summarizeUsageRawFromPostgres(
   range: UsageRange,
   now: number,
   surface: UsageSurface,
+  options: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
-  return sql.begin("read only", tx => summarizeRawInTransaction(tx, range, now, surface));
+  return sql.begin("read only", tx => summarizeRawInTransaction(tx, range, now, surface, undefined, undefined, options));
 }
 
 const DASHBOARD_FILTER = `
@@ -688,6 +800,33 @@ function mergeSummaries(
   const providers = [...providerMap.values()].sort(compareProviders);
   for (const provider of providers) provider.shareRatio = totals.totalTokens === 0 ? 0 : provider.totalTokens / totals.totalTokens;
 
+  // Both halves of a key-filtered read are raw and already filtered, so the key rows merge the
+  // same way the provider rows do. Unfiltered reads keep the empty list the rollups return.
+  const keyMap = new Map<string, UsageKey>();
+  for (const source of [left, right]) {
+    for (const row of source.keys) {
+      let target = keyMap.get(row.id);
+      if (!target) {
+        keyMap.set(row.id, { ...row, name: row.name });
+        continue;
+      }
+      target.requests += row.requests;
+      target.attemptCount += row.attemptCount;
+      target.measuredRequests += row.measuredRequests;
+      target.reportedRequests += row.reportedRequests;
+      target.estimatedRequests += row.estimatedRequests;
+      target.inputTokens += row.inputTokens;
+      target.outputTokens += row.outputTokens;
+      target.totalTokens += row.totalTokens;
+      target.pricedRequests += row.pricedRequests;
+      target.unpricedRequests += row.unpricedRequests;
+      target.unmeteredRequests += row.unmeteredRequests;
+      target.estimatedCostUsd += row.estimatedCostUsd;
+      if (target.name === undefined && row.name !== undefined) target.name = row.name;
+    }
+  }
+  const keys = [...keyMap.values()].sort((a, b) => b.requests - a.requests);
+
   return {
     range,
     surface,
@@ -697,6 +836,8 @@ function mergeSummaries(
     days: [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
     models: cappedModels(models, totals.totalTokens),
     providers,
+    keys,
+    ...(left.apiKeyId ?? right.apiKeyId ? { apiKeyId: left.apiKeyId ?? right.apiKeyId } : {}),
   };
 }
 
@@ -803,6 +944,8 @@ async function summarizeDashboardRollupsInTransaction(
     days: dayGrid(range, now, timestampMs(totals[0]?.oldest_occurred_at), days,
       dayModels.filter(row => numeric(row.requests) > 0)),
     models: cappedModels(models, summaryTotals.totalTokens), providers,
+    // The read model carries no admission-key dimension; a key-filtered read never comes here.
+    keys: [],
   };
 }
 
@@ -811,7 +954,14 @@ export async function summarizeUsageFromPostgres(
   range: UsageRange,
   now: number,
   surface: UsageSurface,
+  options: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
+  const apiKeyId = options.apiKeyId?.trim();
+  const wantsKeys = options.byKey === true || (apiKeyId !== undefined && apiKeyId.length > 0);
+  // The hourly read model has no key dimension, so a key filter or the per-key breakdown is served
+  // from the raw facts for the whole window. The dashboard already does this for the current hour;
+  // the trade is a slower read for a view the rollups cannot answer at all.
+  if (wantsKeys) return summarizeUsageRawFromPostgres(sql, range, now, surface, options);
   try {
     return await sql.begin("read only", async tx => {
       const state = await tx.unsafe<SqlRow[]>(`
@@ -831,7 +981,7 @@ export async function summarizeUsageFromPostgres(
       if (completeHourStart >= currentHourStart) return summarizeRawInTransaction(tx, range, now, surface);
       const head = completeHourStart > since
         ? await summarizeRawInTransaction(tx, range, now, surface, since, completeHourStart - 1)
-        : { range, surface, since, generatedAt: now, summary: zeroTotals(), days: [], models: [], providers: [] };
+        : { range, surface, since, generatedAt: now, summary: zeroTotals(), days: [], models: [], providers: [], keys: [] };
       const rollups = await summarizeDashboardRollupsInTransaction(
         tx, range, now, surface, completeHourStart, currentHourStart - 1,
       );
@@ -848,7 +998,7 @@ export async function summarizeUsageFromPostgres(
       console.warn("[usage-postgres] Dashboard read model unavailable; using normalized facts:",
         error instanceof Error ? error.message : error);
     }
-    return summarizeUsageRawFromPostgres(sql, range, now, surface);
+    return summarizeUsageRawFromPostgres(sql, range, now, surface, options);
   }
 }
 
@@ -862,15 +1012,18 @@ export async function cachedUsageSummaryFromPostgres(
   surface: UsageSurface,
   forceRefresh = false,
   windowKey = "latest",
+  options: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   let cache = summaryCaches.get(sql);
   if (!cache) {
     cache = new Map();
     summaryCaches.set(sql, cache);
   }
-  const key = windowKey === "latest"
-    ? `${range}:${surface}`
-    : `${range}:${surface}:${windowKey}`;
+  // The breakdown and any key narrowing change the payload, so they belong in the cache identity;
+  // without this a filtered read could be served the unfiltered window (or the reverse).
+  const scope = `${options.apiKeyId?.trim() ?? ""}|${options.byKey === true ? "keys" : ""}`;
+  const base = windowKey === "latest" ? `${range}:${surface}` : `${range}:${surface}:${windowKey}`;
+  const key = `${base}:${scope}`;
   if (!cache.has(key) && cache.size >= SUMMARY_CACHE_MAX_WINDOWS) {
     const oldestKey = cache.keys().next().value;
     if (oldestKey !== undefined) cache.delete(oldestKey);
@@ -881,7 +1034,7 @@ export async function cachedUsageSummaryFromPostgres(
   if (!forceRefresh && entry.value && age <= SUMMARY_CACHE_TTL_MS) return entry.value;
 
   if (!entry.inflight) {
-    entry.inflight = summarizeUsageFromPostgres(sql, range, now, surface)
+    entry.inflight = summarizeUsageFromPostgres(sql, range, now, surface, options)
       .then(value => {
         entry.value = value;
         entry.loadedAt = Date.now();

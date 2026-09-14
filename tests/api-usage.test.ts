@@ -40,6 +40,7 @@ function writeFixture(now: number): void {
       usageStatus: "reported",
       usage: { inputTokens: 100, outputTokens: 50 },
       totalTokens: 150,
+      apiKeyId: "key-alpha",
     }),
     JSON.stringify({
       requestId: "ocx-recent",
@@ -51,6 +52,7 @@ function writeFixture(now: number): void {
       usageStatus: "reported",
       usage: { inputTokens: 10, outputTokens: 5 },
       totalTokens: 15,
+      apiKeyId: "key-alpha",
     }),
     JSON.stringify({
       requestId: "ocx-missing",
@@ -61,6 +63,7 @@ function writeFixture(now: number): void {
       status: 200,
       durationMs: 11,
       usageStatus: "unreported",
+      apiKeyId: "key-beta",
     }),
   ];
   writeFileSync(join(testDir, "usage.jsonl"), `${lines.join("\n")}\n`, { mode: 0o600 });
@@ -341,6 +344,86 @@ describe("GET /api/usage", () => {
       expect(body.summary.measuredRequests).toBe(0);
       expect(body.summary.totalTokens).toBe(0);
       expect(body.summary.coverageRatio).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("byKey=1 splits the same window per admission key, with names from the key config", async () => {
+    writeFixture(Date.now());
+    saveConfig({
+      ...baseConfig(),
+      apiKeys: [{ id: "key-alpha", name: "ark-workbench:domain-dev::host", key: "ocx_data_alpha", createdAt: "2026-08-08T00:00:00.000Z" }],
+    });
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=1d&byKey=1", server.url)).then(res => res.json());
+      const alpha = body.keys.find((row: { id: string }) => row.id === "key-alpha");
+      const beta = body.keys.find((row: { id: string }) => row.id === "key-beta");
+      expect(alpha).toMatchObject({
+        id: "key-alpha",
+        name: "ark-workbench:domain-dev::host",
+        requests: 1,
+        attemptCount: 1,
+        measuredRequests: 1,
+        reportedRequests: 1,
+        unmeteredRequests: 0,
+      });
+      expect(alpha.totalTokens).toBe(15);
+      expect(alpha.estimatedCostUsd).toBeGreaterThan(0);
+      // An unmetered request is attributed to its key rather than dropped, so the rows still sum.
+      expect(beta).toMatchObject({ id: "key-beta", requests: 1, unmeteredRequests: 1, estimatedCostUsd: 0 });
+      expect(body.keys.reduce((sum: number, row: { requests: number }) => sum + row.requests, 0)).toBe(body.summary.requests);
+      expect(body.keys.reduce((sum: number, row: { estimatedCostUsd: number }) => sum + row.estimatedCostUsd, 0))
+        .toBeCloseTo(body.summary.estimatedCostUsd, 10);
+      // The per-key breakdown is opt-in; the plain window stays free of it.
+      const plain = await fetch(new URL("/api/usage?range=1d", server.url)).then(res => res.json());
+      expect(plain.keys).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("wide ranges answer without the key dimension instead of scanning raw facts", async () => {
+    // The hourly read model has no key dimension, so the per-key read is a raw-facts scan: ~2s at
+    // 7d, ~40s at 30d. A wide range therefore answers without it and says so.
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=30d&byKey=1", server.url)).then(res => res.json());
+      expect(body.keyBreakdownUnavailable).toBe(true);
+      expect(body.keys).toEqual([]);
+      // A filter on a wide range is dropped rather than silently returning every key.
+      const filtered = await fetch(new URL("/api/usage?range=30d&apiKeyId=key-alpha", server.url)).then(res => res.json());
+      expect(filtered.keyBreakdownUnavailable).toBe(true);
+      expect(filtered.apiKeyId).toBeUndefined();
+      // The supported windows keep the breakdown.
+      const week = await fetch(new URL("/api/usage?range=7d&byKey=1", server.url)).then(res => res.json());
+      expect(week.keyBreakdownUnavailable).toBeUndefined();
+      expect(week.keys.length).toBeGreaterThan(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("apiKeyId narrows the whole summary to one key", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=1d&apiKeyId=key-alpha", server.url)).then(res => res.json());
+      expect(body.apiKeyId).toBe("key-alpha");
+      expect(body.summary.requests).toBe(1);
+      expect(body.summary.measuredRequests).toBe(1);
+      expect(body.summary.unmeteredRequests).toBe(0);
+      expect(body.keys.map((row: { id: string }) => row.id)).toEqual(["key-alpha"]);
+      expect(body.keys[0].requests).toBe(1);
+      // Every breakdown is narrowed too, so the page cannot show another key's share.
+      expect(body.providers.every((row: { provider: string }) => row.provider === "openai")).toBe(true);
+
+      // A key that never carried a request is an empty window, not the unfiltered one.
+      const unknown = await fetch(new URL("/api/usage?range=1d&apiKeyId=key-missing", server.url)).then(res => res.json());
+      expect(unknown.summary.requests).toBe(0);
+      expect(unknown.keys).toEqual([]);
     } finally {
       await server.stop(true);
     }
