@@ -3382,11 +3382,12 @@ async function handleResponsesInner(
         if (rateLimited || outOfCredits) {
           const nextAccountId = rateLimited
             ? rotateCommandCodeAccountOn429(
+              config,
               commandCodePoolAccountId,
               upstreamResponse.headers.get("retry-after"),
               logCtx.conversationId,
             )
-            : rotateCommandCodeAccountOnInsufficientCredits(commandCodePoolAccountId, logCtx.conversationId);
+            : rotateCommandCodeAccountOnInsufficientCredits(config, commandCodePoolAccountId, logCtx.conversationId);
           if (nextAccountId) {
             try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
             try {

@@ -893,6 +893,13 @@ export interface OcxConfig {
     enabled?: boolean;
     /** New-session selection strategy. Default quota; unavailable quota falls back to round-robin. */
     strategy?: OcxAccountPoolRotationStrategy;
+    /**
+     * Usage % at or above which an account is skipped for new sessions (0-100). Default 99;
+     * 0 = disabled. A drained account is one the upstream will refuse, so the last percent of a
+     * budget is not worth spending: an account with $0.12 of credit left still failed every
+     * request, while skipping it hands the work to a peer that can serve it.
+     */
+    autoSwitchThreshold?: number;
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
@@ -1237,6 +1244,14 @@ export interface OcxProviderConfig {
    * conversations across healthy pool entries while preserving conversation affinity.
    */
   apiKeyPoolStrategy?: "failover" | "balanced";
+  /**
+   * Usage % at or above which a pool key is skipped (0-100, `0` disables). Default 99.
+   *
+   * Applies to a balanced pool the way `commandCodeAccountPool.autoSwitchThreshold` applies to the
+   * Command Code account pool: the highest of the five-hour, weekly and monthly budgets decides, so
+   * a key that is idle in its five-hour window but out of weekly budget is still spent.
+   */
+  apiKeyPoolHeadroomPercent?: number;
   defaultModel?: string;
   models?: string[];
   /**

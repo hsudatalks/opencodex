@@ -344,11 +344,19 @@ API-key pools default to the legacy active-key plus 429-failover behavior. Provi
 `apiKeyPoolStrategy: "balanced"` select a key per conversation without changing the persisted
 active key. Conversation affinity preserves upstream caches; new conversations use weighted
 least-connections, where each key's live affinity count is normalized by its known remaining
-rolling five-hour quota, with round-robin ties.
+quota, with round-robin ties.
 Trusted GLM Coding destinations query each plan's quota endpoint once per minute. Missing quota
-data degrades to even affinity balancing, while exhausted or 429-cooled keys are excluded. The
-balancer retains only hashed conversation identifiers, expires them after six hours, and caps each
-provider at 4,096 affinities.
+data degrades to even affinity balancing, while keys at or above the headroom cut-off
+(`API_KEY_POOL_HEADROOM_PERCENT`, 99) or in a 429 cooldown are excluded; when every key is past the
+cut-off the pool fails open and still selects one. The balancer retains only hashed conversation
+identifiers, expires them after six hours, and caps each provider at 4,096 affinities.
+
+Every pool meters **all** the windows its endpoint reports, not just the rolling one: OpenCode Go
+returns rolling/weekly/monthly, and a key that is idle in its five-hour window but out of weekly
+budget is exhausted, so the most-spent window decides. The same rule governs the Command Code
+account pool, which also weighs the monthly credit balance. Pooled quotas are refreshed on a
+background sweep tick (`src/providers/pool-quota-tracker.ts`, about every five minutes), so
+selection never depends on the dashboard having been opened to warm the cache.
 
 [Decision Log]
 - 목적과 의도: Prevent Kiro progress from becoming a false final answer, reject invalid empty completion retries, and stop concurrent transient 429s from consuming independent retry budgets.

@@ -226,6 +226,18 @@ function applyProviderPatchFields(
       return { error: "apiKeyPoolStrategy must be failover, balanced, or null to clear" };
     }
   }
+  if (Object.hasOwn(rawBody, "apiKeyPoolHeadroomPercent")) {
+    const headroom = rawBody.apiKeyPoolHeadroomPercent;
+    if (headroom === null || headroom === "") {
+      delete next.apiKeyPoolHeadroomPercent;
+      touched = true;
+    } else if (typeof headroom === "number" && Number.isInteger(headroom) && headroom >= 0 && headroom <= 100) {
+      next.apiKeyPoolHeadroomPercent = headroom;
+      touched = true;
+    } else {
+      return { error: "apiKeyPoolHeadroomPercent must be an integer 0-100, or null to clear" };
+    }
+  }
   if (Object.hasOwn(rawBody, "note")) {
     if (typeof rawBody.note !== "string") return { error: "note must be a string" };
     const note = rawBody.note.trim();

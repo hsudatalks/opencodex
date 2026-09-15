@@ -94,6 +94,58 @@ describe("balanced API-key pools", () => {
     expect(apiKeyQuotaSnapshotForTests("opencode-go", "two")?.usedPercent).toBe(18);
   });
 
+  test("the headroom cut-off is per provider, and 0 disables it", async () => {
+    // Same knob and default as the Command Code account pool: any window at the cut-off takes the
+    // credential out of rotation, and an operator can move or disable the line.
+    const strict = { ...provider(), baseUrl: "https://opencode.ai/zen/go/v1", apiKeyPoolHeadroomPercent: 50 };
+    const chose = await balanceProviderApiKey("opencode-go", strict, "thread-cfg", {
+      now: 1_000,
+      fetchImpl: (async (_url: string | URL, init?: RequestInit) => {
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        return Response.json({ usage: { rolling: { percent: key === "glm-plan-one" ? 60 : 20 } } });
+      }) as typeof fetch,
+    });
+    expect(chose.apiKey).toBe("glm-plan-two");
+
+    // 0 disables the cut-off, so a key past any threshold stays selectable.
+    clearApiKeyBalancerState();
+    const disabled = { ...provider(), baseUrl: "https://opencode.ai/zen/go/v1", apiKeyPoolHeadroomPercent: 0 };
+    const anyKey = await balanceProviderApiKey("opencode-go", disabled, "thread-cfg-2", {
+      now: 1_000,
+      fetchImpl: (async (_url: string | URL, init?: RequestInit) => {
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        return Response.json({ usage: { rolling: { percent: key === "glm-plan-one" ? 100 : 100 } } });
+      }) as typeof fetch,
+    });
+    expect(["glm-plan-one", "glm-plan-two"]).toContain(anyKey.apiKey);
+  });
+
+  test("treats a key at the headroom cut-off as spent even when a peer is worse", async () => {
+    // The last percent of a budget is not worth spending: a key at 99% is about to start refusing,
+    // so new conversations belong to the key that can still serve them.
+    const p = { ...provider(), baseUrl: "https://opencode.ai/zen/go/v1" };
+    const selected = await balanceProviderApiKey("opencode-go", p, "thread-headroom", {
+      now: 1_000,
+      fetchImpl: (async (_url: string | URL, init?: RequestInit) => {
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        return Response.json({ usage: { rolling: { percent: key === "glm-plan-one" ? 99 : 99.5 } } });
+      }) as typeof fetch,
+    });
+    // Both are past the cut-off, so the pool fails open rather than starving the request.
+    expect(["glm-plan-one", "glm-plan-two"]).toContain(selected.apiKey);
+    expect(apiKeyQuotaSnapshotForTests("opencode-go", "one")?.usedPercent).toBe(99);
+
+    // With one key under the cut-off, it is the only candidate.
+    const second = await balanceProviderApiKey("opencode-go", p, "thread-headroom-2", {
+      now: 1_000 + 120_000,
+      fetchImpl: (async (_url: string | URL, init?: RequestInit) => {
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        return Response.json({ usage: { rolling: { percent: key === "glm-plan-one" ? 99 : 50 } } });
+      }) as typeof fetch,
+    });
+    expect(second.apiKey).toBe("glm-plan-two");
+  });
+
   test("meters every OpenCode Go window, not only the rolling one", async () => {
     // A key can be idle in its five-hour window and still be out of weekly budget. Reading only
     // `rolling` scored that key as free, handed it new conversations, and the request then failed

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { getKeyCooldownUntil } from "./key-failover";
+import { resolvePoolHeadroomPercent } from "./pool-headroom";
 
 const QUOTA_CACHE_TTL_MS = 60_000;
 const AFFINITY_TTL_MS = 6 * 60 * 60_000;
@@ -132,9 +133,10 @@ async function refreshQuota(
   state: ProviderPoolState,
   now: number,
   fetchImpl: typeof fetch,
+  force = false,
 ): Promise<void> {
   const cached = state.quotas.get(entry.id);
-  if (cached && now - cached.fetchedAt < QUOTA_CACHE_TTL_MS) return;
+  if (!force && cached && now - cached.fetchedAt < QUOTA_CACHE_TTL_MS) return;
   const existing = state.quotaRefreshes.get(entry.id);
   if (existing) return existing;
   const endpoint = quotaEndpoint(provider.baseUrl);
@@ -222,7 +224,9 @@ export async function balanceProviderApiKey(
   if (pinned) {
     const entry = pool.find(candidate => candidate.id === pinned.keyId);
     const quota = entry ? state.quotas.get(entry.id) : undefined;
-    if (entry && getKeyCooldownUntil(providerName, entry.id, now) === null && (quota?.usedPercent ?? 0) < 100) {
+    const pinnedHeadroom = resolvePoolHeadroomPercent(provider.apiKeyPoolHeadroomPercent);
+    if (entry && getKeyCooldownUntil(providerName, entry.id, now) === null
+      && (pinnedHeadroom <= 0 || (quota?.usedPercent ?? 0) < pinnedHeadroom)) {
       pinned.touchedAt = now;
       state.affinities.delete(id!);
       state.affinities.set(id!, pinned);
@@ -231,8 +235,11 @@ export async function balanceProviderApiKey(
     state.affinities.delete(id!);
   }
 
+  const headroom = resolvePoolHeadroomPercent(provider.apiKeyPoolHeadroomPercent);
   const healthy = pool.filter(entry => getKeyCooldownUntil(providerName, entry.id, now) === null);
-  const candidates = healthy.filter(entry => (state.quotas.get(entry.id)?.usedPercent ?? 0) < 100);
+  const withinHeadroom = (id: string): boolean =>
+    headroom <= 0 || (state.quotas.get(id)?.usedPercent ?? 0) < headroom;
+  const candidates = healthy.filter(entry => withinHeadroom(entry.id));
   const eligible = candidates.length > 0 ? candidates : healthy.length > 0 ? healthy : pool;
   const allQuotaKnown = eligible.every(entry => state.quotas.get(entry.id)?.usedPercent !== undefined);
   const counts = affinityCounts(state);
@@ -250,6 +257,38 @@ export async function balanceProviderApiKey(
   state.cursor = (state.cursor + 1) % Number.MAX_SAFE_INTEGER;
   if (id) state.affinities.set(id, { keyId: selected.id, touchedAt: now });
   return { ...provider, apiKey: selected.key };
+}
+
+/**
+ * Pre-warm the per-key quota cache for a balanced pool.
+ *
+ * Selection reads these snapshots synchronously, so a pool that has not served a request yet has
+ * nothing to score and cannot apply the headroom cut-off. The background tracker calls this so the
+ * numbers the balancer decides on are current even while traffic is idle.
+ *
+ * Returns how many keys now hold a usable snapshot.
+ */
+export async function refreshProviderApiKeyQuotas(
+  providerName: string,
+  provider: OcxProviderConfig,
+  options: { now?: number; fetchImpl?: typeof fetch; force?: boolean } = {},
+): Promise<number> {
+  if (provider.apiKeyPoolStrategy !== "balanced") return 0;
+  if (provider.authMode === "oauth" || provider.authMode === "forward") return 0;
+  const pool = provider.apiKeyPool?.filter(entry => entry.id && entry.key) ?? [];
+  if (pool.length === 0) return 0;
+  const now = options.now ?? Date.now();
+  const state = stateFor(providerName);
+  sweepState(state, new Set(pool.map(entry => entry.id)), now);
+  await Promise.all(pool.map(entry => refreshQuota(
+    provider,
+    entry,
+    state,
+    now,
+    options.fetchImpl ?? fetch,
+    options.force === true,
+  )));
+  return pool.filter(entry => state.quotas.get(entry.id)?.usedPercent !== undefined).length;
 }
 
 export function clearApiKeyBalancerState(providerName?: string): void {

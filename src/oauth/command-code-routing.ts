@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 import { getCachedProviderAccountQuota } from "../providers/quota";
+import { resolvePoolHeadroomPercent } from "../providers/pool-headroom";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { getAccountSet, getAccountCredential } from "./store";
 
@@ -16,8 +17,6 @@ const AFFINITY_TTL_MS = 6 * 60 * 60_000;
 const MAX_AFFINITY_ENTRIES = 4_096;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
-/** At or above this usage a budget is spent and the account cannot serve a request. */
-const EXHAUSTED_PERCENT = 100;
 /** Bounded scan for the spend rejection; the upstream prefixes it with a JSON error object. */
 const INSUFFICIENT_CREDITS_MESSAGE = /insufficient credits/i;
 const MAX_CREDITS_BODY_SCAN = 512;
@@ -30,6 +29,8 @@ let cursor = 0;
 export interface CommandCodeAccountPoolConfig {
   enabled?: boolean;
   strategy?: OcxAccountPoolRotationStrategy;
+  /** Usage % at or above which an account is skipped for new sessions. 0 disables the cut-off. */
+  autoSwitchThreshold?: number;
 }
 
 export function commandCodeAccountPoolConfig(config: OcxConfig): CommandCodeAccountPoolConfig {
@@ -40,6 +41,16 @@ export function commandCodeAccountPoolConfig(config: OcxConfig): CommandCodeAcco
 
 export function isCommandCodeAccountPoolEnabled(config: OcxConfig): boolean {
   return commandCodeAccountPoolConfig(config).enabled !== false;
+}
+
+/**
+ * Usage % at or above which an account is skipped. 0 disables the cut-off, which leaves selection
+ * to the upstream refusal plus the cooldown.
+ *
+ * Shared with balanced API-key pools so both kinds of pool drop a credential at the same point.
+ */
+export function commandCodeAutoSwitchThreshold(config: OcxConfig): number {
+  return resolvePoolHeadroomPercent(commandCodeAccountPoolConfig(config).autoSwitchThreshold);
 }
 
 function strategyFor(config: OcxConfig): OcxAccountPoolRotationStrategy {
@@ -58,28 +69,30 @@ function isCooled(accountId: string, now: number): boolean {
   return false;
 }
 
-function eligibleAccounts(now: number): string[] {
+function eligibleAccounts(config: OcxConfig, now: number): string[] {
   const set = getAccountSet(PROVIDER);
   if (!set) return [];
   const usable = set.accounts
     .filter(account => account.needsReauth !== true && !isCooled(account.id, now))
     .filter(account => Boolean(getAccountCredential(PROVIDER, account.id)))
     .map(account => account.id);
-  // Prefer accounts that still have headroom. Never return an empty pool: when every account is
-  // spent the caller must still attempt one and surface the upstream's own error, rather than
-  // failing the request locally with nothing to report.
-  const withHeadroom = usable.filter(accountId => usageScore(accountId) < EXHAUSTED_PERCENT);
+  const threshold = commandCodeAutoSwitchThreshold(config);
+  if (threshold <= 0) return usable;
+  // Skip accounts that have reached the cut-off on ANY budget. Never return an empty pool: when
+  // every account is spent the caller must still attempt one and surface the upstream's own error,
+  // rather than failing the request locally with nothing to report.
+  const withHeadroom = usable.filter(accountId => usageScore(accountId) < threshold);
   return withHeadroom.length ? withHeadroom : usable;
 }
 
 /**
- * Highest known usage for an account across every budget it reports: the five-hour and weekly
- * windows and the monthly credit balance.
+ * Highest known usage for an account across every budget it reports: the five-hour window, the
+ * weekly window and the monthly credit balance.
  *
- * Credits are not interchangeable with the windows. An account can sit at 33% of its weekly window
- * and still be unable to serve a single request because its credit balance is spent, so reading
- * only the windows is what let a spent account keep taking half the traffic. Infinity means
- * "nothing known", which keeps an unprobed account selectable.
+ * The budgets are not interchangeable, so the maximum is what decides. An account can sit at 33% of
+ * its weekly window and still be unable to serve a single request because its credit balance is
+ * spent; conversely a fresh five-hour window says nothing about a weekly budget that is gone.
+ * Infinity means "nothing known", which keeps an unprobed account selectable.
  */
 function usageScore(accountId: string): number {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
@@ -114,7 +127,7 @@ export function resolveCommandCodeAccountForSession(
   config: OcxConfig,
   now = Date.now(),
 ): { accountId: string | null; reason: string } {
-  const eligible = eligibleAccounts(now);
+  const eligible = eligibleAccounts(config, now);
   if (!eligible.length) return { accountId: null, reason: "no-eligible-account" };
   if (!isCommandCodeAccountPoolEnabled(config) || eligible.length === 1) {
     return { accountId: eligible[0]!, reason: eligible.length === 1 ? "single-account" : "pool-disabled" };
@@ -151,6 +164,7 @@ export async function getCommandCodePoolAccessToken(accountId: string): Promise<
 
 /** Cool the failed account and select a peer to retry on, or null when no peer is left. */
 function coolAndSelectPeer(
+  config: OcxConfig,
   currentAccountId: string,
   delayMs: number,
   sessionKey: string | null | undefined,
@@ -158,7 +172,7 @@ function coolAndSelectPeer(
 ): string | null {
   cooldownUntil.set(currentAccountId, now + delayMs);
   if (sessionKey?.trim()) sessionAffinity.delete(affinityKey(sessionKey.trim()));
-  const next = eligibleAccounts(now).filter(accountId => accountId !== currentAccountId);
+  const next = eligibleAccounts(config, now).filter(accountId => accountId !== currentAccountId);
   if (!next.length) return null;
   const selected = next[cursor++ % next.length]!;
   remember(sessionKey?.trim() || null, selected, now);
@@ -166,6 +180,7 @@ function coolAndSelectPeer(
 }
 
 export function rotateCommandCodeAccountOn429(
+  config: OcxConfig,
   currentAccountId: string,
   retryAfter: string | null | undefined,
   sessionKey: string | null | undefined,
@@ -175,7 +190,7 @@ export function rotateCommandCodeAccountOn429(
   const delay = Number.isFinite(seconds)
     ? Math.min(MAX_COOLDOWN_MS, Math.max(1_000, Math.ceil(seconds * 1_000)))
     : DEFAULT_COOLDOWN_MS;
-  return coolAndSelectPeer(currentAccountId, delay, sessionKey, now);
+  return coolAndSelectPeer(config, currentAccountId, delay, sessionKey, now);
 }
 
 /**
@@ -188,11 +203,12 @@ export function rotateCommandCodeAccountOn429(
  * every request.
  */
 export function rotateCommandCodeAccountOnInsufficientCredits(
+  config: OcxConfig,
   currentAccountId: string,
   sessionKey: string | null | undefined,
   now = Date.now(),
 ): string | null {
-  return coolAndSelectPeer(currentAccountId, MAX_COOLDOWN_MS, sessionKey, now);
+  return coolAndSelectPeer(config, currentAccountId, MAX_COOLDOWN_MS, sessionKey, now);
 }
 
 /**

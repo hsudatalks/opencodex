@@ -480,6 +480,15 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   ) {
     return `provider ${name} apiKeyPoolStrategy must be failover or balanced`;
   }
+  if (
+    raw.apiKeyPoolHeadroomPercent !== undefined
+    && (typeof raw.apiKeyPoolHeadroomPercent !== "number"
+      || !Number.isInteger(raw.apiKeyPoolHeadroomPercent)
+      || raw.apiKeyPoolHeadroomPercent < 0
+      || raw.apiKeyPoolHeadroomPercent > 100)
+  ) {
+    return `provider ${name} apiKeyPoolHeadroomPercent must be an integer 0-100`;
+  }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");

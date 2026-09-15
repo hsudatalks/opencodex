@@ -449,6 +449,35 @@ describe("Command Code account pool strategy management API", () => {
     }
   });
 
+  test("PUT persists the Command Code headroom cut-off and rejects values outside 0-100", async () => {
+    // The cut-off is what keeps an account whose budget is 99% spent out of rotation, so it has to
+    // be settable without a release — and validated, since it feeds a comparison against a percent.
+    const server = startServer(0);
+    try {
+      const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", enabled: true, strategy: "quota", autoSwitchThreshold: 95 }),
+      });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toMatchObject({ provider: "command-code", autoSwitchThreshold: 95 });
+
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await get.json()).toMatchObject({ autoSwitchThreshold: 95 });
+
+      for (const invalid of [101, -1, 99.5, "high"]) {
+        const bad = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "command-code", autoSwitchThreshold: invalid }),
+        });
+        expect(bad.status).toBe(400);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("PUT persists strategy and GET reflects it", async () => {
     const server = startServer(0);
     try {

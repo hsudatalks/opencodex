@@ -67,7 +67,7 @@ describe("Command Code account pool", () => {
 
   test("429 cools the failed account and selects a peer", async () => {
     const { first, second } = await seed();
-    expect(rotateCommandCodeAccountOn429(first, "30", "session-a")).toBe(second);
+    expect(rotateCommandCodeAccountOn429(config(), first, "30", "session-a")).toBe(second);
     expect(commandCodeAccountPoolHealthForTests().cooledAccountIds).toEqual([first]);
     expect(resolveCommandCodeAccountForSession("session-a", config()).accountId).toBe(second);
   });
@@ -113,6 +113,59 @@ describe("Command Code account pool", () => {
     }
   });
 
+  test("any one budget reaching the cut-off takes the account out of rotation", async () => {
+    // The live case: 99.84% of the credit balance spent while the weekly window read a healthy 33%.
+    // The last percent is not worth spending, so the cut-off is 99 rather than 100.
+    const { first, second } = await seed();
+    setCachedProviderAccountQuotaForTests("command-code", second, {
+      fiveHourPercent: 1,
+      weeklyPercent: 18,
+      creditsUsd: { used: 6.18, limit: 70, remaining: 63.82, percent: 8.83 },
+      updatedAt: Date.now(),
+    });
+    const drained: Array<[string, Record<string, unknown>]> = [
+      ["five-hour window", { fiveHourPercent: 99, weeklyPercent: 10, updatedAt: Date.now() }],
+      ["weekly window", { fiveHourPercent: 1, weeklyPercent: 99.5, updatedAt: Date.now() }],
+      ["monthly window", { fiveHourPercent: 1, weeklyPercent: 10, monthlyPercent: 99, updatedAt: Date.now() }],
+      ["credit balance", { fiveHourPercent: 1, weeklyPercent: 33, creditsUsd: { used: 70.33, limit: 70.44, remaining: 0.12, percent: 99.84 }, updatedAt: Date.now() }],
+    ];
+    for (const [label, quota] of drained) {
+      clearCommandCodeAccountPoolState();
+      setCachedProviderAccountQuotaForTests("command-code", first, quota as never);
+      for (const session of ["a", "b", "c"]) {
+        expect(`${label}: ${resolveCommandCodeAccountForSession(session, config()).accountId}`).toBe(`${label}: ${second}`);
+      }
+    }
+  });
+
+  test("the cut-off is configurable, and 0 disables it", async () => {
+    const { first, second } = await seed();
+    setCachedProviderAccountQuotaForTests("command-code", first, { fiveHourPercent: 90, weeklyPercent: 90, updatedAt: Date.now() });
+    setCachedProviderAccountQuotaForTests("command-code", second, { fiveHourPercent: 10, weeklyPercent: 10, updatedAt: Date.now() });
+    // Default 99 leaves 90% with headroom, so both accounts stay in the rotation.
+    const withDefault = ["a", "b", "c", "d"].map(session => resolveCommandCodeAccountForSession(session, config()).accountId);
+    expect(new Set(withDefault).size).toBe(2);
+
+    // A threshold of 80 takes the 90% account out of rotation entirely.
+    const strict = { ...config(), commandCodeAccountPool: { enabled: true, strategy: "quota" as const, autoSwitchThreshold: 80 } } as OcxConfig;
+    clearCommandCodeAccountPoolState();
+    for (const session of ["a", "b", "c", "d"]) {
+      expect(resolveCommandCodeAccountForSession(session, strict).accountId).toBe(second);
+    }
+
+    // 0 disables the cut-off, so even a fully drained account stays selectable.
+    clearCommandCodeAccountPoolState();
+    setCachedProviderAccountQuotaForTests("command-code", first, {
+      fiveHourPercent: 100,
+      weeklyPercent: 100,
+      creditsUsd: { used: 10, limit: 10, remaining: 0, percent: 100 },
+      updatedAt: Date.now(),
+    });
+    const disabled = { ...config(), commandCodeAccountPool: { enabled: true, strategy: "quota" as const, autoSwitchThreshold: 0 } } as OcxConfig;
+    const picked = ["a", "b", "c", "d"].map(session => resolveCommandCodeAccountForSession(session, disabled).accountId);
+    expect(new Set(picked).size).toBe(2);
+  });
+
   test("every account being spent still yields a selectable pool rather than none", async () => {
     // Fail open: with no account holding headroom the request must reach an upstream and report the
     // provider's own error, not fail locally for lack of a candidate.
@@ -130,7 +183,7 @@ describe("Command Code account pool", () => {
 
   test("a spend rejection cools the account for the long window and selects a peer", async () => {
     const { first, second } = await seed();
-    expect(rotateCommandCodeAccountOnInsufficientCredits(first, "session-a")).toBe(second);
+    expect(rotateCommandCodeAccountOnInsufficientCredits(config(), first, "session-a")).toBe(second);
     expect(commandCodeAccountPoolHealthForTests().cooledAccountIds).toEqual([first]);
     expect(resolveCommandCodeAccountForSession("session-a", config()).accountId).toBe(second);
     // Credits refill on a billing period, not in a minute, so the cooldown outlives the 429 default.

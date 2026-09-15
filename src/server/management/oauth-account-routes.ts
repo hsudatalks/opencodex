@@ -289,11 +289,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Command Code OAuth account pool: quota-aware by default, with safe rotation fallbacks.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET"
     && (url.searchParams.get("provider") ?? "").trim().toLowerCase() === "command-code") {
+    const { commandCodeAutoSwitchThreshold } = await import("../../oauth/command-code-routing");
     const pool = config.commandCodeAccountPool ?? {};
     return jsonResponse({
       provider: "command-code",
       enabled: pool.enabled !== false,
       strategy: normalizeAccountPoolStrategy(pool.strategy),
+      // Reported as the effective value so the dashboard shows the cut-off actually in force.
+      autoSwitchThreshold: commandCodeAutoSwitchThreshold(config),
       experimental: false,
     });
   }
@@ -328,10 +331,22 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         ? normalizeAccountPoolStrategy(config.commandCodeAccountPool?.strategy)
         : parseAccountPoolStrategy(parsedBody.strategy);
       if (strategy === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
-      config.commandCodeAccountPool = { enabled, strategy };
+      // Headroom cut-off: skip an account once any budget reaches this usage. 0 disables it, which
+      // leaves a drained account in rotation until the upstream refuses it.
+      const threshold = parsedBody.autoSwitchThreshold === undefined
+        ? config.commandCodeAccountPool?.autoSwitchThreshold
+        : parsedBody.autoSwitchThreshold;
+      if (threshold !== undefined && (typeof threshold !== "number" || !Number.isInteger(threshold) || threshold < 0 || threshold > 100)) {
+        return jsonResponse({ error: "autoSwitchThreshold must be an integer 0-100" }, 400);
+      }
+      config.commandCodeAccountPool = {
+        enabled,
+        strategy,
+        ...(threshold !== undefined ? { autoSwitchThreshold: threshold } : {}),
+      };
       saveConfigPreservingClaudeCode(config);
       reconcileLiveStateStores();
-      return jsonResponse({ ok: true, provider: "command-code", enabled, strategy, experimental: false });
+      return jsonResponse({ ok: true, provider: "command-code", enabled, strategy, ...(threshold !== undefined ? { autoSwitchThreshold: threshold } : {}), experimental: false });
     }
     const body = parsedBody as {
       provider?: unknown;

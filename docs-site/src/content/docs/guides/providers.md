@@ -324,6 +324,32 @@ account-scoped and comes from the authenticated discovery endpoint after login. 
 configured Bearer key. Create keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
+**Command Code account pool.** With more than one logged-in account, `commandCodeAccountPool`
+(default on) spreads new sessions across them and fails over within a request:
+
+- Selection reads each account's own quota — the five-hour window, the weekly window and the monthly
+  credit balance. **Any** budget reaching `commandCodeAccountPool.autoSwitchThreshold`
+  (default `99`, `0` disables) takes that account out of rotation, because the last percent is not
+  worth spending: an account with $0.12 of credit left refuses every request. When every account is at
+  the cut-off the pool fails open and still attempts one, so you see the provider's own error rather
+  than a local one.
+- A `429` cools the account (honouring `Retry-After`) and retries once on a peer. A credit refusal
+  arrives as `400 BAD_REQUEST` with an "insufficient credits" message rather than `429`; that cools
+  the account for a longer window and also retries once on a peer.
+- `commandCodeAccountPool.strategy` is `quota` (default), `round-robin` or `fill-first`.
+- The quotas are refreshed in the background about every five minutes while the pool has a peer to
+  switch to, so the cut-off does not depend on the dashboard being open.
+
+```json
+{
+  "commandCodeAccountPool": {
+    "enabled": true,
+    "strategy": "quota",
+    "autoSwitchThreshold": 99
+  }
+}
+```
+
 **SambaNova Cloud discovery.** The preset reads SambaNova Cloud's public `/v1/models` list from the fixed API
 host, preserves provider-native ids, and caps discovery at 128 KiB and 128 raw rows. Because the
 catalog is unauthenticated, the CLI login flow reports the key as unverifiable instead of treating

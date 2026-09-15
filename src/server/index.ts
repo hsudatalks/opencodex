@@ -25,6 +25,7 @@ import { getCodexHome } from "../codex/paths";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import { registerPoolQuotaTrackerWorker } from "../providers/pool-quota-tracker";
 import { startMemoryWatchdog } from "./memory-watchdog";
 import {
   reconcileLiveStateStores,
@@ -501,6 +502,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
+  // Pooled credentials (Command Code accounts, balanced API-key pools) are chosen from cached
+  // quota, so keep those caches warm without waiting for a dashboard visit.
+  registerPoolQuotaTrackerWorker(config);
   startStateStoreSweeper();
   startUsagePostgresIngestion();
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
