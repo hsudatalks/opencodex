@@ -4,7 +4,7 @@
  * handlers via props-down; no internal auth machinery.
  */
 import { useEffect, useState } from "react";
-import { useT } from "../../i18n/shared";
+import { useT, type TKey } from "../../i18n/shared";
 import { IconLock, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
@@ -22,13 +22,44 @@ import CommandCodeAccountPoolSettings from "./CommandCodeAccountPoolSettings";
 import { OAuthLoginWait } from "../oauth-login-wait";
 import QuotaBars, { isQuotaWarn } from "../QuotaBars";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
-import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
+import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderKeyQuotaWindow } from "./types";
 
 const QUOTA_ENRICH_RESERVE_MS = 4_000;
 /** One threshold for accounts and pool keys, so both warn at the same utilisation. */
 const QUOTA_WARN_PERCENT = 80;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
+
+/**
+ * The windows a pool key can report, in the order they are shown. Longer budgets come last so the
+ * shortest window — the one that recovers first and is therefore the least alarming — leads.
+ * Labels are keyed rather than literal so the chips stay translated in every locale.
+ */
+const KEY_QUOTA_WINDOWS = [
+  { id: "fiveHour", percent: "fiveHourPercent", limitKey: "quota.fiveHourLimit", remainingKey: "quota.fiveHourRemaining" },
+  { id: "weekly", percent: "weeklyPercent", limitKey: "quota.weeklyLimit", remainingKey: "quota.weeklyRemaining" },
+  { id: "monthly", percent: "monthlyPercent", limitKey: "quota.monthlyLimit", remainingKey: "quota.monthlyRemaining" },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  percent: keyof ProviderKeyQuotaWindow;
+  limitKey: TKey;
+  remainingKey: TKey;
+}>;
+
+/** One entry per window this key actually reported; windows it omitted produce no chip. */
+function keyQuotaChips(quota: ProviderKeyQuotaWindow | undefined): Array<{
+  id: string;
+  percent: number;
+  limitKey: TKey;
+  remainingKey: TKey;
+}> {
+  return KEY_QUOTA_WINDOWS.flatMap(window => {
+    const percent = quota?.[window.percent];
+    return typeof percent === "number" && Number.isFinite(percent)
+      ? [{ id: window.id, percent, limitKey: window.limitKey, remainingKey: window.remainingKey }]
+      : [];
+  });
+}
 
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
@@ -288,15 +319,22 @@ export default function ProviderAuthPanel({
                     {/* Outside the row button: the button is disabled on the active key, and a
                         disabled control neither hovers nor dims what a pool peer needs to compare.
                         A pool's keys are independent, so the active badge says nothing about the
-                        peers — each row reports its own 5-hour window. */}
-                    {typeof entry.quota?.fiveHourPercent === "number" && (
-                      <span
-                        className={`badge ${isQuotaWarn(entry.quota.fiveHourPercent, QUOTA_WARN_PERCENT) ? "badge-amber" : "badge-muted"}`}
-                        title={t("quota.fiveHourLimit")}
-                      >
-                        {t("quota.fiveHourRemaining", { pct: Math.max(0, 100 - Math.round(entry.quota.fiveHourPercent)) })}
-                      </span>
-                    )}
+                        peers — each row reports its own windows, and each window gets its own chip
+                        so a key that is comfortable on 5h but nearly out of its 30-day budget
+                        cannot read as healthy. A window the provider did not report renders
+                        nothing rather than a fabricated 0%. */}
+                    {keyQuotaChips(entry.quota).map(chip => {
+                      const warn = isQuotaWarn(chip.percent, QUOTA_WARN_PERCENT);
+                      return (
+                        <span
+                          key={chip.id}
+                          className={`badge ${warn ? "badge-amber" : "badge-muted"}`}
+                          title={t(chip.limitKey)}
+                        >
+                          {t(chip.remainingKey, { pct: Math.max(0, 100 - Math.round(chip.percent)) })}
+                        </span>
+                      );
+                    })}
                     <button type="button" className="btn btn-ghost btn-sm"
                       onClick={() => void authHandlers.onEditAlias(item.name, "api-key", entry.id, entry.label)}>
                       {t("prov.editAlias")}

@@ -1501,6 +1501,8 @@ export const ko: Record<TKey, string> = {
   "quota.totalSubscriptionCredits": "전체 구독 크레딧",
   "quota.usedPercent": "{pct}% 사용",
   "quota.fiveHourRemaining": "5시간 잔여 {pct}%",
+  "quota.weeklyRemaining": "주간 잔여 {pct}%",
+  "quota.monthlyRemaining": "30일 잔여 {pct}%",
   "quota.limitReached": "한도 도달",
   "quota.resetsToday": "오늘 {time} 초기화",
   "quota.resetsTomorrow": "내일 {time} 초기화",

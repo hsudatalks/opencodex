@@ -937,6 +937,8 @@ export const ja: Record<TKey, string> = {
   "quota.totalSubscriptionCredits": "サブスクリプションクレジット合計",
   "quota.usedPercent": "{pct}% 使用",
   "quota.fiveHourRemaining": "5時間の残り {pct}%",
+  "quota.weeklyRemaining": "週間の残り {pct}%",
+  "quota.monthlyRemaining": "30日の残り {pct}%",
   "quota.limitReached": "上限に達しました",
   "quota.resetsToday": "今日 {time} にリセット",
   "quota.resetsTomorrow": "明日 {time} にリセット",

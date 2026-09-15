@@ -16,7 +16,6 @@ import { en } from "../src/i18n/en";
  * The wire field is UTILISATION ("percent used"), so the chip must invert it — rendering the
  * used percentage as if it were the remainder would label the dying key as the healthy one.
  */
-
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
 let win: Window;
@@ -91,6 +90,21 @@ function keyQuotaChips(): Element[] {
   return [...host.querySelectorAll(`.pwi-auth-list .badge[title="${en["quota.fiveHourLimit"]}"]`)];
 }
 
+/** Every window chip on the row, in DOM order, keyed by the label it advertises. */
+function chipsByTitle(): Array<{ title: string; text: string }> {
+  const titles = [en["quota.fiveHourLimit"], en["quota.weeklyLimit"], en["quota.monthlyLimit"]];
+  return [...host.querySelectorAll(".pwi-auth-list .badge")]
+    .map(el => ({ title: el.getAttribute("title") ?? "", text: (el.textContent ?? "").trim() }))
+    .filter(chip => titles.includes(chip.title as never));
+}
+
+function expectedChipFor(key: "fiveHour" | "weekly" | "monthly", pct: number): string {
+  const tkey = key === "fiveHour"
+    ? "quota.fiveHourRemaining"
+    : key === "weekly" ? "quota.weeklyRemaining" : "quota.monthlyRemaining";
+  return en[tkey].replace("{pct}", String(pct));
+}
+
 function expectedChip(pct: number): string {
   return en["quota.fiveHourRemaining"].replace("{pct}", String(pct));
 }
@@ -137,4 +151,46 @@ test("the chip sits outside the row button so the active key's own control canno
   // The row button is disabled on the active key; a nested badge would inherit that state.
   expect(chip.closest(".pwi-auth-row-main")).toBeNull();
   expect(chip.closest(".pwi-auth-row")).not.toBeNull();
+});
+
+/**
+ * A key can be comfortable on its 5-hour window and nearly out of its 30-day budget (OpenCode
+ * reports rolling, weekly and monthly). Rendering only the 5-hour window let such a key read as
+ * healthy, so every window the provider reports needs its own chip.
+ */
+test("a key reporting all three windows shows one labelled chip per window, shortest first", async () => {
+  await mountPanel([key({ id: "full", quota: { fiveHourPercent: 4, weeklyPercent: 67, monthlyPercent: 41 } })]);
+
+  expect(chipsByTitle()).toEqual([
+    { title: en["quota.fiveHourLimit"], text: expectedChipFor("fiveHour", 96) },
+    { title: en["quota.weeklyLimit"], text: expectedChipFor("weekly", 33) },
+    { title: en["quota.monthlyLimit"], text: expectedChipFor("monthly", 59) },
+  ]);
+});
+
+test("a provider reporting only a 30-day budget shows just that chip", async () => {
+  await mountPanel([key({ id: "monthly-only", quota: { monthlyPercent: 90 } })]);
+
+  expect(chipsByTitle()).toEqual([
+    { title: en["quota.monthlyLimit"], text: expectedChipFor("monthly", 10) },
+  ]);
+});
+
+test("each window warns on its own utilisation", async () => {
+  await mountPanel([key({ id: "mixed", quota: { fiveHourPercent: 4, weeklyPercent: 85, monthlyPercent: 10 } })]);
+
+  const chips = [...host.querySelectorAll(".pwi-auth-list .badge")]
+    .filter(el => [en["quota.fiveHourLimit"], en["quota.weeklyLimit"], en["quota.monthlyLimit"]]
+      .includes((el.getAttribute("title") ?? "") as never));
+  const [fiveHour, weekly, monthly] = chips;
+  // A comfortable 5-hour window must not mask a nearly-spent week, and vice versa.
+  expect(fiveHour?.classList.contains("badge-muted")).toBe(true);
+  expect(weekly?.classList.contains("badge-amber")).toBe(true);
+  expect(monthly?.classList.contains("badge-muted")).toBe(true);
+});
+
+test("a window the provider omitted produces no chip rather than a fabricated 0%", async () => {
+  await mountPanel([key({ id: "partial", quota: { fiveHourPercent: 50, monthlyPercent: 20 } })]);
+
+  expect(chipsByTitle().map(c => c.title)).toEqual([en["quota.fiveHourLimit"], en["quota.monthlyLimit"]]);
 });

@@ -979,6 +979,8 @@ export const en = {
   "quota.totalSubscriptionCredits": "Total subscription credits",
   "quota.usedPercent": "{pct}% used",
   "quota.fiveHourRemaining": "{pct}% of 5h left",
+  "quota.weeklyRemaining": "{pct}% of Week left",
+  "quota.monthlyRemaining": "{pct}% of 30d left",
   "quota.limitReached": "Limit reached",
   "quota.resetsToday": "Resets today at {time}",
   "quota.resetsTomorrow": "Resets tomorrow at {time}",

@@ -64,8 +64,10 @@ export type OAuthAccountRow = {
 export type ProviderKeyQuotaWindow = {
   fiveHourPercent?: number;
   weeklyPercent?: number;
+  monthlyPercent?: number;
   fiveHourResetAt?: number;
   weeklyResetAt?: number;
+  monthlyResetAt?: number;
 };
 
 export type ApiKeyRow = {

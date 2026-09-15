@@ -1474,6 +1474,8 @@ export const de: Record<TKey, string> = {
   "quota.totalSubscriptionCredits": "Gesamtes Abo-Guthaben",
   "quota.usedPercent": "{pct} % genutzt",
   "quota.fiveHourRemaining": "5 Std.: {pct} % übrig",
+  "quota.weeklyRemaining": "Woche: {pct} % übrig",
+  "quota.monthlyRemaining": "30 Tage: {pct} % übrig",
   "quota.limitReached": "Limit erreicht",
   "quota.resetsToday": "Zurücksetzung heute um {time}",
   "quota.resetsTomorrow": "Zurücksetzung morgen um {time}",

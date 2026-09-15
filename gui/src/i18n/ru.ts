@@ -969,6 +969,8 @@ export const ru: Record<TKey, string> = {
   "quota.totalSubscriptionCredits": "Всего кредитов подписки",
   "quota.usedPercent": "Использовано {pct}%",
   "quota.fiveHourRemaining": "Осталось {pct}% из 5 ч",
+  "quota.weeklyRemaining": "Осталось {pct}% из недели",
+  "quota.monthlyRemaining": "Осталось {pct}% из 30 дн.",
   "quota.limitReached": "Лимит исчерпан",
   "quota.resetsToday": "Сброс сегодня в {time}",
   "quota.resetsTomorrow": "Сброс завтра в {time}",
