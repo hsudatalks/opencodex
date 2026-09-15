@@ -206,6 +206,9 @@ describe("fetchProviderAccountQuotas", () => {
     await saveCredential("command-code", { access: "command-first", refresh: "command-first", expires, accountId: "cc-first" });
     await saveCredential("command-code", { access: "command-second", refresh: "command-second", expires, accountId: "cc-second" });
     const seenTokens: string[] = [];
+    // Every request an account makes must carry that account's own bearer. The credits endpoint is
+    // keyed off the org from whoami, and the spend needs the billing period, so a per-account probe
+    // walks four endpoints — the point of the test is that it never borrows the active credential.
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       seenTokens.push(auth);
@@ -222,7 +225,46 @@ describe("fetchProviderAccountQuotas", () => {
     expect(percentages[0]?.[1]).toBeCloseTo(5.7142, 3);
     expect(percentages[1]?.[0]).toBeCloseTo(64.2857, 3);
     expect(percentages[1]?.[1]).toBeCloseTo(25.7142, 3);
-    expect(seenTokens.sort()).toEqual(["Bearer command-first", "Bearer command-second"]);
+    // Each account is probed with its own credential and nothing else; the shared active token is
+    // never used on behalf of another account.
+    expect([...new Set(seenTokens)].sort()).toEqual(["Bearer command-first", "Bearer command-second"]);
+  });
+
+  test("per-account Command Code quota carries the credit balance, not only the windows", async () => {
+    // The windows and the credit balance are separate budgets. An account can sit at a third of its
+    // weekly window and still be unable to serve a request, so account selection needs the credits
+    // in the same payload the dashboard reads — otherwise a spent account looks healthy and keeps
+    // taking its share of the traffic.
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("command-code", { access: "command-spent", refresh: "command-spent", expires, accountId: "cc-spent" });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/alpha/whoami")) return Response.json({ data: { org: { id: "org-1" } } });
+      if (url.includes("/alpha/billing/credits")) {
+        return Response.json({
+          credits: { monthlyCredits: 0.12, purchasedCredits: 0, freeCredits: 0, creditThreshold: 0 },
+          windowLimits: {
+            fiveHour: { cap: 14, used: 0.38, resetAt: "2026-08-15T20:00:00.000Z" },
+            weekly: { cap: 35, used: 11.6, resetAt: "2026-08-18T00:00:00.000Z" },
+          },
+        });
+      }
+      if (url.includes("/alpha/billing/subscriptions")) {
+        return Response.json({ data: { currentPeriodStart: "2026-08-01T00:00:00.000Z", currentPeriodEnd: "2026-09-01T00:00:00.000Z" } });
+      }
+      if (url.includes("/alpha/usage/summary")) return Response.json({ data: { totalCost: 6.13 } });
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("command-code");
+    // One logged-in account in this store, so the single row is the spent one.
+    expect(rows.length).toBe(1);
+    const spent = rows[0];
+    expect(spent?.quota?.weeklyPercent).toBeCloseTo((11.6 / 35) * 100, 3);
+    // 6.13 spent against 6.13 + 0.12 left: nearly exhausted while the weekly window shows 33%.
+    expect(spent?.quota?.creditsUsd?.remaining).toBeCloseTo(0.12, 4);
+    expect(spent?.quota?.creditsUsd?.used).toBeCloseTo(6.13, 4);
+    expect(spent?.quota?.creditsUsd?.percent).toBeGreaterThan(97);
   });
 
   test("providers without a per-account usage API are skipped", async () => {

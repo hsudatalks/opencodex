@@ -1737,29 +1737,77 @@ async function resolveCommandCodeQuotaBearer(config: OcxProviderConfig): Promise
 }
 
 /**
- * Command Code `GET /alpha/billing/credits` — the same Bearer surface the CLI's
- * usage view uses (windowLimits.fiveHour / windowLimits.weekly), plus soft
- * whoami (team orgId scoping) and subscription-scoped spend for creditsUsd.
+ * Outcome of one Command Code credential probe. `terminal` mirrors the provider-level contract for
+ * a 4xx that means the credential itself is rejected; `unavailable` is a soft/transient failure.
  */
-async function fetchCommandCodeAccountQuota(accessToken: string): Promise<ProviderQuota | null> {
-  const body = await fetchCommandCodeJson(COMMAND_CODE_CREDITS_URL, accessToken);
+type CommandCodeQuotaProbe =
+  | { kind: "ok"; quota: ProviderQuota }
+  | { kind: "terminal" }
+  | { kind: "unavailable" };
+
+/**
+ * The complete Command Code quota for ONE credential: the five-hour and weekly windows plus the
+ * monthly credit balance (`creditsUsd`).
+ *
+ * Both the per-account probe and the provider-level report read this, and that is the point: the
+ * per-account result is what account selection sees, so a spent credit balance has to travel with
+ * it. Probing credits only for the active account — and only for the dashboard — is what let an
+ * account with $0.12 left keep taking half the traffic while its quota bar looked healthy.
+ *
+ * Commands `whoami` (team orgId scoping), `credits`, `subscriptions` (billing period) and `usage`
+ * (period spend); every call soft-fails to a partial result rather than throwing.
+ */
+async function probeCommandCodeQuota(accessToken: string): Promise<CommandCodeQuotaProbe> {
+  const whoamiBody = await fetchCommandCodeJson(COMMAND_CODE_WHOAMI_URL, accessToken);
+  const whoami = asRecord(whoamiBody?.data) ?? whoamiBody;
+  const org = asRecord(whoami?.org);
+  const orgId = typeof org?.id === "string" && org.id.trim() ? org.id.trim() : null;
+  const orgQuery = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
+  let response: Response;
+  try {
+    response = await fetch(`${COMMAND_CODE_CREDITS_URL}${orgQuery}`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    return { kind: "unavailable" };
+  }
+  if (!response.ok) {
+    // A rejected credential must stay terminal for the provider report; routing only needs the
+    // distinction between "has data" and "has none", and maps both failures to no quota.
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? { kind: "terminal" }
+      : { kind: "unavailable" };
+  }
+  const raw = asRecord(await readQuotaJson(response));
+  const body = asRecord(raw?.data) ?? raw;
   const credits = asRecord(body?.credits);
   const limits = asRecord(body?.windowLimits);
-  if (!credits && !limits) return null;
+  if (!credits && !limits) return { kind: "unavailable" };
   const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
   const weekly = parseCommandCodeWindow(limits?.weekly);
-  if (!fiveHour && !weekly) return null;
+  const creditsUsd = await fetchCommandCodeSpend(accessToken, credits, orgQuery);
   return {
-    ...(fiveHour ? {
-      fiveHourPercent: fiveHour.percent,
-      ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
-    } : {}),
-    ...(weekly ? {
-      weeklyPercent: weekly.percent,
-      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
-    } : {}),
-    updatedAt: Date.now(),
+    kind: "ok",
+    quota: {
+      ...(fiveHour ? {
+        fiveHourPercent: fiveHour.percent,
+        ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
+      } : {}),
+      ...(weekly ? {
+        weeklyPercent: weekly.percent,
+        ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+      } : {}),
+      ...(creditsUsd ? { creditsUsd } : {}),
+      updatedAt: Date.now(),
+    },
   };
+}
+
+async function fetchCommandCodeAccountQuota(accessToken: string): Promise<ProviderQuota | null> {
+  const probe = await probeCommandCodeQuota(accessToken);
+  return probe.kind === "ok" ? probe.quota : null;
 }
 
 async function fetchCommandCodeQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
@@ -1767,41 +1815,10 @@ async function fetchCommandCodeQuota(provider: string, config: OcxProviderConfig
   if (!isCanonicalCommandCodeBaseUrl(config.baseUrl)) return null;
   const bearer = await resolveCommandCodeQuotaBearer(config);
   if (!bearer) return null;
-  const whoamiBody = await fetchCommandCodeJson(COMMAND_CODE_WHOAMI_URL, bearer);
-  const whoami = asRecord(whoamiBody?.data) ?? whoamiBody;
-  const org = asRecord(whoami?.org);
-  const orgId = typeof org?.id === "string" && org.id.trim() ? org.id.trim() : null;
-  const orgQuery = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
-  const response = await fetch(`${COMMAND_CODE_CREDITS_URL}${orgQuery}`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
-    redirect: "error",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
-      ? TERMINAL_QUOTA_FAILURE
-      : null;
-  }
-  const raw = asRecord(await readQuotaJson(response));
-  const body = asRecord(raw?.data) ?? raw;
-  const credits = asRecord(body?.credits);
-  const limits = asRecord(body?.windowLimits);
-  if (!credits && !limits) return null;
-  const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
-  const weekly = parseCommandCodeWindow(limits?.weekly);
-  const creditsUsd = await fetchCommandCodeSpend(bearer, credits, orgQuery);
-  return report(provider, "command-code:credits", {
-    ...(fiveHour ? {
-      fiveHourPercent: fiveHour.percent,
-      ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
-    } : {}),
-    ...(weekly ? {
-      weeklyPercent: weekly.percent,
-      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
-    } : {}),
-    ...(creditsUsd ? { creditsUsd } : {}),
-    updatedAt: Date.now(),
-  });
+  const probe = await probeCommandCodeQuota(bearer);
+  if (probe.kind === "terminal") return TERMINAL_QUOTA_FAILURE;
+  if (probe.kind === "unavailable") return null;
+  return report(provider, "command-code:credits", probe.quota);
 }
 
 /** Cursor included usage via api2.cursor.sh (Bearer from OAuth) — unofficial, may change. */

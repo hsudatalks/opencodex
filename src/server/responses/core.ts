@@ -62,7 +62,9 @@ import {
   getCommandCodePoolAccessToken,
   isCommandCodeAccountPoolEnabled,
   resolveCommandCodeAccountForSession,
+  isCommandCodeInsufficientCreditsResponse,
   rotateCommandCodeAccountOn429,
+  rotateCommandCodeAccountOnInsufficientCredits,
 } from "../../oauth/command-code-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
@@ -3368,36 +3370,46 @@ async function handleResponsesInner(
         upstreamResponse = result;
       }
 
-      // Command Code OAuth account pool: cool a rate-limited account and retry once on a peer.
-      while (
-        upstreamResponse.status === 429
-        && commandCodePoolAccountId
-        && commandCodePoolFailovers < 1
-      ) {
-        const nextAccountId = rotateCommandCodeAccountOn429(
-          commandCodePoolAccountId,
-          upstreamResponse.headers.get("retry-after"),
-          logCtx.conversationId,
-        );
-        if (!nextAccountId) break;
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        try {
-          const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
-          commandCodePoolAccountId = nextAccountId;
-          commandCodePoolFailovers += 1;
-          route.provider = { ...route.provider, apiKey: accessToken };
-          invalidateSameTargetRequest();
-          logCtx.provider = `command-code-${nextAccountId}`;
-          activeAdapter = resolveAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-            config.cacheRetention,
-          );
-          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
-          const result = await rebuildAndRefetch("command-code-oauth-429");
-          if ("failed" in result) return result.failed;
-          upstreamResponse = result;
-        } catch {
-          break;
+      // Command Code OAuth account pool: cool a rate-limited or spent account and retry once on a
+      // peer. Credit exhaustion arrives as `400 BAD_REQUEST` with an "insufficient credits" body,
+      // not 429, so a status-only test would leave the spent account serving every request routed
+      // to it while it cannot serve any (#command-code-quota).
+      if (commandCodePoolAccountId && commandCodePoolFailovers < 1) {
+        const rateLimited = upstreamResponse.status === 429;
+        const outOfCredits = rateLimited
+          ? false
+          : await isCommandCodeInsufficientCreditsResponse(upstreamResponse, options.abortSignal);
+        if (rateLimited || outOfCredits) {
+          const nextAccountId = rateLimited
+            ? rotateCommandCodeAccountOn429(
+              commandCodePoolAccountId,
+              upstreamResponse.headers.get("retry-after"),
+              logCtx.conversationId,
+            )
+            : rotateCommandCodeAccountOnInsufficientCredits(commandCodePoolAccountId, logCtx.conversationId);
+          if (nextAccountId) {
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+            try {
+              const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
+              commandCodePoolAccountId = nextAccountId;
+              commandCodePoolFailovers += 1;
+              route.provider = { ...route.provider, apiKey: accessToken };
+              invalidateSameTargetRequest();
+              logCtx.provider = `command-code-${nextAccountId}`;
+              activeAdapter = resolveAdapter(
+                resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+                config.cacheRetention,
+              );
+              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
+              const result = await rebuildAndRefetch(
+                rateLimited ? "command-code-oauth-429" : "command-code-oauth-credits",
+              );
+              if ("failed" in result) return result.failed;
+              upstreamResponse = result;
+            } catch {
+              // Keep the original upstream response so the client sees the real provider error.
+            }
+          }
         }
       }
 

@@ -68,16 +68,39 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * OpenCode Go `GET /zen/go/v1/usage` per-key windows.
+ *
+ * The endpoint reports rolling (five-hour), weekly and monthly budgets. Key selection compares
+ * `usedPercent` against 100 to decide a key is spent, so it must read the HIGHEST window: metering
+ * only `rolling` let a key whose weekly budget was gone keep its share of new conversations, and
+ * the request then failed upstream with a quota error instead of moving to a key that had room.
+ */
 function parseOpenCodeQuota(payload: unknown, fetchedAt: number): QuotaSnapshot {
   const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
   const usage = body?.usage && typeof body.usage === "object" ? body.usage as Record<string, unknown> : null;
-  const rolling = usage?.rolling && typeof usage.rolling === "object" ? usage.rolling as Record<string, unknown> : null;
-  const percent = finiteNumber(rolling?.percent);
-  const parsedReset = typeof rolling?.resetsAt === "string" ? Date.parse(rolling.resetsAt) : finiteNumber(rolling?.resetsAt);
+  let usedPercent: number | undefined;
+  let resetAt: number | undefined;
+  for (const name of ["rolling", "weekly", "monthly"] as const) {
+    const window = usage?.[name] && typeof usage[name] === "object" ? usage[name] as Record<string, unknown> : null;
+    if (!window) continue;
+    const percent = finiteNumber(window.percent);
+    if (percent === undefined) continue;
+    const bounded = Math.min(100, Math.max(0, percent));
+    // The most-spent window is the binding constraint, and its reset is when this key becomes
+    // usable again — so that is the reset worth reporting.
+    if (usedPercent === undefined || bounded > usedPercent) {
+      usedPercent = bounded;
+      const parsedReset = typeof window.resetsAt === "string" ? Date.parse(window.resetsAt) : finiteNumber(window.resetsAt);
+      resetAt = parsedReset !== undefined && Number.isFinite(parsedReset)
+        ? (parsedReset > 10_000_000_000 ? parsedReset : parsedReset * 1_000)
+        : undefined;
+    }
+  }
   return {
     fetchedAt,
-    ...(percent !== undefined ? { usedPercent: Math.min(100, Math.max(0, percent)) } : {}),
-    ...(parsedReset !== undefined && Number.isFinite(parsedReset) ? { resetAt: parsedReset > 10_000_000_000 ? parsedReset : parsedReset * 1_000 } : {}),
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetAt !== undefined ? { resetAt } : {}),
   };
 }
 

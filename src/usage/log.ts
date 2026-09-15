@@ -21,6 +21,7 @@ export type AttemptRecoveryKind =
   | "rate-limit-429"
   | "anthropic-oauth-429"
   | "command-code-oauth-429"
+  | "command-code-oauth-credits"
   | "image-413";
 
 export interface PersistedUsageAttempt {
@@ -229,6 +230,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "rate-limit-429",
   "anthropic-oauth-429",
   "command-code-oauth-429",
+  "command-code-oauth-credits",
   "image-413",
 ]);
 const USAGE_STATUSES = new Set<UsageStatus>([

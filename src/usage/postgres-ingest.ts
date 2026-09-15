@@ -53,6 +53,7 @@ const RECOVERY_CODES = {
   "rate-limit-429": 5,
   "anthropic-oauth-429": 6,
   "command-code-oauth-429": 7,
+  "command-code-oauth-credits": 9,
   "image-413": 8,
 } as const;
 const ROUTE_KIND_CODES = {

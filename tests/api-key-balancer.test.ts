@@ -94,6 +94,32 @@ describe("balanced API-key pools", () => {
     expect(apiKeyQuotaSnapshotForTests("opencode-go", "two")?.usedPercent).toBe(18);
   });
 
+  test("meters every OpenCode Go window, not only the rolling one", async () => {
+    // A key can be idle in its five-hour window and still be out of weekly budget. Reading only
+    // `rolling` scored that key as free, handed it new conversations, and the request then failed
+    // upstream with a quota error instead of using the key that had room.
+    const p = { ...provider(), baseUrl: "https://opencode.ai/zen/go/v1" };
+    const selected = await balanceProviderApiKey("opencode-go", p, "thread-opencode", {
+      now: 1_000,
+      fetchImpl: (async (_url: string | URL, init?: RequestInit) => {
+        const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        return key === "glm-plan-one"
+          ? Response.json({ usage: {
+            rolling: { percent: 2, resetsAt: "2026-08-22T00:00:00Z" },
+            weekly: { percent: 100, resetsAt: "2026-08-25T00:00:00Z" },
+          } })
+          : Response.json({ usage: {
+            rolling: { percent: 30, resetsAt: "2026-08-22T00:00:00Z" },
+            weekly: { percent: 40, resetsAt: "2026-08-25T00:00:00Z" },
+          } });
+      }) as typeof fetch,
+    });
+    // The binding window decides: 100% weekly is spent, so the busier-looking key wins.
+    expect(apiKeyQuotaSnapshotForTests("opencode-go", "one")?.usedPercent).toBe(100);
+    expect(apiKeyQuotaSnapshotForTests("opencode-go", "two")?.usedPercent).toBe(40);
+    expect(selected.apiKey).toBe("glm-plan-two");
+  });
+
   test("weights new conversations by remaining quota without funneling them to one plan", async () => {
     const p = provider();
     const fetchImpl = quotaFetch({ "glm-plan-one": 80, "glm-plan-two": 20 });
