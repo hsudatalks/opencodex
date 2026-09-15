@@ -265,6 +265,13 @@ describe("fetchProviderAccountQuotas", () => {
     expect(spent?.quota?.creditsUsd?.remaining).toBeCloseTo(0.12, 4);
     expect(spent?.quota?.creditsUsd?.used).toBeCloseTo(6.13, 4);
     expect(spent?.quota?.creditsUsd?.percent).toBeGreaterThan(97);
+    // That same balance is the month's budget, so it also fills the standard monthly window.
+    // Account rows, the overview's utilisation sort and capacity aggregation all read
+    // `monthlyPercent`; with only the dollar figures, this account's binding constraint reached
+    // no surface and it sorted as if it sat at the healthy weekly 33%.
+    expect(spent?.quota?.monthlyPercent).toBeCloseTo(spent?.quota?.creditsUsd?.percent ?? 0, 6);
+    expect(spent?.quota?.monthlyPercent).toBeGreaterThan(97);
+    expect(spent?.quota?.monthlyResetAt).toBe(Date.parse("2026-09-01T00:00:00.000Z"));
   });
 
   test("providers without a per-account usage API are skipped", async () => {

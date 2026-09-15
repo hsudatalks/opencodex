@@ -96,6 +96,9 @@ describe("Command Code provider quota", () => {
         remaining: 26,
         percent: 36.585365853658534,
       },
+      monthlyPercent: 36.585365853658534,
+      // Purchased credits roll over past the period end, so there is no month to reset:
+      // the monthly window carries a utilisation without a deadline.
       updatedAt: expect.any(Number),
     });
     expect(seen).toEqual([{
@@ -205,6 +208,8 @@ describe("Command Code provider quota", () => {
         percent: 33.33333333333333,
         expiresAt: Date.parse("2026-09-01T00:00:00.000Z"),
       },
+      monthlyPercent: 33.33333333333333,
+      monthlyResetAt: Date.parse("2026-09-01T00:00:00.000Z"),
       updatedAt: expect.any(Number),
     });
   });
@@ -300,6 +305,8 @@ describe("Command Code provider quota", () => {
         percent: 100,
         expiresAt: Date.parse("2026-09-01T00:00:00.000Z"),
       },
+      monthlyPercent: 100,
+      monthlyResetAt: Date.parse("2026-09-01T00:00:00.000Z"),
       updatedAt: expect.any(Number),
     });
   });

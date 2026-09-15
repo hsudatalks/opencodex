@@ -333,6 +333,11 @@ configured Bearer key. Create keys at
   worth spending: an account with $0.12 of credit left refuses every request. When every account is at
   the cut-off the pool fails open and still attempts one, so you see the provider's own error rather
   than a local one.
+- Those same budgets are what the dashboard shows. Command Code's billing endpoint declares no
+  monthly window, so the credit balance is reported as the account's 30-day window alongside the
+  five-hour and weekly ones; an account that is comfortable on its rolling window but spent on
+  credits therefore reads as nearly exhausted everywhere the quota is drawn, not just in the pool's
+  own selection.
 - A `429` cools the account (honouring `Retry-After`) and retries once on a peer. A credit refusal
   arrives as `400 BAD_REQUEST` with an "insufficient credits" message rather than `429`; that cools
   the account for a longer window and also retries once on a peer.

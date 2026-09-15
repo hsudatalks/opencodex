@@ -1747,7 +1747,8 @@ type CommandCodeQuotaProbe =
 
 /**
  * The complete Command Code quota for ONE credential: the five-hour and weekly windows plus the
- * monthly credit balance (`creditsUsd`).
+ * monthly credit balance, reported BOTH as `creditsUsd` (the dollar figures) and as the standard
+ * monthly window (`monthlyPercent`/`monthlyResetAt`).
  *
  * Both the per-account probe and the provider-level report read this, and that is the point: the
  * per-account result is what account selection sees, so a spent credit balance has to travel with
@@ -1788,6 +1789,19 @@ async function probeCommandCodeQuota(accessToken: string): Promise<CommandCodeQu
   const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
   const weekly = parseCommandCodeWindow(limits?.weekly);
   const creditsUsd = await fetchCommandCodeSpend(accessToken, credits, orgQuery);
+  // The credits endpoint declares no monthly window, but its three pools (monthly, purchased,
+  // free) ARE the budget the billing month spends from. Mirroring the aggregate onto the standard
+  // monthly slot is what puts the binding budget on every quota surface: account rows, the
+  // overview's utilisation sort, and capacity aggregation all read `monthlyPercent`, so with the
+  // dollar figures alone the only meter a spent account moved was one that nothing rendered.
+  // `expiresAt` is the period end and already normalized to epoch ms by fetchCommandCodeSpend,
+  // which is the unit `monthlyResetAt` carries. An unlimited balance has no month to exhaust.
+  const monthlyCredits = creditsUsd && creditsUsd.unlimited !== true
+    ? {
+        monthlyPercent: creditsUsd.percent,
+        ...(creditsUsd.expiresAt !== undefined ? { monthlyResetAt: creditsUsd.expiresAt } : {}),
+      }
+    : {};
   return {
     kind: "ok",
     quota: {
@@ -1799,6 +1813,7 @@ async function probeCommandCodeQuota(accessToken: string): Promise<CommandCodeQu
         weeklyPercent: weekly.percent,
         ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
       } : {}),
+      ...monthlyCredits,
       ...(creditsUsd ? { creditsUsd } : {}),
       updatedAt: Date.now(),
     },
