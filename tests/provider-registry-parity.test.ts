@@ -58,9 +58,12 @@ describe("provider registry parity", () => {
     });
     expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
     // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT be listed.
+    // The DeepSeek members are the whole thinking family (V4 and V4.1): spelling out only V4 left the
+    // V4.1 rows with neither an image declaration nor a sidecar, while the official `deepseek` preset
+    // already treated the same upstream models as text-only.
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-pro", "deepseek-v4.1-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",

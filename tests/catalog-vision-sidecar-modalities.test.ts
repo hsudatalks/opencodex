@@ -24,13 +24,23 @@ describe("vision-sidecar catalog modalities", () => {
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
 
-  test("models outside noVisionModels keep their existing modalities untouched", () => {
+  test("the sidecar rule never rewrites the modalities a row already carries", () => {
+    // "video" is passed through verbatim here on purpose: the closed-enum filter belongs to the
+    // catalog writer (ensureStrictCatalogFields), and this rule must not touch a model outside
+    // noVisionModels at all.
     const hinted = applyProviderConfigHints("opencode-go", base, {
       id: "kimi-k2.7-code", provider: "opencode-go", inputModalities: ["text", "image", "video"],
     });
     expect(hinted.inputModalities).toEqual(["text", "image", "video"]);
+  });
+
+  test("a row with no live modalities takes the vendored bundle's answer", () => {
+    // This used to assert `undefined`, which is indistinguishable from text-only for every client
+    // that gates attachments on the field — while the Codex catalog already advertised image for
+    // this same model through applyCatalogMetadata. The bundle is the repo's own last-resort
+    // source, exactly as it is for the context window above.
     const plain = applyProviderConfigHints("opencode-go", base, { id: "kimi-k2.7-code", provider: "opencode-go" });
-    expect(plain.inputModalities).toBeUndefined();
+    expect(plain.inputModalities).toEqual(["text", "image"]);
   });
 
   test("image is not duplicated when the listing already advertises it", () => {

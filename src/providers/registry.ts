@@ -736,11 +736,21 @@ const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   ),
   [KIMI_CODING_K3_256K_ALIAS]: KIMI_K3_1M_CONTEXT_WINDOW,
 };
+/**
+ * Image input is documented per model id, and `kimi-for-coding` is not the text-only legacy row
+ * its name suggests: the Kimi Code model table's "Multimodal input" column lists image + video for
+ * `k3`, `kimi-for-coding` and `kimi-for-coding-highspeed`, and image only for `k3-256k`. Only the
+ * `k3` family was declared here, so every client discovering through `/v1/models` was told the
+ * plan's own default model could not take an image. Video is documented but dropped: Codex parses
+ * `input_modalities` as a closed enum of text | image | audio.
+ * Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html (checked 2026-09-17)
+ */
 const KIMI_CODING_MODEL_INPUT_MODALITIES = {
   ...Object.fromEntries(
     KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),
   ),
   [KIMI_CODING_K3_256K_ALIAS]: ["text", "image"],
+  "kimi-for-coding": ["text", "image"],
 };
 const NEURALWATT_REASONING_HISTORY_MODELS = [
   "glm-5.2", "glm-5.2-short",
@@ -1199,9 +1209,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Text-only Zen Go models (jawcode metadata) — the vision sidecar describes images for
     // every model listed here (and the catalog advertises image input on their behalf).
     // Kimi K2.7 Code accepts text+image+video: do NOT list it here.
+    // The DeepSeek members come from DEEPSEEK_ALL_THINKING_MODELS rather than a hand-written
+    // pair, so the V4.1 rows are covered exactly like V4: leaving them out gave
+    // `deepseek-v4.1-flash` neither an image declaration nor a sidecar, while its V4 sibling
+    // had both, and the official `deepseek` provider (which already spreads this constant)
+    // treated the same upstream model the opposite way.
     noVisionModels: [
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4-flash", "deepseek-v4-pro",
+      ...DEEPSEEK_ALL_THINKING_MODELS,
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",

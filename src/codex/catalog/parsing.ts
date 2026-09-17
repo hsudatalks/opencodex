@@ -221,6 +221,17 @@ const NO_FAST_TIER_NATIVE_SLUGS = new Set([
   "gpt-5.3-codex-spark",
 ]);
 
+/**
+ * The only values Codex accepts in `input_modalities`. It parses the field as a closed enum, and a
+ * single out-of-enum value (zenmux advertises "video") makes its config loader reject the entire
+ * catalog — taking down plugins, apps and MCP servers, not just that one model.
+ *
+ * Shared rather than re-typed at each site: this field is written from provider metadata, the
+ * vendored model bundle and effort sync, so an enum that drifts between writers is the failure
+ * mode it exists to prevent.
+ */
+export const CODEX_INPUT_MODALITY_ENUM: ReadonlySet<string> = new Set(["text", "image", "audio"]);
+
 export function normalizeServiceTiers(entry: RawEntry): RawEntry {
   // Strip service tiers for models that do not actually support the Fast tier.
   if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
@@ -297,8 +308,7 @@ export function ensureStrictCatalogFields(
   // MCP servers — not just that model. Normalize at the single point every entry passes through,
   // because provider metadata, jawcode metadata and effort sync each write this field.
   if (Array.isArray(entry.input_modalities)) {
-    const accepted = entry.input_modalities.filter(value =>
-      value === "text" || value === "image" || value === "audio");
+    const accepted = entry.input_modalities.filter(value => CODEX_INPUT_MODALITY_ENUM.has(value));
     // Never leave it empty: an entry with no modality at all is worse than a text-only one.
     entry.input_modalities = accepted.length > 0 ? accepted : ["text"];
   }

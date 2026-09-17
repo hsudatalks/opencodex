@@ -154,6 +154,11 @@ history, while `responses/parser.ts` and `bridge.ts` handle remote compaction v2
   Codex's catalog as namespaced entries, ranks featured
   [subagent models](/guides/codex-integration/#the-subagent-picker) first, filters
   `disabledModels`, and can fully restore the pristine catalog from a one-time backup.
+- Input modalities are resolved once and reach every discovery shape. A routed model's
+  `input_modalities` comes from live discovery, then the provider config, then the `noVisionModels`
+  vision-sidecar rule, and finally the vendored model bundle. The Codex catalog, the plain
+  `/v1/models` list and the Anthropic discovery shape all read the same resolved row, because a
+  client that gates attachments on the field cannot tell a missing value from a text-only one.
 
 ## Reasoning effort
 

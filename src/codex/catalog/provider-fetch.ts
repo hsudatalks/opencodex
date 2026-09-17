@@ -62,7 +62,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_INPUT_MODALITY_ENUM, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
@@ -557,6 +557,34 @@ function metadataContextWindow(provider: string, id: string): number | undefined
   return typeof meta?.contextWindow === "number" && meta.contextWindow > 0 ? meta.contextWindow : undefined;
 }
 
+/**
+ * The input modalities the vendored bundle records for one model — the sibling of
+ * `metadataContextWindow` above, read from the same source `applyCatalogMetadata` stamps a Codex
+ * catalog entry from, and for the same reason.
+ *
+ * Without it the gathered rows published NO `input_modalities` for a vision model whose provider
+ * reports no modality metadata of its own and whose registry entry declares none, while the Codex
+ * catalog advertised image input for that identical model. Every non-Codex discovery client reads
+ * the gathered row: the plain `/v1/models` shape publishes it directly, and the Anthropic shape
+ * (`buildAnthropicModelInfos`) turns it into `capabilities.image_input`, so Claude Code and Claude
+ * Desktop were told those models do not accept images. A missing field and a text-only field are
+ * the same refusal to a client that gates attachments on it, so the fix is to answer with what the
+ * bundle already knows instead of staying silent.
+ *
+ * `video` is dropped: Codex parses `input_modalities` as a closed enum of text | image | audio, and
+ * one out-of-enum value makes it reject the whole catalog file (#759).
+ */
+function metadataInputModalities(provider: string, id: string): string[] | undefined {
+  const jawcodeProvider = resolveMetadataProvider(provider);
+  if (!jawcodeProvider) return undefined;
+  const meta = getModelMetadata(jawcodeProvider, id)
+    ?? (shouldCaseFoldMetadataModelId(provider) ? getModelMetadataCaseInsensitive(jawcodeProvider, id) : undefined);
+  // Widened to string deliberately: the bundle's own type carries "video", and comparing that
+  // union against the enum members below is what the compiler (correctly) calls unreachable.
+  const accepted = ((meta?.input ?? []) as readonly string[]).filter(value => CODEX_INPUT_MODALITY_ENUM.has(value));
+  return accepted.length > 0 ? [...new Set(accepted)] : undefined;
+}
+
 export function configuredInputModalities(prov: OcxProviderConfig, id: string): string[] | undefined {
   const modalities = modelRecordValue(prov.modelInputModalities, id);
   return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
@@ -599,6 +627,14 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   if (modelInList(prov.noVisionModels, model.id)) {
     const base = inputModalities ?? model.inputModalities ?? ["text"];
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
+  }
+  // Last resort, and the same rank as the bundled context window above: a live-discovered value
+  // and an operator value both outrank it, but when neither says anything the vendored bundle is
+  // the repo's own answer. The Codex catalog already reads it there (`applyCatalogMetadata`), so
+  // skipping it here was what let the catalog declare image input for a model that `/v1/models`
+  // called text-only — see `metadataInputModalities`.
+  if (inputModalities === undefined && (model.inputModalities?.length ?? 0) === 0) {
+    inputModalities = metadataInputModalities(name, model.id);
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
@@ -902,7 +938,7 @@ function modelInputModalities(
     // Codex parses `input_modalities` as a closed enum of text | image | audio. A provider that
     // advertises anything else (zenmux reports "video") must not reach the catalog: Codex rejects
     // the whole file, so plugins, apps and MCP servers all stop loading over one model's metadata.
-    value === "text" || value === "image" || value === "audio"
+    CODEX_INPUT_MODALITY_ENUM.has(value)
   ));
   if (explicit && explicit.length > 0) return explicit;
   const architecture = plainRecord(item.architecture);
