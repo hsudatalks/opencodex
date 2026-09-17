@@ -886,6 +886,28 @@ describe("provider registry parity", () => {
   });
 
   /*
+   * The Coding Plan row lists `glm-5.3` and `glm-5.3-flash` as siblings, and they sit on opposite
+   * sides of the modality line. Measured against the live endpoint with shape discrimination
+   * (circle / square / triangle, blind ~1/3): the flash answers 3/3 while `glm-5.3` rejects the
+   * request outright with `messages.content.type 参数非法，取值范围 ['text']`.
+   *
+   * Both halves matter. The declaration lives in the registry rather than only in a deployment's
+   * config.json, so a fresh install advertises the capability — and `glm-5.3` must NOT inherit it
+   * from the flash, which is the mistake a family-level table would make.
+   */
+  test("the Coding Plan declares image only for the sibling that accepts it", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "zhipu-bigmodel-coding");
+    expect(entry).toBeTruthy();
+    const seed = providerConfigSeed(entry!);
+    const hints = (id: string) => applyProviderConfigHints("zhipu-bigmodel-coding", seed, { id, provider: "zhipu-bigmodel-coding" });
+
+    expect(hints("glm-5.3-flash").inputModalities).toEqual(["text", "image"]);
+    expect(hints("glm-5.3").inputModalities).toBeUndefined();
+    // The 1M alias strips to the same text-only upstream id.
+    expect(hints("glm-5.3[1m]").inputModalities).toBeUndefined();
+  });
+
+  /*
    * Command Code publishes no modality metadata on `/provider/v1/models` and has no vendored
    * bundle, so this declaration is measured rather than derived. The instrument is shape
    * discrimination (circle / square / triangle on a 256x256 canvas), where a model that cannot see

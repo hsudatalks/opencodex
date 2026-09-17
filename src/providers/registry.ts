@@ -347,6 +347,20 @@ const ZHIPU_BIGMODEL_INPUT_MODALITIES: Record<string, string[]> = {
   "glm-4.6v": ["text", "image"],
 };
 const ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS = ["glm-4.6", "glm-4.7", "glm-5", "glm-5.1"];
+/**
+ * Coding-Plan input modalities, measured against the live endpoint rather than inherited from the
+ * pay-as-you-go table above: `glm-5.3-flash` reads images (circle / square / triangle
+ * discrimination, 3/3) while the same-generation `glm-5.3` rejects them outright with
+ * `messages.content.type 参数非法，取值范围 ['text']`. Two sibling ids landing on opposite sides of
+ * the modality line is exactly why this is declared per model instead of per family.
+ *
+ * The colour-naming probe used first said the opposite for the flash. It is not a valid
+ * instrument: "orange" for a yellow fill or "blue" for a cyan one is a naming disagreement, not
+ * blindness, and it reads as a failure.
+ */
+const ZHIPU_CODING_INPUT_MODALITIES: Record<string, string[]> = {
+  "glm-5.3-flash": ["text", "image"],
+};
 const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
@@ -1883,6 +1897,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     jawcodeBundle: "zai",
     modelContextWindows: { "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000 },
     modelSuffixBracketStrip: true,
+    modelInputModalities: ZHIPU_CODING_INPUT_MODALITIES,
     noVisionModels: ZAI_GLM_52_MODELS,
     modelReasoningEfforts: {
       ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
