@@ -1030,15 +1030,26 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
      * Image input, measured rather than assumed. Command Code publishes no modality metadata on
      * `/provider/v1/models` and the provider has no vendored bundle, so nothing else can state it.
      *
-     * Probed directly against the upstream `/alpha/generate` wire (four solid 64x64 fills, one
-     * colour per request, so a wrong answer cannot be a lucky guess) with a live account:
-     * `meta/muse-spark-1.3-contributor` answers red/blue/yellow correctly and is therefore
-     * declared. `deepseek/deepseek-v4.1-flash` answers "White" to most fills and stays OUT: an
-     * entry here would let the Codex app and every discovery client attach an image that model
-     * cannot read. Earlier notes marked that one image-capable from a 1x1 probe; the four-colour
-     * run does not reproduce it.
+     * The instrument matters, and an earlier round got this wrong. Asking for the colour of a solid
+     * fill is NOT a valid test: a model that sees yellow and answers "orange", or cyan and answers
+     * "blue", is disagreeing about the name, not failing to see the image — and colour probes on
+     * that basis wrongly concluded `deepseek/deepseek-v4.1-flash` was text-only. The measurements
+     * below use shape discrimination instead (circle / square / triangle on a 256x256 canvas),
+     * where a model that cannot see the image scores about one in three by luck:
+     *
+     *   deepseek/deepseek-v4.1-flash      3/3   declared
+     *   meta/muse-spark-1.3-contributor   3/3   declared
+     *
+     * `deepseek/deepseek-v4-flash` stays OUT even though the same test scores it 3/3 on Command
+     * Code's documented `/provider/v1` wire: the OAuth transport this preset uses is the CLI's
+     * `/alpha/generate`, where it answers "I don't see an image" 0/3. Declaring it would hand every
+     * discovery client an attachment the route cannot deliver. Re-test BOTH wires before promoting
+     * a model here, and only onto a transport that actually carries the image.
      */
-    modelInputModalities: { "meta/muse-spark-1.3-contributor": ["text", "image"] },
+    modelInputModalities: {
+      "deepseek/deepseek-v4.1-flash": ["text", "image"],
+      "meta/muse-spark-1.3-contributor": ["text", "image"],
+    },
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,

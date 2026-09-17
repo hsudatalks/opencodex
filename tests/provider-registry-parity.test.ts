@@ -887,31 +887,31 @@ describe("provider registry parity", () => {
 
   /*
    * Command Code publishes no modality metadata on `/provider/v1/models` and has no vendored
-   * bundle, so this declaration is measured rather than derived: four solid 64x64 fills per model,
-   * one colour per request, against the live `/alpha/generate` wire. A model that cannot see the
-   * image cannot answer four different colours correctly by luck.
+   * bundle, so this declaration is measured rather than derived. The instrument is shape
+   * discrimination (circle / square / triangle on a 256x256 canvas), where a model that cannot see
+   * the image scores about one in three by luck.
    *
-   * The negative half is the part that matters. `deepseek/deepseek-v4-flash`'s sibling
-   * `deepseek-v4.1-flash` answered "White" to three of the four fills, so declaring it
-   * image-capable would let the Codex app and every discovery client attach an image that model
-   * cannot read — and an earlier 1x1 probe had already marked it as vision by mistake.
+   * Colour naming is deliberately NOT the instrument. An earlier round asked for the colour of a
+   * solid fill and concluded `deepseek/deepseek-v4.1-flash` was text-only because it answered
+   * "White" to a red image — but on the shape test it scores 3/3, and the colour answers that
+   * looked like blindness were naming disagreements.
+   *
+   * The negative half is the part that matters. `deepseek/deepseek-v4-flash` scores 3/3 on Command
+   * Code's documented `/provider/v1` wire, but the OAuth transport this preset uses is the CLI's
+   * `/alpha/generate`, where it answers "I don't see an image" — so it stays out, and a future
+   * "add all the vision models" patch fails here instead of shipping a broken attachment.
    */
-  test("the Command Code vision declaration is measured, and the blind model stays out", () => {
+  test("the Command Code vision declaration is measured, and the undeliverable model stays out", () => {
     const entry = PROVIDER_REGISTRY.find(row => row.id === "command-code");
     expect(entry).toBeTruthy();
     const seed = providerConfigSeed(entry!);
+    const hints = (id: string) => applyProviderConfigHints("command-code", seed, { id, provider: "command-code" });
 
-    const seer = applyProviderConfigHints("command-code", seed, {
-      id: "meta/muse-spark-1.3-contributor",
-      provider: "command-code",
-    });
-    expect(seer.inputModalities).toEqual(["text", "image"]);
+    expect(hints("deepseek/deepseek-v4.1-flash").inputModalities).toEqual(["text", "image"]);
+    expect(hints("meta/muse-spark-1.3-contributor").inputModalities).toEqual(["text", "image"]);
 
-    const blind = applyProviderConfigHints("command-code", seed, {
-      id: "deepseek/deepseek-v4.1-flash",
-      provider: "command-code",
-    });
-    expect(blind.inputModalities).toBeUndefined();
+    // Sees images on the provider wire, but not on the transport this preset actually uses.
+    expect(hints("deepseek/deepseek-v4-flash").inputModalities).toBeUndefined();
   });
   /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
