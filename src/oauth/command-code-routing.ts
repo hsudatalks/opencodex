@@ -78,11 +78,18 @@ function eligibleAccounts(config: OcxConfig, now: number): string[] {
     .map(account => account.id);
   const threshold = commandCodeAutoSwitchThreshold(config);
   if (threshold <= 0) return usable;
-  // Skip accounts that have reached the cut-off on ANY budget. Never return an empty pool: when
-  // every account is spent the caller must still attempt one and surface the upstream's own error,
-  // rather than failing the request locally with nothing to report.
+  // Three tiers, because "never measured" is not the same as "measured and spent":
+  //   1. probed and under the cut-off  — the accounts known to be able to serve
+  //   2. never probed                  — they may well serve; the upstream gets to say so
+  //   3. probed at or past the cut-off — last resort, so the client still sees the provider's
+  //                                      own error rather than a local "nothing available"
+  // A two-way filter collapsed tier 2 into tier 3 and then failed open to the whole `usable`
+  // list, so an account whose budget already reads 100% could be picked ahead of an account
+  // nobody had measured — which is exactly the account an operator expects the pool to try.
   const withHeadroom = usable.filter(accountId => usageScore(accountId) < threshold);
-  return withHeadroom.length ? withHeadroom : usable;
+  if (withHeadroom.length) return withHeadroom;
+  const unmeasured = usable.filter(accountId => usageScore(accountId) === Number.POSITIVE_INFINITY);
+  return unmeasured.length ? unmeasured : usable;
 }
 
 /**
@@ -92,7 +99,10 @@ function eligibleAccounts(config: OcxConfig, now: number): string[] {
  * The budgets are not interchangeable, so the maximum is what decides. An account can sit at 33% of
  * its weekly window and still be unable to serve a single request because its credit balance is
  * spent; conversely a fresh five-hour window says nothing about a weekly budget that is gone.
- * Infinity means "nothing known", which keeps an unprobed account selectable.
+ *
+ * Infinity means "nothing known", and `eligibleAccounts` ranks it as its own tier: preferred over
+ * an account measured past the cut-off, but behind one measured with headroom. That is deliberate —
+ * an unprobed account is not evidence of headroom, and it is not evidence of exhaustion either.
  */
 function usageScore(accountId: string): number {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);

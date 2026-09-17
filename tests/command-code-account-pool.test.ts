@@ -181,6 +181,39 @@ describe("Command Code account pool", () => {
     expect([first, second]).toContain(resolveCommandCodeAccountForSession("s1", config()).accountId);
   });
 
+  test("an unmeasured account is tried before one measured past the cut-off", async () => {
+    // "Never probed" and "probed at 100%" are different facts, and only one of them is evidence the
+    // account cannot serve. Collapsing them (usageScore's Infinity is not < the cut-off) dropped the
+    // unmeasured account and then failed open to the full list, so the pool kept handing work to an
+    // account whose budget already read 100% while an unmeasured peer sat unused.
+    const { first, second } = await seed();
+    setCachedProviderAccountQuotaForTests("command-code", first, {
+      fiveHourPercent: 0,
+      weeklyPercent: 100,
+      monthlyPercent: 50,
+      creditsUsd: { used: 35.2, limit: 70.2, remaining: 35, percent: 50.1 },
+      updatedAt: Date.now(),
+    });
+    for (const session of ["a", "b", "c"]) {
+      expect(resolveCommandCodeAccountForSession(session, config()).accountId).toBe(second);
+    }
+  });
+
+  test("a measured account with headroom still outranks an unmeasured peer", async () => {
+    // The other side of the same rule: an unmeasured account is not evidence of headroom, so a
+    // measured account that is comfortably under the cut-off keeps its priority.
+    const { first, second } = await seed();
+    setCachedProviderAccountQuotaForTests("command-code", first, {
+      fiveHourPercent: 4,
+      weeklyPercent: 5,
+      updatedAt: Date.now(),
+    });
+    for (const session of ["a", "b", "c"]) {
+      expect(resolveCommandCodeAccountForSession(session, config()).accountId).toBe(first);
+    }
+    expect(second).not.toBe(first);
+  });
+
   test("a spend rejection cools the account for the long window and selects a peer", async () => {
     const { first, second } = await seed();
     expect(rotateCommandCodeAccountOnInsufficientCredits(config(), first, "session-a")).toBe(second);
