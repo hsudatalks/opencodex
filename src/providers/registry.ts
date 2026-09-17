@@ -1026,6 +1026,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Unknown/new live models deliberately do not advertise a reasoning picker.
     reasoningEfforts: [],
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    /**
+     * Image input, measured rather than assumed. Command Code publishes no modality metadata on
+     * `/provider/v1/models` and the provider has no vendored bundle, so nothing else can state it.
+     *
+     * Probed directly against the upstream `/alpha/generate` wire (four solid 64x64 fills, one
+     * colour per request, so a wrong answer cannot be a lucky guess) with a live account:
+     * `meta/muse-spark-1.3-contributor` answers red/blue/yellow correctly and is therefore
+     * declared. `deepseek/deepseek-v4.1-flash` answers "White" to most fills and stays OUT: an
+     * entry here would let the Codex app and every discovery client attach an image that model
+     * cannot read. Earlier notes marked that one image-capable from a 1x1 probe; the four-colour
+     * run does not reproduce it.
+     */
+    modelInputModalities: { "meta/muse-spark-1.3-contributor": ["text", "image"] },
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,

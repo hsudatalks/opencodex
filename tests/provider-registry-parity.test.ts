@@ -884,6 +884,35 @@ describe("provider registry parity", () => {
     // so the request still reaches Command Code as `deepseek/deepseek-v4-flash`.
     expect(entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-flash")).toBeTruthy();
   });
+
+  /*
+   * Command Code publishes no modality metadata on `/provider/v1/models` and has no vendored
+   * bundle, so this declaration is measured rather than derived: four solid 64x64 fills per model,
+   * one colour per request, against the live `/alpha/generate` wire. A model that cannot see the
+   * image cannot answer four different colours correctly by luck.
+   *
+   * The negative half is the part that matters. `deepseek/deepseek-v4-flash`'s sibling
+   * `deepseek-v4.1-flash` answered "White" to three of the four fills, so declaring it
+   * image-capable would let the Codex app and every discovery client attach an image that model
+   * cannot read — and an earlier 1x1 probe had already marked it as vision by mistake.
+   */
+  test("the Command Code vision declaration is measured, and the blind model stays out", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "command-code");
+    expect(entry).toBeTruthy();
+    const seed = providerConfigSeed(entry!);
+
+    const seer = applyProviderConfigHints("command-code", seed, {
+      id: "meta/muse-spark-1.3-contributor",
+      provider: "command-code",
+    });
+    expect(seer.inputModalities).toEqual(["text", "image"]);
+
+    const blind = applyProviderConfigHints("command-code", seed, {
+      id: "deepseek/deepseek-v4.1-flash",
+      provider: "command-code",
+    });
+    expect(blind.inputModalities).toBeUndefined();
+  });
   /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
    * empirical list measured against the live endpoint on 2026-08-05, not something
