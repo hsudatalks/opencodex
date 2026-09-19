@@ -2127,15 +2127,27 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
-    // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
-    models: ["glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
-    defaultModel: "glm-5.2",
+    // Live IDs re-verified 2026-09-18 against ollama.com's own /v1/models. `qwen3-coder:480b`
+    // was retired upstream on 2026-07-15 — it still answered HTTP 410 "was retired at
+    // 2026-07-15" two months later, so it is dropped from both lists rather than left to fail
+    // for whoever asks for it first.
+    //
+    // `deepseek-v4.1-flash` is the id this fleet runs through this provider, and the two
+    // declarations are measured on THIS route rather than inherited from another destination:
+    // shape discrimination (circle / square / triangle, the instrument that replaced the colour
+    // probe this repository retired) scored 3/3 through the gateway, so image input is declared;
+    // the 1,000,000 window is the figure the same upstream model discloses through command-code.
+    // Re-measure both before trusting them on a new transport.
+    models: ["deepseek-v4.1-flash", "glm-5.2", "deepseek-v4-pro", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
+    defaultModel: "deepseek-v4.1-flash",
+    modelContextWindows: { "deepseek-v4.1-flash": 1_000_000 },
+    modelInputModalities: { "deepseek-v4.1-flash": ["text", "image"] },
     noVisionModels: [
       "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
       "minimax-m2.7", "minimax-m2.5", "minimax-m2.1",
       "nemotron-3-ultra", "nemotron-3-super",
       "deepseek-v4-pro", "deepseek-v4-flash",
-      "gpt-oss", "qwen3-coder:480b",
+      "gpt-oss",
     ],
   },
   // FREEZE 2026-07-10: codestral-latest is unconfirmed behind auth. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.

@@ -523,18 +523,27 @@ describe("provider registry parity", () => {
     }
   });
 
-  test("Ollama Cloud uses the three live tagged IDs without retaining bare aliases", () => {
+  test("Ollama Cloud keeps live IDs, drops the retired one, and declares V4.1", () => {
     const ollamaCloud = PROVIDER_REGISTRY.find(entry => entry.id === "ollama-cloud");
 
     expect(ollamaCloud?.models).toEqual([
-      "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b",
+      "deepseek-v4.1-flash", "glm-5.2", "deepseek-v4-pro", "gpt-oss:120b",
       "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b",
     ]);
-    expect(ollamaCloud?.models).not.toContain("qwen3-coder");
+    // The tagged-only rule: a bare `qwen3.5` / `gemma4` id must never replace the live tag.
     expect(ollamaCloud?.models).not.toContain("qwen3.5");
     expect(ollamaCloud?.models).not.toContain("gemma4");
-    expect(ollamaCloud?.noVisionModels).toContain("qwen3-coder:480b");
-    expect(ollamaCloud?.noVisionModels).not.toContain("qwen3-coder");
+    // qwen3-coder:480b was retired upstream on 2026-07-15 (HTTP 410 on this route), so it
+    // must not linger in either list — a stale entry fails for whoever asks for it first.
+    expect(ollamaCloud?.models).not.toContain("qwen3-coder:480b");
+    expect(ollamaCloud?.noVisionModels).not.toContain("qwen3-coder:480b");
+    // V4.1 flash is the id this fleet runs here, with declarations measured on this route:
+    // 3/3 shape discrimination for image input, and the 1M window command-code discloses.
+    expect(ollamaCloud?.defaultModel).toBe("deepseek-v4.1-flash");
+    expect(ollamaCloud?.modelInputModalities).toEqual({ "deepseek-v4.1-flash": ["text", "image"] });
+    expect(ollamaCloud?.modelContextWindows).toEqual({ "deepseek-v4.1-flash": 1_000_000 });
+    // A route that measures image input must not also be listed as text-only.
+    expect(ollamaCloud?.noVisionModels).not.toContain("deepseek-v4.1-flash");
   });
 
   test("Fire Pass model data is explicitly frozen pending entitlement proof", () => {

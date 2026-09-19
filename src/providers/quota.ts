@@ -307,6 +307,18 @@ function isCanonicalClineBaseUrl(baseUrl: string): boolean {
   return normalized === CLINE_BASE_URL || normalized === `${CLINE_BASE_URL}/api/v1`;
 }
 
+/**
+ * Ollama Cloud. The account surface lives at the host root (`/api/usage`) while the
+ * model surface is versioned, so both forms are needed by the probe below.
+ */
+const OLLAMA_CLOUD_HOST = "https://ollama.com";
+const OLLAMA_CLOUD_BASE_URL = `${OLLAMA_CLOUD_HOST}/v1`;
+
+function isCanonicalOllamaCloudBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === OLLAMA_CLOUD_BASE_URL || normalized === OLLAMA_CLOUD_HOST;
+}
+
 function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`;
@@ -821,6 +833,78 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Ollama Cloud `GET /api/usage` — the only account endpoint this key can read. The
+ * documented-looking neighbours are not there (`/api/limits`, `/api/plan`,
+ * `/api/subscription` are 404, and query parameters on `/api/usage` are ignored), so
+ * this is the account surface, not a guess at one.
+ *
+ * What it answers is a month of per-model request counts plus a four-week cost. A
+ * ceiling appears only for a plan that has one: the subscription measured here returns
+ * `{"limits":{"monthly":{"usage":0,"models":[…]}}}` with no limit, percentage or reset,
+ * so there is no utilization to meter and inventing one would be a fabricated bar. That
+ * shape is published as a usage window — the same treatment Moonshot's balance-only
+ * account gets — while a plan that does disclose a ceiling also gets a real monthly bar.
+ * That is what makes this adaptive instead of pinned to whichever plan was measured first.
+ */
+async function fetchOllamaUsageQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalOllamaCloudBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${OLLAMA_CLOUD_HOST}/api/usage`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await response.json().catch(() => null));
+  const monthly = asRecord(asRecord(body?.limits)?.monthly);
+  if (!monthly) return null;
+  const models = (Array.isArray(monthly.models) ? monthly.models : [])
+    .map(entry => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+    .map(entry => ({
+      name: typeof entry.name === "string" ? entry.name : "",
+      count: toFiniteNumber(entry.request_count) ?? 0,
+    }))
+    .filter(entry => entry.name.length > 0);
+  const requests = models.reduce((sum, entry) => sum + entry.count, 0);
+
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  // The ceiling field is not pinned to one name: whichever of these a paid plan fills in
+  // is the utilization denominator, and a plan that fills in none gets no percentage.
+  let ceiling: number | undefined;
+  for (const candidate of [monthly.limit, monthly.total, monthly.quota, monthly.maximum, monthly.allowance]) {
+    const value = toFiniteNumber(candidate);
+    if (value !== undefined && value > 0) {
+      ceiling = value;
+      break;
+    }
+  }
+  const used = toFiniteNumber(monthly.usage);
+  if (ceiling !== undefined && used !== undefined) {
+    const percent = normalizePercent((used / ceiling) * 100);
+    if (percent !== undefined) {
+      quota.monthlyPercent = percent;
+      const resetAt = toFiniteNumber(monthly.reset_at) ?? toFiniteNumber(monthly.resetAt)
+        ?? toFiniteNumber(monthly.next_reset_at) ?? toFiniteNumber(monthly.nextResetTime);
+      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    }
+  }
+
+  const cost = typeof asRecord(body?.activity)?.cost === "string" ? String(asRecord(body?.activity)?.cost) : undefined;
+  const top = [...models].sort((a, b) => b.count - a.count)[0];
+  const parts = [`${requests} requests this month`];
+  if (top) parts.push(`top ${top.name} (${top.count})`);
+  if (cost !== undefined) parts.push(`$${cost} cost (4w)`);
+  quota.customWindows = [{ label: parts.join(" \u00b7 "), percent: 0 }];
+  return report(provider, "ollama:usage", quota);
 }
 
 /**
@@ -2174,7 +2258,11 @@ async function maybeFetchProviderQuota(
       && (name === "zai" || isCanonicalZaiBaseUrl(provider.baseUrl) || isCanonicalBigmodelCodingBaseUrl(provider.baseUrl))) {
       return fetchZaiQuota(name, provider);
     }
-
+    // Ollama Cloud reports usage, not a rate limit: the row is adaptive for that reason.
+    if ((provider.authMode ?? "key") === "key"
+      && (name === "ollama-cloud" || isCanonicalOllamaCloudBaseUrl(provider.baseUrl))) {
+      return fetchOllamaUsageQuota(name, provider);
+    }
     if ((provider.authMode ?? "key") === "key" && (name === "minimax" || name === "minimax-cn")) {
       return fetchMinimaxQuota(name, provider);
     }

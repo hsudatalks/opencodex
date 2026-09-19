@@ -389,8 +389,8 @@ Ollama Cloud — это размещённая в облаке (не локал�
 [ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex классифицирует её облачную
 линейку по поддержке изображений, чтобы [vision-сайдкар](/ru/guides/sidecars/) включался
 только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`,
-`qwen3-coder`, `minimax-m2.x`, `nemotron-3-*`) перечислены в `noVisionModels`; модели с нативной
-поддержкой изображений (например, `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
+`minimax-m2.x`, `nemotron-3-*`) перечислены в `noVisionModels`; модели с нативной
+поддержкой изображений (например, `deepseek-v4.1-flash`, `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
 `gemini-3-flash-preview`) — нет. Сопоставление терпимо к тегам Ollama вида `:size`, поэтому
 `gpt-oss` покрывает и `gpt-oss:120b`, и `gpt-oss:20b`.
 

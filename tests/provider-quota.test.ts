@@ -875,6 +875,55 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports).toEqual([]);
   });
 
+  test("Ollama Cloud publishes a usage window when the plan discloses no ceiling", async () => {
+    // The measured shape: a month of per-model request counts, a four-week cost, and no
+    // limit anywhere. A percentage here would be fabricated, so the counts are the row.
+    const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url: String(input), authorization: headers?.Authorization, redirect: init?.redirect });
+      return new Response(JSON.stringify({
+        activity: { cost: "0.00000", period: { type: "last_4_weeks" }, models: [] },
+        limits: {
+          monthly: {
+            usage: 0,
+            models: [
+              { name: "deepseek-v4.1-flash", request_count: 14 },
+              { name: "glm-5.2", request_count: 2 },
+            ],
+          },
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("ollama-cloud", "https://ollama.com/v1"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("ollama:usage");
+    expect(result.reports[0]?.quota.monthlyPercent).toBeUndefined();
+    expect(result.reports[0]?.quota.customWindows).toEqual([
+      { label: "16 requests this month · top deepseek-v4.1-flash (14) · $0.00000 cost (4w)", percent: 0 },
+    ]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://ollama.com/api/usage");
+    expect(seen[0]?.authorization).toBe("Bearer ollama-cloud-secret");
+    expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test("Ollama Cloud publishes a monthly bar for a plan that discloses a ceiling", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      activity: { cost: "1.25000" },
+      limits: { monthly: { usage: 250, limit: 1000, reset_at: 1_790_864_673_998, models: [] } },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("ollama-cloud", "https://ollama.com/v1"), true);
+    const quota = result.reports[0]?.quota;
+
+    expect(quota?.monthlyPercent).toBe(25);
+    expect(quota?.monthlyResetAt).toBe(1_790_864_673_998);
+    expect(quota?.customWindows).toEqual([{ label: "0 requests this month · $1.25000 cost (4w)", percent: 0 }]);
+  });
+
   test("Z.AI v1 plan publishes only the windows it declares, never an invented weekly", async () => {
     // Measured on a v1 subscription: a 5-hour TIME_LIMIT followed by a TOKENS_LIMIT. The
     // probe used to call whatever came second "weekly" by position, so the dashboard showed a
