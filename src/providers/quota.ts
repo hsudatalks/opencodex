@@ -666,10 +666,15 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const quota: ProviderQuota = { updatedAt: Date.now() };
   let windows = 0;
   // Live shape: `data.limits[]`, one entry per window, each with its own `percentage` and
-  // `nextResetTime`. `TIME_LIMIT` whose unit*number is 5 hours is the coding plan's 5-hour
-  // cycle (the plan documents a 5-hour limit plus a weekly one, which is the second entry
-  // here). A percentage is the only shared field, so the window is identified by its own
-  // declared span rather than by array position.
+  // `nextResetTime`. Only a percentage is shared, so a window is identified by its own
+  // declared type and span rather than by its position in the array.
+  //
+  // Position was the earlier rule and it invented a window: a v1 subscription answers with a
+  // 5-hour `TIME_LIMIT` followed by a `TOKENS_LIMIT`, and the second entry was labelled
+  // "weekly" purely because it came second, so the dashboard showed a weekly limit the
+  // subscription does not have. A plan only has the windows it declares; anything this probe
+  // cannot name from the entry itself is published as a custom window instead of being
+  // guessed into a slot.
   for (const raw of Array.isArray(data?.limits) ? data.limits : []) {
     const limit = asRecord(raw);
     if (!limit) continue;
@@ -678,16 +683,30 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
     const resetAt = toFiniteNumber(limit.nextResetTime);
     const unit = toFiniteNumber(limit.unit);
     const count = toFiniteNumber(limit.number);
-    const isFiveHour = limit.type === "TIME_LIMIT" && unit !== undefined && count !== undefined && unit * count === 5;
-    if (isFiveHour) {
+    const type = typeof limit.type === "string" ? limit.type : "";
+    const span = unit !== undefined && count !== undefined ? unit * count : undefined;
+    const isTimeLimit = type === "TIME_LIMIT";
+    // The 5-hour cycle is the one span this plan family declares in hours: `unit * number`
+    // is 5. A week is the same arithmetic at 168 hours, or one day × seven.
+    if (isTimeLimit && span === 5) {
       quota.fiveHourPercent = percent;
       if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
-    } else if (quota.weeklyPercent === undefined) {
+    } else if (isTimeLimit && (span === 168 || (unit === 1 && count === 7))) {
       quota.weeklyPercent = percent;
       if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
-    } else if (quota.monthlyPercent === undefined) {
+    } else if (isTimeLimit && (span === 720 || (unit === 1 && count === 30))) {
       quota.monthlyPercent = percent;
       if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    } else {
+      // `TYPE` such as TOKENS_LIMIT names itself; only a TIME_LIMIT may be described in the
+      // hours the span arithmetic is known to use.
+      const label = isTimeLimit
+        ? (span !== undefined ? `time limit (${span}h)` : "time limit")
+        : (type.toLowerCase().replace(/_/g, " ").trim() || "limit");
+      quota.customWindows = [
+        ...(quota.customWindows ?? []),
+        { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) },
+      ];
     }
     windows += 1;
   }
@@ -2155,6 +2174,7 @@ async function maybeFetchProviderQuota(
       && (name === "zai" || isCanonicalZaiBaseUrl(provider.baseUrl) || isCanonicalBigmodelCodingBaseUrl(provider.baseUrl))) {
       return fetchZaiQuota(name, provider);
     }
+
     if ((provider.authMode ?? "key") === "key" && (name === "minimax" || name === "minimax-cn")) {
       return fetchMinimaxQuota(name, provider);
     }

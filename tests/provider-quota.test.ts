@@ -875,6 +875,55 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports).toEqual([]);
   });
 
+  test("Z.AI v1 plan publishes only the windows it declares, never an invented weekly", async () => {
+    // Measured on a v1 subscription: a 5-hour TIME_LIMIT followed by a TOKENS_LIMIT. The
+    // probe used to call whatever came second "weekly" by position, so the dashboard showed a
+    // weekly limit the plan does not have.
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        level: "v1",
+        limits: [
+          { type: "TIME_LIMIT", unit: 5, number: 1, usage: 4000, currentValue: 2, remaining: 3998, percentage: 1, nextResetTime: 1791101541997 },
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 1, nextResetTime: 1789757798629 },
+        ],
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+    const quota = result.reports[0]?.quota;
+
+    expect(quota?.fiveHourPercent).toBe(1);
+    expect(quota?.fiveHourResetAt).toBe(1791101541997);
+    expect(quota?.weeklyPercent).toBeUndefined();
+    expect(quota?.weeklyResetAt).toBeUndefined();
+    expect(quota?.monthlyPercent).toBeUndefined();
+    // The token quota is real usage data, so it is published as its own window rather than
+    // dropped — and it is named by its type, because only a TIME_LIMIT span is known to be
+    // counted in hours.
+    expect(quota?.customWindows).toEqual([{ label: "tokens limit", percent: 1, resetAt: 1789757798629 }]);
+  });
+
+  test("Z.AI publishes a weekly window when the plan actually declares a week", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        limits: [
+          { type: "TIME_LIMIT", unit: 5, number: 1, percentage: 30, nextResetTime: 1791101541997 },
+          { type: "TIME_LIMIT", unit: 168, number: 1, percentage: 55, nextResetTime: 1791701541997 },
+        ],
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+    const quota = result.reports[0]?.quota;
+
+    expect(quota?.fiveHourPercent).toBe(30);
+    expect(quota?.weeklyPercent).toBe(55);
+    expect(quota?.weeklyResetAt).toBe(1791701541997);
+    expect(quota?.customWindows).toBeUndefined();
+  });
+
   test("Z.AI quota never sends the token to a non-canonical base URL", async () => {
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -2171,7 +2220,7 @@ describe("fetchProviderQuotaReports", () => {
 
 describe("per-key coding-plan quota", () => {
   /** The live bigmodel shape: one limits[] entry per window, each with its own reset. */
-  function bigmodelBody(currentValue: number, weeklyPercent: number): string {
+  function bigmodelBody(currentValue: number, tokenPercent: number): string {
     return JSON.stringify({
       code: 200,
       msg: "操作成功",
@@ -2190,7 +2239,7 @@ describe("per-key coding-plan quota", () => {
             nextResetTime: 1_790_864_673_998,
             usageDetails: [{ modelCode: "search-prime", usage: 0 }],
           },
-          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: weeklyPercent, nextResetTime: 1_789_347_165_846 },
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: tokenPercent, nextResetTime: 1_789_347_165_846 },
         ],
       },
     });
@@ -2215,7 +2264,7 @@ describe("per-key coding-plan quota", () => {
     } as OcxConfig;
   }
 
-  test("each zhipu key reports its own 5-hour window, and the plan's second window", async () => {
+  test("each zhipu key reports its own 5-hour window, and its own token window", async () => {
     // The live row is named for the vendor, not a registry id, and it sits on the China host —
     // before this the probe was gated on `name === "zai"` and `api.z.ai`, so the whole plan
     // reported nothing at all.
@@ -2245,8 +2294,12 @@ describe("per-key coding-plan quota", () => {
     expect(quotas[0]!.quota?.fiveHourPercent).toBe(0); // 2/4000 rounds to 0%
     expect(quotas[0]!.quota?.fiveHourResetAt).toBe(1_790_864_673_998);
     expect(quotas[1]!.quota?.fiveHourPercent).toBe(0);
-    // The second limits[] entry is the plan's weekly window.
-    expect(quotas[0]!.quota?.weeklyPercent).toBe(7);
+    // The second limits[] entry is a TOKENS_LIMIT, not a weekly window: a v1 subscription
+    // declares no week at all, and reading the entry by position used to claim one.
+    expect(quotas[0]!.quota?.weeklyPercent).toBeUndefined();
+    expect(quotas[0]!.quota?.customWindows).toEqual([
+      { label: "tokens limit", percent: 7, resetAt: 1_789_347_165_846 },
+    ]);
   });
 
   test("a spent key is visible as spent, not as an absent row", async () => {
