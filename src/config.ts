@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
+import { evaluationConfigError, evaluationConfigSchema } from "./evaluation/config";
 import {
   bumpConfigGenerationAtPath,
   bumpCurrentConfigGeneration,
@@ -1076,6 +1077,7 @@ const configSchema = z.object({
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535) }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
+  evaluations: evaluationConfigSchema.optional().catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config. Treat them as
@@ -2114,6 +2116,7 @@ function deploymentModeError(value: unknown): string | null {
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = deploymentModeError(value)
+    ?? evaluationConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)

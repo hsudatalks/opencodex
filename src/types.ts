@@ -821,6 +821,8 @@ export interface OcxConfig {
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
   images?: OcxImagesConfig;
+  /** Opt-in typed evaluation data plane, independent of chat adapters and model pickers. */
+  evaluations?: import("./evaluation/config").EvaluationConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */

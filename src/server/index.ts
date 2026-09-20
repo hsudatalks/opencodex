@@ -68,6 +68,7 @@ import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile, serveSessionBoot
 export { resolveGuiFilePath, rootFallbackPayload } from "./gui-static";
 export { resolveAdapter } from "./adapter-resolve";
 import { formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
+import { evaluationModelList, handleEvaluation } from "./evaluations";
 import {
   drainAndShutdown,
   getActiveTurnCount,
@@ -823,6 +824,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
+        if (url.searchParams.get("capability") === "evaluate") {
+          return withCors(Response.json(evaluationModelList(config)), req, policy);
+        }
         let goModels;
         try {
           goModels = await fetchAllModels(config);
@@ -1015,6 +1019,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           } catch {
             response = formatErrorResponse(500, "server_error", "Unexpected compact request failure");
           }
+          addFinalRequestLog(requestId, start, logCtx, response.status,
+            response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        });
+      }
+
+      if (req.method === "POST" && (url.pathname === "/v1/evaluate" || url.pathname === "/v1/systemone")) {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveResponsesApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: "unknown", provider: "unknown", ...admissionFields(admission), inboundProtocol: "evaluate" };
+        return runAdmittedHttpTurn(req, policy, async () => {
+          const response = await handleEvaluation(req, config, logCtx);
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);

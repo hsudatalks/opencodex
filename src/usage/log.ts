@@ -58,7 +58,7 @@ export interface PersistedUsageEntry {
   apiKeyId?: string;
   admissionKind?: "configured" | "environment" | "loopback";
   /** The inbound wire, not the client product — see `surface`. */
-  inboundProtocol?: "responses" | "chat" | "messages";
+  inboundProtocol?: "responses" | "chat" | "messages" | "evaluate";
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
@@ -120,7 +120,7 @@ const KNOWN_ADMISSION_KINDS = new Set<NonNullable<PersistedUsageEntry["admission
 ]);
 
 const KNOWN_INBOUND_PROTOCOLS = new Set<NonNullable<PersistedUsageEntry["inboundProtocol"]>>([
-  "responses", "chat", "messages",
+  "responses", "chat", "messages", "evaluate",
 ]);
 
 /** Same closed-set discipline as `isKnownUsageSurface`: an old or corrupted row

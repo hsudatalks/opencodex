@@ -53,7 +53,7 @@ export interface RequestLogContext {
   /** Which inbound wire was used. Orthogonal to `surface`, which names the client
    *  product: widening that enum would merge Responses and Chat Completions,
    *  since both leave it undefined. */
-  inboundProtocol?: "responses" | "chat" | "messages";
+  inboundProtocol?: "responses" | "chat" | "messages" | "evaluate";
   requestedModel?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
@@ -126,7 +126,7 @@ export interface RequestLogEntry {
   /** Which inbound wire was used. Orthogonal to `surface`, which names the client
    *  product: widening that enum would merge Responses and Chat Completions,
    *  since both leave it undefined. */
-  inboundProtocol?: "responses" | "chat" | "messages";
+  inboundProtocol?: "responses" | "chat" | "messages" | "evaluate";
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;

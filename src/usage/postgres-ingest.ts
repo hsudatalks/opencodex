@@ -42,7 +42,7 @@ export const USAGE_DIMENSION_KIND = {
 
 const SURFACE_CODES = { claude: 1, "claude-desktop": 2, grok: 3 } as const;
 const ADMISSION_CODES = { configured: 1, environment: 2, loopback: 3 } as const;
-const PROTOCOL_CODES = { responses: 1, chat: 2, messages: 3 } as const;
+const PROTOCOL_CODES = { responses: 1, chat: 2, messages: 3, evaluate: 4 } as const;
 const USAGE_STATUS_CODES = { reported: 1, unreported: 2, unsupported: 3, estimated: 4 } as const;
 const CLOSE_REASON_CODES = { terminal: 1, client_cancel: 2, non_stream: 3, body_stall: 4, body_overflow: 5 } as const;
 const RECOVERY_CODES = {

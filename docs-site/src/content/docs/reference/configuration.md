@@ -9,6 +9,9 @@ opencodex stores its persistent configuration in `$OPENCODEX_HOME/config.json`, 
 
 ## Ways to edit configuration
 
+For the Univers Gateway release line's opt-in non-chat providers, see
+[Typed evaluation (Jev)](/reference/typed-evaluation).
+
 Choose the editing channel that fits the task:
 
 - **Dashboard:** use the web UI for guided provider, model, agent, access, and storage settings.
