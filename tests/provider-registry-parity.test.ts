@@ -945,6 +945,48 @@ describe("provider registry parity", () => {
     expect(hints("deepseek/deepseek-v4-flash").inputModalities).toBeUndefined();
   });
   /*
+   * MiMo 2.6 image input, measured on the live routes (shape discrimination, circle / square /
+   * triangle, 6/6 per id at a 2048-token budget) rather than inherited from the MiMo 2.5 family.
+   *
+   * Both halves are pinned. The 2.x family is split across the modality line — `mimo-v2-pro` and
+   * `mimo-v2.5-pro` are text-only and route through the vision sidecar — so a family-level table
+   * would either declare image input on a model that cannot deliver it, or leave the 2.6 ids
+   * text-only and have the sidecar silently replace a working image with a caption.
+   *
+   * These ids are live-discovered, which is exactly why the declaration has to live in the
+   * registry: the listing carries no modality field, so without it a fresh install advertises the
+   * 2.6 rows as text-only and the Codex app blocks the attachment before the proxy ever runs.
+   */
+  test("MiMo 2.6 declares image input on both routes, without lending it to the 2.5 family", () => {
+    const opencodeGo = PROVIDER_REGISTRY.find(row => row.id === "opencode-go");
+    const commandCode = PROVIDER_REGISTRY.find(row => row.id === "command-code");
+    expect(opencodeGo).toBeTruthy();
+    expect(commandCode).toBeTruthy();
+    const goHints = (id: string) =>
+      applyProviderConfigHints("opencode-go", providerConfigSeed(opencodeGo!), { id, provider: "opencode-go" });
+    const ccHints = (id: string) =>
+      applyProviderConfigHints("command-code", providerConfigSeed(commandCode!), { id, provider: "command-code" });
+
+    // Positive half: every measured 2.6 id, on the route that serves it.
+    for (const id of ["mimo-v2.6-flash", "mimo-v2.6-pro"]) {
+      expect(goHints(id).inputModalities, `opencode-go/${id} must declare image input`).toEqual(["text", "image"]);
+    }
+    for (const id of ["xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed"]) {
+      expect(ccHints(id).inputModalities, `command-code/${id} must declare image input`).toEqual(["text", "image"]);
+    }
+
+    // Negative half: the text-only 2.5/2.0 siblings must NOT inherit the 2.6 declaration. They are
+    // sidecar-covered, so their advertised image input comes from `noVisionModels`, not from here.
+    expect(opencodeGo?.modelInputModalities?.["mimo-v2.5"]).toBeUndefined();
+    expect(opencodeGo?.modelInputModalities?.["mimo-v2.5-pro"]).toBeUndefined();
+    expect(opencodeGo?.modelInputModalities?.["mimo-v2-pro"]).toBeUndefined();
+    expect(commandCode?.modelInputModalities?.["xiaomi/mimo-v2.5"]).toBeUndefined();
+    expect(commandCode?.modelInputModalities?.["xiaomi/mimo-v2.5-pro"]).toBeUndefined();
+    // And the 2.6 ids must never be listed as text-only, which would strip a working image.
+    expect(opencodeGo?.noVisionModels ?? []).not.toContain("mimo-v2.6-flash");
+    expect(opencodeGo?.noVisionModels ?? []).not.toContain("mimo-v2.6-pro");
+  });
+  /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
    * empirical list measured against the live endpoint on 2026-08-05, not something
    * derived from provider data.
