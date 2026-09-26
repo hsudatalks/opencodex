@@ -896,12 +896,15 @@ function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): st
 function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
   const metadata = plainRecord(item.metadata);
   const metadataCapabilities = metadata?.capabilities;
-  const capabilityRecord = plainRecord(metadataCapabilities) ?? plainRecord(item.capabilities);
+  const { record: capabilityRecord, supports } = providerCapabilityScopes(item);
   const out = new Set<string>();
   for (const list of [item.capabilities, item.features, item.supported_features, metadataCapabilities]) {
     for (const capability of normalizedStringList(list) ?? []) out.add(capability);
   }
-  const capabilityFields = capabilityRecord ?? {};
+  // Copilot nests its boolean flags one level deeper than everyone else; both records are
+  // inspected so a nested `supports.tool_calls` still surfaces as the `tools` evidence the
+  // routing evaluator reads. The outer record keeps winning on a key collision.
+  const capabilityFields = { ...(supports ?? {}), ...(capabilityRecord ?? {}) };
   let inspectedCapabilityFields = 0;
   for (const key in capabilityFields) {
     if (!Object.hasOwn(capabilityFields, key)) continue;
@@ -921,12 +924,45 @@ function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
   return out.size > 0 ? [...out].filter(Boolean).slice(0, 32) : undefined;
 }
 
+/**
+ * The three places a provider's per-model capability metadata can live, resolved to a flat shape.
+ *
+ * Providers disagree about how deep this nests, and the depth is not cosmetic. Most publish the
+ * flags directly on the capability record (`capabilities: { vision: true }`), but GitHub Copilot
+ * publishes them one level further down (`capabilities: { supports: { vision: true },
+ * limits: { max_context_window_tokens: … } }`). Reading only the outer record therefore matched
+ * NOTHING for Copilot: all 59 discovered models lost their image declaration, their context window
+ * and their reasoning ladder at once, while every value was present in the payload the whole time.
+ *
+ * The loss was easy to miss because two other layers masked it — the Codex catalog inherited
+ * `input_modalities` from the native gpt template, and `ensureStrictCatalogFields` supplied a 128k
+ * context floor. Both look like a correct answer and are not one.
+ *
+ * `limits` keeps the pre-existing `metadata.limits` location as its first choice so providers
+ * already shaped that way are unaffected.
+ */
+function providerCapabilityScopes(item: ProviderModelsApiItem): {
+  record?: Record<string, unknown>;
+  supports?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+} {
+  const metadata = plainRecord(item.metadata);
+  const record = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const supports = plainRecord(record?.supports);
+  const limits = plainRecord(metadata?.limits) ?? plainRecord(record?.limits);
+  return {
+    ...(record ? { record } : {}),
+    ...(supports ? { supports } : {}),
+    ...(limits ? { limits } : {}),
+  };
+}
+
 function modelInputModalities(
   item: ProviderModelsApiItem,
   capabilities: readonly string[] | undefined,
 ): string[] | undefined {
   const metadata = plainRecord(item.metadata);
-  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const { record: capabilityRecord, supports } = providerCapabilityScopes(item);
   const explicit = normalizedStringList(
     item.input_modalities
       ?? item.modalities
@@ -952,8 +988,11 @@ function modelInputModalities(
       .filter(value => value === "text" || value === "image" || value === "audio");
     if (inferred.length > 0) return [...new Set(inferred)];
   }
-  if (capabilityRecord?.vision === false) return ["text"];
-  if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
+  // The nested record is the more specific one, so it wins when both are present; the outer
+  // record remains the answer for every provider that publishes the flag flat.
+  const vision = supports?.vision ?? capabilityRecord?.vision;
+  if (vision === false) return ["text"];
+  if (vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
     return ["text", "image"];
   }
   return undefined;
@@ -961,19 +1000,22 @@ function modelInputModalities(
 
 export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
-  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
-  const limits = plainRecord(metadata?.limits);
+  const { record: capabilityRecord, supports, limits } = providerCapabilityScopes(item);
+  // Copilot names its window `max_context_window_tokens` and its prompt ceiling
+  // `max_prompt_tokens`; OpenAI-compatible providers use `max_context_length` / `max_input_tokens`.
+  // Both spellings are read so a provider's own vocabulary is not silently dropped.
   const contextWindow =
     positiveSafeInteger(
       limits?.max_context_length,
+      limits?.max_context_window_tokens,
       metadata?.context_length,
       item.context_length,
       item.context_size,
       item.max_model_len,
       item.max_context_length,
     );
-  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
-  const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
+  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, limits?.max_prompt_tokens, item.max_input_tokens);
+  const rawReasoningEfforts = supports?.reasoning_effort ?? capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
   const reasoningEfforts = listedReasoningEfforts
     ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)

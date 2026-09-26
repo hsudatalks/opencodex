@@ -291,6 +291,79 @@ describe("registry-owned provider model discovery", () => {
     });
   });
 
+  /*
+   * GitHub Copilot nests its per-model capability metadata one level deeper than the flat shape
+   * the parser originally read: `capabilities.supports.vision` / `capabilities.supports
+   * .reasoning_effort` / `capabilities.limits.max_context_window_tokens`. Measured against
+   * api.individual.githubcopilot.com/models on 2026-09-25 with the exact headers the gateway
+   * sends: all 59 discovered rows carried that nesting and NONE carried a top-level
+   * `capabilities.vision` or `input_modalities`.
+   *
+   * The consequence was that every Copilot model silently lost all three capability facts at
+   * once. Two other layers hid it — the Codex catalog inherited `input_modalities` from the
+   * native gpt template and ensureStrictCatalogFields supplied a 128k context floor — so the
+   * published row looked plausible while `claude-opus-5.5` really reads images 3/3 and holds a
+   * 328k window. This test pins the nested shape AND the flat shapes so neither depth regresses.
+   */
+  test("reads capability metadata nested one level down, without disturbing the flat shape", () => {
+    // Verbatim claude-opus-5.5 payload (abridged to the fields this parser reads).
+    const copilot = {
+      id: "claude-opus-5.5",
+      capabilities: {
+        family: "claude-opus-5.5",
+        limits: {
+          max_context_window_tokens: 328_000,
+          max_output_tokens: 128_000,
+          max_prompt_tokens: 200_000,
+        },
+        supports: {
+          parallel_tool_calls: true,
+          reasoning_effort: ["low", "medium", "high", "xhigh", "max"],
+          tool_calls: true,
+          vision: true,
+        },
+      },
+    };
+    const hints = catalogHintsFromModelsApiItem("github-copilot", copilot as never);
+    expect(hints.contextWindow).toBe(328_000);
+    expect(hints.maxInputTokens).toBe(200_000);
+    expect(hints.inputModalities).toEqual(["text", "image"]);
+    expect(hints.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(hints.capabilities).toContain("vision");
+    expect(hints.capabilities).toContain("tool_calls");
+
+    // A nested negative is still a negative: the model must not be given image input.
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "nested-text-only",
+      capabilities: { limits: { max_context_window_tokens: 1_000 }, supports: { vision: false } },
+    } as never).inputModalities).toEqual(["text"]);
+
+    // The flat shapes other providers publish must be untouched.
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "flat",
+      capabilities: { vision: true, reasoning_effort: ["low", "high"] },
+    })).toEqual({
+      reasoningEfforts: ["low", "high"],
+      inputModalities: ["text", "image"],
+      capabilities: ["vision"],
+    });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "flat-meta",
+      metadata: { limits: { max_context_length: 111, max_input_tokens: 222 }, capabilities: { vision: true } },
+    })).toEqual({
+      contextWindow: 111,
+      maxInputTokens: 222,
+      inputModalities: ["text", "image"],
+      capabilities: ["vision"],
+    });
+
+    // An explicit input_modalities list stays the stronger signal at either depth.
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "explicit-wins",
+      capabilities: { supports: { vision: true }, input_modalities: ["text"] },
+    } as never).inputModalities).toEqual(["text"]);
+  });
+
   test("rejects an over-limit raw catalog instead of truncating or caching it", async () => {
     await withTogetherDiscovery({ maxModels: 2 }, async () => {
       const warning = spyOn(console, "warn").mockImplementation(() => {});
