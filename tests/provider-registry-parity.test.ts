@@ -986,6 +986,52 @@ describe("provider registry parity", () => {
     expect(opencodeGo?.noVisionModels ?? []).not.toContain("mimo-v2.6-flash");
     expect(opencodeGo?.noVisionModels ?? []).not.toContain("mimo-v2.6-pro");
   });
+
+  /*
+   * MiMo 2.6 selects thinking the same way the 2.5 family does: Zen Go's binary
+   * `thinking: {type: enabled|disabled}` toggle, not a `reasoning_effort` field. The 2.6 ids were
+   * absent from `OPENCODE_GO_THINKING_TOGGLE_MODELS`, and that single omission cost two separate
+   * user-visible things:
+   *
+   *   1. No ladder was advertised (`modelReasoningEfforts` is built from that same list), so a
+   *      client that builds its thinking picker from the listing's `reasoning_efforts` — DeepSeek
+   *      Harness does exactly that — offered no levels at all for these models.
+   *   2. The adapter fell through to `reasoning_effort`, which these models ignore, so the setting
+   *      would have been silently inert even if a client had sent one.
+   *
+   * Measured on a throwaway Zen Go route 2026-09-26 with the toggle declared, reasoning tokens on
+   * a step-by-step prompt: disabled -> [0, 0, 0], enabled -> [665, 193, 419]. The exact zero is
+   * what proves the knob is honored rather than dropped.
+   *
+   * This asserts the OUTCOME a client sees (a non-empty ladder) and the wire mapping, so a future
+   * edit that drops the 2.6 ids from the list fails here instead of silently emptying the picker.
+   */
+  test("MiMo 2.6 advertises a thinking ladder and maps it onto the Zen Go toggle", () => {
+    const opencodeGo = PROVIDER_REGISTRY.find(row => row.id === "opencode-go");
+    expect(opencodeGo).toBeTruthy();
+    const seed = providerConfigSeed(opencodeGo!);
+    const hints = (id: string) =>
+      applyProviderConfigHints("opencode-go", seed, { id, provider: "opencode-go" });
+
+    for (const id of ["mimo-v2.6-flash", "mimo-v2.6-pro"]) {
+      // The client-visible outcome: a client reading `reasoning_efforts` gets a real ladder.
+      expect(hints(id).reasoningEfforts, `opencode-go/${id} must advertise a thinking ladder`)
+        .toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(seed.thinkingToggleModels, `${id} must ride the vendor thinking toggle`).toContain(id);
+      // The wire mapping the toggle depends on: off-side disabled, on-side enabled.
+      const map = seed.modelReasoningEffortMap?.[id];
+      expect(map?.low).toBe("disabled");
+      expect(map?.minimal).toBe("disabled");
+      expect(map?.medium).toBe("enabled");
+      expect(map?.high).toBe("enabled");
+      expect(map?.max).toBe("enabled");
+    }
+
+    // A graduated-ladder sibling must NOT acquire the toggle: glm-5.2 maps effort labels 1:1 and
+    // has no `modelReasoningEffortMap`, so the binary map would corrupt its wire values.
+    expect(seed.thinkingToggleModels ?? []).not.toContain("glm-5.2");
+    expect(seed.modelReasoningEffortMap?.["glm-5.2"]).toBeUndefined();
+  });
   /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
    * empirical list measured against the live endpoint on 2026-08-05, not something

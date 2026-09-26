@@ -316,6 +316,17 @@ const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
  * `thinking: {type: enabled|disabled}` — a binary. Advertise the full Codex picker ladder
  * and map efforts onto the toggle. Zen Go
  * pass-through probed live 2026-07-07 (glm-5.2 toggle verified; mimo/minimax accept shape).
+ *
+ * The MiMo 2.6 generation belongs to this family. It was missing from the list, which cost the
+ * models BOTH their wire control and their advertised ladder: with no declaration the catalog
+ * published no `reasoning_efforts`, so a client that builds its thinking picker from that field
+ * offered nothing, and the adapter fell through to `reasoning_effort` — a knob these models
+ * ignore, so the setting was silently inert.
+ *
+ * Measured on a throwaway Zen Go route 2026-09-26 with the toggle declared, reasoning tokens per
+ * sample on a step-by-step prompt: `thinking.type=disabled` -> [0, 0, 0], `enabled` ->
+ * [665, 193, 419]. The zero is the part that matters: disabling is exact rather than merely
+ * quieter, which is what distinguishes a working toggle from a value the upstream drops.
  */
 const THINKING_TOGGLE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const THINKING_TOGGLE_MAP: Record<string, string> = {
@@ -331,8 +342,20 @@ const THINKING_TOGGLE_MAP: Record<string, string> = {
 // instead of the binary thinking toggle — it maps effort labels 1:1 like glm-5.2.
 // Verified against BigModel Coding Plan live metadata 2026-09-12.
 const ZHIPU_GRADUATED_REASONING_MODELS = ["glm-5.3", "glm-5.3-flash"];
+/**
+ * The MiMo 2.6 ids on each route, declared once and reused by both the thinking-toggle list
+ * below and the image declaration further down. `opencode-go` serves them bare and
+ * `command-code` vendor-namespaces them on the `/alpha/generate` wire, so neither spelling is
+ * derivable from the other.
+ */
+const OPENCODE_GO_MIMO_26_MODELS = ["mimo-v2.6-flash", "mimo-v2.6-pro"];
+const COMMAND_CODE_MIMO_26_MODELS = [
+  "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
+];
 const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
-  "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro", "glm-5", "glm-5.1",
+  "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro",
+  ...OPENCODE_GO_MIMO_26_MODELS,
+  "glm-5", "glm-5.1",
 ];
 /**
  * MiMo 2.6 image input, measured on the live routes rather than inherited from the MiMo 2.5
@@ -360,10 +383,6 @@ const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
  * whole allowance on reasoning and return an EMPTY content string, which reads as a vision
  * failure. Re-probe with a generous budget (2048) before concluding an id cannot see.
  */
-const OPENCODE_GO_MIMO_26_IMAGE_MODELS = ["mimo-v2.6-flash", "mimo-v2.6-pro"];
-const COMMAND_CODE_MIMO_26_IMAGE_MODELS = [
-  "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
-];
 const imageModalitiesFor = (ids: readonly string[]): Record<string, string[]> =>
   Object.fromEntries(ids.map(id => [id, ["text", "image"]]));
 /**
@@ -1100,7 +1119,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "meta/muse-spark-1.3-contributor": ["text", "image"],
       // Live-discovered rows: the 2.6 MiMo ids arrive vendor-namespaced from this transport. The
       // declaration is what a fresh install advertises before any listing has been cached.
-      ...imageModalitiesFor(COMMAND_CODE_MIMO_26_IMAGE_MODELS),
+      ...imageModalitiesFor(COMMAND_CODE_MIMO_26_MODELS),
     },
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
@@ -1250,7 +1269,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
       // MiMo 2.6 accepts images on this route; the 2.5 members stay out (noVisionModels below).
-      ...imageModalitiesFor(OPENCODE_GO_MIMO_26_IMAGE_MODELS),
+      ...imageModalitiesFor(OPENCODE_GO_MIMO_26_MODELS),
     },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
