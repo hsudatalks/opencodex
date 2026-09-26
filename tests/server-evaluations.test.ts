@@ -53,7 +53,7 @@ test("typed routes enforce gateway admission and CORS; use only the provider key
   saveConfig(config(upstream.url.href)); const server = startServer(0);
   try {
     for (const path of ["/v1/evaluate", "/v1/systemone"]) {
-      for (const headers of [{}, { authorization: "Bearer arbitrary-upstream-token" }, { "x-api-key": dataKey }]) {
+      for (const headers of [{}, { authorization: "Bearer access-token-arbitrary-upstream" }, { "x-api-key": dataKey }]) {
         const denied = await fetch(new URL(path, server.url), { method: "POST", headers, body: "not-json" });
         expect(denied.status).toBe(401);
       }
